@@ -176,6 +176,10 @@ impl Guest for esp32s3::Machine {
         SocBus::serial_input(&mut self.bus, data);
         self.bus.refresh_tick_budget();
     }
+    fn bt_controller_inits(&self) -> u64 {
+        // the stub of `--no-bt` is the only one the runner puts in
+        self.stub_hits
+    }
     fn uptime(&mut self) -> crate::session::Uptime {
         super::systimer_uptime(&self.bus.periph.systimer, self.cycles(), SYSTIMER_TICK)
     }

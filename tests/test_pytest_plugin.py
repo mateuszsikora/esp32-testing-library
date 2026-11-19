@@ -924,12 +924,43 @@ def test_runner_command_forwards_the_guests_hci_once_the_test_uses_bluetooth(
         Path("/r/runner"), Path("/r/rom.elf"), app, 300, Path("/l.sock"), bluetooth=bluetooth
     )
     assert "--bt" not in command
+    # until then, the firmware's call to esp_bt_controller_init ends the run
+    assert command[-2:] == ["--no-bt", str(build.resolve() / "app.elf")]
     bluetooth.use()
     command = esp32sim.runner_command(
         Path("/r/runner"), Path("/r/rom.elf"), app, 300, Path("/l.sock"), bluetooth=bluetooth
     )
     assert command[-2:] == ["--bt", str(build.resolve() / "app.elf")]
+    assert "--no-bt" not in command
     bluetooth.close()
+
+
+def test_runner_command_gives_no_bluetooth_where_esp32sim_has_none_or_the_build_no_elf(
+    tmp_path: Path,
+) -> None:
+    for chip in ("esp32p4", "esp32s31"):
+        fake_build(tmp_path / chip, chip)
+        app = esp32sim.load_app(str(tmp_path / chip), chip=chip)
+        command = esp32sim.runner_command(
+            Path("/r/runner"), Path("/r/rom.elf"), app, 300, Path("/l.sock"), bluetooth=Bluetooth()
+        )
+        assert "--no-bt" not in command, chip
+    build = fake_build(tmp_path / "esp32")
+    (build / "app.elf").unlink()
+    app = esp32sim.load_app(str(tmp_path / "esp32"))
+    command = esp32sim.runner_command(
+        Path("/r/runner"), Path("/r/rom.elf"), app, 300, Path("/l.sock"), bluetooth=Bluetooth()
+    )
+    assert "--no-bt" not in command
+
+
+def test_a_run_the_firmware_s_bluetooth_controller_ended_says_what_to_do() -> None:
+    assert esp32sim.no_bluetooth(114_000_000) == (
+        "the firmware started its Bluetooth controller (esp_bt_controller_init) by 0.114 s, and"
+        " the test gave the board no Bluetooth: look at board.bluetooth (or take the bt fixture)"
+        " before board.power_on(); board.bluetooth.use() gives the firmware the harness's"
+        " controller with no device on the air"
+    )
 
 
 def test_runner_command_gives_the_chip_the_profile_s_psram(tmp_path: Path) -> None:

@@ -2206,3 +2206,21 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_killed_session.py::test_a_power_on_that_fails_before_the_start_closes_the_pipe`,
   `runner/src/session/tests.rs::the_parent_s_end_ends_the_run_as_the_peer_gone_without_stats`,
   `runner/src/session/tests.rs::a_signal_while_the_parent_lives_ends_the_run_with_stats`
+
+## A Bluetooth controller the test did not give
+
+- **263.** A firmware that calls `esp_bt_controller_init` in a run whose test never looked at
+  `board.bluetooth` does not run on: the runner, given `--no-bt` and the application's ELF, answers
+  the call with `ESP_ERR_NOT_SUPPORTED` and ends the run at the end of that slice with `stats`
+  `end: bt_controller` and exit code 5, and the test fails with a reason that names
+  `board.bluetooth`, after one boot. A firmware that never calls it runs to the end. The backend
+  gives `--no-bt` for every `Bluetooth` the test did not use, on a chip esp32sim models Bluetooth
+  on, and `--bt` alone for one it used.
+  `runner/src/session/tests.rs::under_no_bt_the_guests_call_to_its_bluetooth_controller_ends_the_run_at_the_slice_end`,
+  `runner/src/session/tests.rs::under_no_bt_a_guest_that_never_starts_its_controller_runs_to_the_end`,
+  `runner/src/cli/tests.rs::no_bt_names_the_application_elf_needs_a_board_and_excludes_bt`,
+  `tests/test_pytest_plugin.py::test_runner_command_forwards_the_guests_hci_once_the_test_uses_bluetooth`,
+  `tests/test_pytest_plugin.py::test_runner_command_gives_no_bluetooth_where_esp32sim_has_none_or_the_build_no_elf`,
+  `tests/test_bt_spp_initiator.py::test_a_test_that_gives_the_board_no_bluetooth_fails_naming_board_bluetooth`,
+  `tests/test_chips.py::TestOnESP32S3::test_without_bt_the_controller_s_start_ends_the_run_naming_board_bluetooth`,
+  `tests/test_chips.py::TestOnESP32C3::test_without_bt_the_controller_s_start_ends_the_run_naming_board_bluetooth`

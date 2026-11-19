@@ -1,10 +1,11 @@
 """ESP-IDF's `bt_spp_initiator`, unmodified, against an `SppPeer` through the `bt` fixture: the
 firmware's Bluedroid finds the peer by its name, pairs with its PIN, opens SPP and streams to it,
 with the peer's `secure=True`, the default. A peer of another PIN fails the authentication, and
-with no peer the firmware's one inquiry runs its length and finds nothing. The same example built
-with its HCI buffers in PSRAM (bt_spp_initiator_psram) pairs and streams as well. Needs `make
-firmware` (bt_spp_initiator, bt_spp_initiator_psram). On the serial backend the `bt` fixture skips
-these."""
+with no peer the firmware's one inquiry runs its length and finds nothing. A test that never looks
+at `board.bluetooth` fails, naming it, at the firmware's first call to its controller. The same
+example built with its HCI buffers in PSRAM (bt_spp_initiator_psram) pairs and streams as well.
+Needs `make firmware` (bt_spp_initiator, bt_spp_initiator_psram). On the serial backend the `bt`
+fixture skips these."""
 
 import json
 import re
@@ -267,6 +268,43 @@ def test_the_tap_writes_the_hci_both_ways_as_btsnoop(pytester: pytest.Pytester) 
     # firmware.
     assert any(e.dir == "out" and e.data[1:3] == bytes.fromhex("0d04") for e in hci.events)
     assert any(e.dir == "in" and NAME.encode() in e.data for e in hci.events)
+
+
+def test_a_test_that_gives_the_board_no_bluetooth_fails_naming_board_bluetooth(
+    pytester: pytest.Pytester,
+) -> None:
+    if not (FIRMWARE / "build" / "esp32tl-built").is_file():
+        pytest.fail(f"{FIRMWARE}/build holds no finished build: run make firmware", pytrace=False)
+    pytester.makepyfile(
+        test_no_bt=f"""
+        import pytest
+
+        from esp32tl.units import seconds
+
+        pytestmark = pytest.mark.app_path({str(FIRMWARE)!r})
+
+        def test_without_bluetooth(board):
+            board.power_on()
+            try:
+                board.wait(seconds(15))
+            finally:
+                print("boots:", len(board.boots))
+        """
+    )
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(failed=1)
+    # Without --no-bt the firmware boot-looped in ESP-IDF's own controller, about 130 boots in
+    # 15 s, and the test passed. Now the runner ends the run in the slice of its call, once.
+    result.stdout.fnmatch_lines(
+        [
+            "*RunEnded: the run ended at 0.* s while the test waited until 15 s: the firmware"
+            " started its Bluetooth controller (esp_bt_controller_init) by 0.* s, and the test"
+            " gave the board no Bluetooth: look at board.bluetooth (or take the bt fixture) before"
+            " board.power_on(); board.bluetooth.use() gives the firmware the harness's controller"
+            " with no device on the air; the runner exited with code 5*",
+            "boots: 1",
+        ]
+    )
 
 
 @pytest.mark.parametrize("around", ["nobody", "a phone"])

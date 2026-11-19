@@ -28,6 +28,7 @@ fn minimal_command_line() {
             realtime: false,
             flash_out: None,
             bt: None,
+            no_bt: None,
         }
     );
 }
@@ -324,6 +325,7 @@ fn bt_names_the_application_elf_and_needs_a_board() {
     );
     let opts = parse_str(&format!("{MINIMAL} --board socket:s --bt build/app.elf")).unwrap();
     assert_eq!(opts.bt, Some("build/app.elf".into()));
+    assert_eq!(opts.no_bt, None);
 }
 
 #[test]
@@ -527,4 +529,34 @@ fn console_port_selects_uart0_or_the_usb_serial_jtag_controller() {
             "--console-port: expected uart0 or usb, got \"uart1\"".into()
         ))
     );
+}
+
+#[test]
+fn no_bt_names_the_application_elf_needs_a_board_and_excludes_bt() {
+    assert_eq!(
+        parse_str(&format!("{MINIMAL} --no-bt app.elf")),
+        Err(Error::Usage(
+            "--no-bt ends the run for the peer when the guest starts its Bluetooth controller: it needs --board"
+                .into()
+        ))
+    );
+    assert_eq!(
+        parse_str(&format!(
+            "{MINIMAL} --board socket:s --bt a.elf --no-bt a.elf"
+        )),
+        Err(Error::Usage(
+            "--bt with --no-bt: the guest's controller is the peer's, or there is none".into()
+        ))
+    );
+    let opts = parse_str(&format!("{MINIMAL} --board socket:s --no-bt build/app.elf")).unwrap();
+    assert_eq!((opts.no_bt, opts.bt), (Some("build/app.elf".into()), None));
+    for chip in ["esp32p4", "esp32s31"] {
+        let base = MINIMAL.replace("--chip esp32", &format!("--chip {chip}"));
+        assert_eq!(
+            parse_str(&format!("{base} --board socket:s --no-bt a.elf")),
+            Err(Error::Usage(format!(
+                "--no-bt: {chip} has no Bluetooth in esp32sim"
+            )))
+        );
+    }
 }

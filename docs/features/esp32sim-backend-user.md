@@ -142,15 +142,47 @@ must do before `board.power_on()`: the backend passes the runner `--bt` with the
 the first `.elf` file in an ESP-IDF build directory, `firmware.elf` in a PlatformIO one
 ([runner](runner-user.md#give-the-guest-a-bluetooth-controller)), and the link carries every H4
 packet the firmware's Bluetooth host sends to the firmware's controller in the harness, on the
-test's clock, and the controller's packets back, 100 µs after the instant each was made. Without it
-the runner gets no `--bt`, and the link carries no Bluetooth. `board.power_off()` takes the
-controller off the air, as a device switched off, and `board.power_on()` puts it back; a reset of
-the chip, `board.reset()` or the firmware's own, restarts it. Neither tells the firmware's host
+test's clock, and the controller's packets back, 100 µs after the instant each was made. A test
+that wants Bluetooth on and no device nearby calls `board.bluetooth.use()`: the harness's
+controller, with nothing on the air. Without it the link carries no Bluetooth
+([below](#a-firmware-that-starts-its-controller-without-boardbluetooth)). `board.power_off()` takes
+the controller off the air, as a device switched off, and `board.power_on()` puts it back; a reset
+of the chip, `board.reset()` or the firmware's own, restarts it. Neither tells the firmware's host
 anything: it starts again with the chip. A build with no ELF fails the test where it first reaches
 `board.bluetooth` ([below](#when-the-backend-cannot-start)). A firmware whose Bluedroid takes its
 buffers from PSRAM (`CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST`) gets its packets onto the link as
 well, on a board profile with `psram_mb = 4`
 ([Bluetooth peer](bluetooth-peer-user.md#in-front-of-the-firmware-boardbluetooth)).
+
+#### A firmware that starts its controller without `board.bluetooth`
+
+A test that never looks at `board.bluetooth` gives the runner `--no-bt` with the same ELF instead
+of `--bt` ([runner](runner-user.md#a-guest-with-no-bluetooth-controller)). A firmware that links
+the controller and never starts it runs as before. One that starts it, by calling
+`esp_bt_controller_init`, would run ESP-IDF's own controller against Bluetooth hardware esp32sim
+does not model without `--bt`: on the classic ESP32 `bt_spp_initiator` panics right after
+`BTDM_INIT: Using main XTAL as clock source` (`Guru Meditation Error: Core  0 panic'ed
+(StoreProhibited)`) and boot-loops, 129 boots in 15 s; on the ESP32-S3 and the ESP32-C3
+`gatt_server` prints nothing after `BLE_INIT: Bluetooth MAC: …`. Either way a test of the console,
+Wi-Fi or the SD card passed as if nothing were wrong. Under `--no-bt` the runner answers the call
+with `ESP_ERR_NOT_SUPPORTED` and ends the run at the end of the emulated millisecond it came in,
+and the test fails in the wait it was in, or at teardown when the test caught that:
+
+```text
+the firmware started its Bluetooth controller (esp_bt_controller_init) by 0.117 s, and the test
+gave the board no Bluetooth: look at board.bluetooth (or take the bt fixture) before
+board.power_on(); board.bluetooth.use() gives the firmware the harness's controller with no device
+on the air
+```
+
+then `the runner exited with code 5`. The time is the end of that millisecond, at most 1 ms after
+the call. On the ESP32-S3 and the ESP32-C3, `gatt_server` ends the run the same way at 0.033 s.
+The ESP32-C6 gets `--no-bt` too, and its ESP-IDF controller starts at the same function, but no
+image here starts it on the C6: esp32sim's C6 hooks want ESP-IDF v5.5.x (#229, G5). On the
+ESP32-P4 and the ESP32-S31, where esp32sim models no Bluetooth, the runner gets neither flag, and
+neither does it for a build with no ELF; there a firmware that starts its controller runs it as it
+did before. Why the run ends rather than giving every such firmware a controller:
+[decision](../decisions/harness.md#a-firmware-that-starts-its-bluetooth-controller-without-boardbluetooth-ends-the-run).
 
 A test that gives a route a [real source](real-source-user.md), as `gnss.real(port)` does, puts the
 whole run on the wall clock: the runner starts with `--realtime`, every recording says `clock: wall`,

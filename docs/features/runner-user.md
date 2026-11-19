@@ -9,7 +9,8 @@ the pins the peer watches, and sends bytes and levels back. With `--sd-spi`, an 
 on four of the chip's pins, with or without `--board`, holding a card with the image file of
 `--sd-rw`; with `--board` the peer can take the card out and put one in while the guest runs. With
 `--wifi`, a Wi-Fi access point is on the air for the chip's station, and the network behind it is
-the peer's. With `--bt`, the guest's Bluetooth controller is the peer's.
+the peer's. With `--bt`, the guest's Bluetooth controller is the peer's; with `--no-bt`, the guest
+has none, and its call to start one ends the run.
 The `esp32sim` backend of the pytest plugin starts it, with `--board socket:PATH` and itself as
 the peer, for every test that uses `board` or `console`. This document is for running it by hand, to watch an image boot,
 to drive it from a peer of your own, or to see why a run ended the way it did.
@@ -115,6 +116,10 @@ usage: esp32tl-runner --chip CHIP --flash-at OFFSET=FILE... --max-seconds S [opt
   --bt ELF              the guest's Bluetooth controller is the peer's, over the socket
                         (hci_tx, hci_rx): esp32sim's VHCI hooks take their symbols from
                         ELF, the application's; needs --board
+  --no-bt ELF           the guest has no Bluetooth controller: its call to
+                        esp_bt_controller_init, at that symbol of ELF, the application's,
+                        ends the run (end bt_controller, exit code 5); needs --board,
+                        exclusive with --bt
 ```
 
 | Flag | Default | Accepts |
@@ -137,6 +142,7 @@ usage: esp32tl-runner --chip CHIP --flash-at OFFSET=FILE... --max-seconds S [opt
 | `--realtime` | off: the guest runs as fast as it can | Paces the run to wall time. Only with `--board`: `--realtime paces a run for the peer's real device: it needs --board` |
 | `--flash-out PATH` | none: the flash stays in the runner | A file to write the whole flash to, created or replaced; its directory must exist. With or without `--board` |
 | `--bt ELF` | none: the guest has no Bluetooth controller | The application's ELF, from the same build as its image, with the controller's symbols in it (`esp_bt_controller_init` and the others of esp32sim's `--ble`). Only with `--board`: `--bt makes the peer the guest's Bluetooth controller: it needs --board` |
+| `--no-bt ELF` | none: the guest's call to `esp_bt_controller_init` runs ESP-IDF's own controller | The application's ELF, from the same build as its image ([below](#a-guest-with-no-bluetooth-controller)). Only with `--board`: `--no-bt ends the run for the peer when the guest starts its Bluetooth controller: it needs --board`; not with `--bt`: `--bt with --no-bt: the guest's controller is the peer's, or there is none`; on the ESP32-P4 and the ESP32-S31, `--no-bt: esp32p4 has no Bluetooth in esp32sim` |
 
 A flag given twice keeps its last value, except `--flash-at` and `--wifi-nearby`, which add one
 each time. Flags
@@ -426,6 +432,44 @@ With `--flash-out`, the file holds the flash as the firmware has it, although es
 its controller task's code over `esp_bt_controller_init` in the emulated flash: the runner puts
 the function's own code back in the copy it writes.
 
+## A guest with no Bluetooth controller
+
+Without `--bt`, esp32sim installs no VHCI hooks, and a firmware that starts its controller runs
+ESP-IDF's own against Bluetooth hardware esp32sim does not model. On the classic ESP32,
+`bt_spp_initiator` crashes there and boot-loops: it prints `BTDM_INIT: Using main XTAL as clock
+source`, then `Guru Meditation Error: Core  0 panic'ed (StoreProhibited)` with `EXCVADDR:
+0x0000019c`, 129 boots in 15 emulated seconds. On the ESP32-S3 and the ESP32-C3, `gatt_server`
+prints nothing after `BLE_INIT: Bluetooth MAC: …`, and the run takes about 2.4 wall seconds for
+each emulated one. A peer that does not watch for either sees nothing wrong.
+
+`--no-bt ELF` gives the peer a reason instead. The runner puts an esp32sim stub at the address of
+`esp_bt_controller_init` in the application's ELF, ESP-IDF's entry to its controller on every chip
+the runner gives Bluetooth to; the stub returns `ESP_ERR_NOT_SUPPORTED` (`0x106`) at once, without
+running the function. When the slice the call came in ends, at the next whole emulated millisecond,
+the runner ends the run: `stats` with `end: bt_controller`
+([protocol, section 9](../protocol.md#9-ending-a-run)), then
+
+```text
+esp32tl-runner: end: the guest called esp_bt_controller_init, and the run has no --bt: it has no Bluetooth controller at 0.117000 s (0.1 s wall, 0 resets, 1 turns)
+```
+
+and exit code 5. What the guest did in the rest of that slice, as `bt_spp_initiator`'s
+`app_main initialize controller failed: ESP_ERR_NOT_SUPPORTED`, still reaches the peer. The same
+holds on the ESP32-S3 and the ESP32-C3, where `gatt_server` ends the run at 0.033 s; no image here
+starts the controller on the ESP32-C6, whose esp32sim hooks want ESP-IDF v5.5.x (#229, G5), but the
+runner takes `--no-bt` there as well. A guest that never calls the function runs as it would
+without the flag, and an ELF without the symbol gets no stub and the line `esp32tl-runner: --no-bt:
+ELF has no esp_bt_controller_init, nothing to stop`.
+
+A stub ends a block at every address of its bucket of esp32sim's 64-bit bloom of hooked PCs: on
+`bt_spp_initiator`'s boot loop without `--bt`, a stub at an address the guest never runs took the
+median of six free runs of 15 emulated s from 13.95 to 14.85 wall seconds on an M2 Pro. A guest
+that calls the function pays it until the call.
+
+The `esp32sim` backend passes `--no-bt` with the application's ELF whenever the test has not
+looked at `board.bluetooth`, on every chip but the ESP32-P4 and the ESP32-S31 ([esp32sim
+backend](esp32sim-backend-user.md#a-firmware-that-starts-its-controller-without-boardbluetooth)).
+
 ## What it prints
 
 stdout carries the guest's console output, UART0's or with `--console-port usb` the
@@ -451,6 +495,9 @@ instead. Everything the runner says goes to stderr, on lines that start with
 - `esp32tl-runner: flash 0x1000: PATH (N bytes)` for each `--flash-at` file, offset in hex;
 - `esp32tl-runner: Bluetooth controller on the socket, VHCI hooks from ELF` with `--bt`, once its
   ELF is loaded;
+- `esp32tl-runner: no Bluetooth controller: the guest's call to esp_bt_controller_init (ADDRESS,
+  from ELF) ends the run` with `--no-bt`, ADDRESS in hex, or `esp32tl-runner: --no-bt: ELF has no
+  esp_bt_controller_init, nothing to stop` for an ELF without it;
 - `esp32tl-runner: chip reset at T s, cause CAUSE` each time the firmware resets the chip, as
   `esp_restart()` does: T in emulated seconds with six decimals, CAUSE the reset cause the ROM
   reports, in hex (`0x...`). The runner restarts the guest from the ROM, as the chip would, and
@@ -505,9 +552,10 @@ to `--board`, and nothing after it.
 | 0 | with `--board`: `SIGTERM` or `SIGINT` | `end: signal at ...` |
 | 1 | the emulator stopped for any other reason | the stop line, then `esp32tl-runner: the emulator stopped before --max-seconds: STOP`, the stop with its fields; with `--board`, `end: the emulator stopped before --max-seconds: STOP at ...` |
 | 2 | a usage error | `esp32tl-runner: MESSAGE`, then `run esp32tl-runner --help for the usage` |
-| 2 | an input that cannot be loaded: no ROM found, a file that cannot be read, a ROM that is not an ELF, an image that does not fit in flash, a `--bt` ELF that is not an ELF or lacks the controller's symbols, an SD card image that cannot be opened for writing or is not a whole number of 512 KiB units | `esp32tl-runner: MESSAGE`, no stop line |
+| 2 | an input that cannot be loaded: no ROM found, a file that cannot be read, a ROM that is not an ELF, an image that does not fit in flash, a `--bt` ELF that is not an ELF or lacks the controller's symbols, a `--no-bt` ELF that is not an ELF, an SD card image that cannot be opened for writing or is not a whole number of 512 KiB units | `esp32tl-runner: MESSAGE`, no stop line |
 | 3 | with `--board`: a protocol error by the peer, such as a malformed line, a version or chip mismatch, an input stamped before its turn's `sync`, an `eth_rx` without `--wifi` or `--wifi-sta`, or `wifi_ap` without `--wifi` (including station mode), an `hci_rx` on a run without `--bt` or outside 1 to 496 bytes, an `sd_card` on a run without `--sd-spi` | `end: protocol error by the peer at BOARD: WHAT: LINE at ...`, `LINE` cut after 200 characters |
 | 4 | with `--board`: the connection failed, or the peer is gone: it closed the socket, a read or write failed, `--peer-timeout` ran out, or `--parent-fd` reached end of file | `end: cannot connect to the peer at ...`, or `end: the peer at BOARD is gone: WHY at ...` |
+| 5 | with `--no-bt`: the guest called `esp_bt_controller_init` | `end: the guest called esp_bt_controller_init, and the run has no --bt: it has no Bluetooth controller at ...` |
 | 101 | a panic, in the runner or in esp32sim during the run | Rust's panic message, no stop line |
 | 128 + N | with `--board`: a second `SIGTERM` or `SIGINT` (signal number N) | whatever came before it |
 

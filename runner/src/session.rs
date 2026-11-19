@@ -183,6 +183,13 @@ pub trait Guest {
     fn uptime(&mut self) -> Uptime {
         Uptime::Stopped
     }
+    // `--no-bt`: the default is a chip on which the guest never starts a controller.
+
+    /// How many times the guest has called `esp_bt_controller_init` since the run started, chip
+    /// resets included: the calls the stub of `--no-bt` answered, esp32sim's `stub_hits`.
+    fn bt_controller_inits(&self) -> u64 {
+        0
+    }
 }
 
 /// What the chip's uptime counter, the one ESP-IDF's `esp_timer` reads, is doing at a slice
@@ -272,6 +279,8 @@ pub struct Options<'a> {
     pub flash_out: Option<&'a Path>,
     /// `--bt`: what the forwarder, the guest's Bluetooth controller, shares with the run loop.
     pub hci: Option<hci::Shared>,
+    /// `--no-bt`: the guest's call to `esp_bt_controller_init` ends the run.
+    pub no_bt: bool,
 }
 
 /// Why the run ended (protocol §9).
@@ -287,6 +296,8 @@ pub enum End {
     Protocol(String),
     /// The peer is gone.
     PeerGone(String),
+    /// Under `--no-bt`, the guest called `esp_bt_controller_init`.
+    BtController,
 }
 
 impl End {
@@ -296,6 +307,7 @@ impl End {
             End::Emulator(_) => 1,
             End::Protocol(_) => 3,
             End::PeerGone(_) => 4,
+            End::BtController => 5,
         }
     }
 }
@@ -577,7 +589,12 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     continue;
                 }
             }
-            match self.guest.run_until(end) {
+            let stop = self.guest.run_until(end);
+            // the stub answered the call; the guest stops here, whatever it did after it
+            if self.opts.no_bt && self.guest.bt_controller_inits() > 0 {
+                return Err(End::BtController);
+            }
+            match stop {
                 Stop::Halted => {}
                 Stop::SwReset => {
                     // what the guest did before the reset goes out before it
@@ -1710,7 +1727,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         self.link.closing();
         let t = match &end {
             End::PeerGone(_) => return end,
-            End::MaxSeconds | End::Signal | End::Emulator(_) => {
+            End::MaxSeconds | End::Signal | End::Emulator(_) | End::BtController => {
                 self.collect();
                 if self
                     .process_pending(true)
@@ -1744,6 +1761,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             End::Protocol(detail) => {
                 protocol::stats(t, "protocol_error", &[("detail", detail)], &self.stats)
             }
+            End::BtController => protocol::stats(t, "bt_controller", &[], &self.stats),
             End::PeerGone(_) => unreachable!("returned above"),
         };
         if self.send(&line).and_then(|()| self.flush()).is_ok() {

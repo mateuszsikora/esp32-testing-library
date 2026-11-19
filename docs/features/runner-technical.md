@@ -36,10 +36,12 @@ its pin, `357b0e5`.
    that there is at least one `--flash-at`, that `--sd-rw` comes with `--sd-spi`, that
    `--wifi` comes with `--board` and its `--wifi-nearby` specs parse and differ from the access
    point (`--wifi-nearby` without `--wifi` is refused there too), that `--bt` comes with
-   `--board`, that `--realtime` does, that `--console socket` or `both` comes with `--board`, that
+   `--board`, that `--bt` and `--no-bt` are not both given, that `--no-bt` comes with `--board`,
+   that `--realtime` does, that `--console socket` or `both` comes with `--board`, that
    `--psram-mb` is a size of the chip's `Profile::psram_mb` or 0, and last (`unsupported`) that
-   the chip has `--wifi`, `--wifi-sta` and `--bt` when they are given. The pins of `--sd-spi` are
-   checked against the chip's `Profile::gpios` and `Profile::input_only` once the chip is known.
+   the chip has `--wifi`, `--wifi-sta`, `--bt` and `--no-bt` when they are given. The pins of
+   `--sd-spi` are checked against the chip's `Profile::gpios` and `Profile::input_only` once the
+   chip is known.
    A `--wifi` spec is checked as the flag is read (`access_point`: esp32sim's `ApConfig::parse`,
    then no `epoch`); `cli::Wifi` keeps the spec as given, since
    `ApConfig` has no `PartialEq`, and `Wifi::access_point` parses it again each time a fresh access
@@ -80,6 +82,8 @@ its pin, `357b0e5`.
    - With `--bt` ([below](#bluetooth-the-guests-hci-on-the-socket)): `bluetooth` parses the ELF,
      installs esp32sim's VHCI hooks over its symbols, puts the `Forwarder` in esp32sim's session,
      and prints the `Bluetooth controller on the socket` line.
+   - With `--no-bt` ([below](#no-bluetooth-controller---no-bt)): `no_bluetooth` parses the ELF and
+     puts an esp32sim stub at its `esp_bt_controller_init`, or prints that it has none.
    - `m.boot_rom()` (core 0 to the reset vector); `m.console.mask = CONSOLE_UART0` (`2`, bit 1 of
      `Console::mask`: UART0 only to stdout, not USB-CDC or UART1/2), `CONSOLE_USB` (`1`, bit 0:
      the USB-Serial/JTAG controller only) with `--console-port usb`, or `0` with
@@ -172,7 +176,7 @@ models that the runner can use, and their buses call none of the board's UART or
 | What `power_on_reset` zeroes | `L2MEM_LOW..L2MEM_HIGH`, `TCM_LOW..TCM_HIGH`, `LP_RAM_LOW..LP_RAM_HIGH` (`esp32p4::bus`), after `reboot`, which keeps them; the ROM is loaded again | nothing more: esp32sim's `reboot` makes `S31Bus` again, SRAM and LP memory with it, and reloads the ROM it kept |
 | Its LP registers after `power_on_reset` | a new `LpAon`, reset cause POWERON | `SocBus::set_reset_cause(1)` |
 | `uptime()` | `esp32p4::systimer_uptime` on `periph.systimer.st`: as `chip::systimer_uptime`, at 22.5 bus cycles a tick (`SYSTIMER_HALF_TICK`, the XTAL divider of the clock tree times 5, in half cycles), the zero to within 23 | `Stopped`, the trait's default: `SystimerS31` keeps its divider private, so the runner sends no `uptime` |
-| Refused at the command line | `--wifi`, `--wifi-sta`, `--bt`, `--sd-spi` | the same |
+| Refused at the command line | `--wifi`, `--wifi-sta`, `--bt`, `--no-bt`, `--sd-spi` | the same |
 | `--psram-mb` | 16 or 32 | 16 |
 
 Every `--flash-at` image goes through `Soc::check_image` before it is written: the P4's refuses an
@@ -733,6 +737,37 @@ cannot keep the line from its stderr.
 Why the socket, and not an HCI transport in esp32sim:
 [decision](../decisions/runner.md#the-guests-hci-goes-over-the-board-socket-on-the-boards-clock).
 
+### No Bluetooth controller: `--no-bt`
+
+Without `--bt`, `m.bus.ble.hooks` is empty and esp32sim intercepts nothing of `components/bt`: a
+guest that calls `esp_bt_controller_init` runs ESP-IDF's own controller, `btdm_controller_init` on
+the classic chip, against registers esp32sim does not model. `bt_spp_initiator` panics there with
+`StoreProhibited` at `EXCVADDR: 0x0000019c` and boot-loops, 128 chip resets in 15 emulated seconds
+(measured in a free run on an M2 Pro, 14.0 s wall). With `--no-bt ELF`, `main::no_bluetooth` parses
+the ELF with `esp_soc::elf::parse` and inserts `Machine::stubs[addr] = ESP_ERR_NOT_SUPPORTED`
+(`0x106`), `addr` the ELF's `esp_bt_controller_init` (`Elf::by_name`), the one symbol ESP-IDF's
+controller starts at on every chip whose `Profile::bt` is true. It asserts first that `stubs` is
+empty: `Guest::bt_controller_inits` counts every stub's hits as calls to this one. esp32sim tests a
+stub at the start of a block (`step_blocks`, `esp-soc/src/machine.rs:410-418`) and returns from it
+with the value, `return_from_stub` of the Xtensa and RISC-V cores, without running the function;
+`reboot()` keeps `stubs`. A stub is a block boundary for every PC of its bucket of esp32sim's 64-bit
+bloom (`pc_bit`, `emu-core/src/core.rs:226`), which also stops a block chaining into one there
+(`xtensa-lx7/src/block.rs:349`, `:785`): on `bt_spp_initiator`'s boot loop, a stub at `0x40200000`,
+which the guest never runs, took the median of six free runs of 15 emulated s from 13.95 to 14.85
+wall seconds (M2 Pro), measured with a build that put the stub in without `--no-bt`.
+
+`Guest::bt_controller_inits` is esp32sim's `stub_hits` on the four chips with Bluetooth (the runner
+puts in no other stub, which `no_bluetooth` asserts), 0 on the others and by default. The run loop
+reads it after every `run_until` when `Options::no_bt` is set, before it looks at the `Stop`: a call
+in the slice ends the run with `End::BtController`, even when the guest went on to reset the chip in
+the same slice, which then sends no `reset`. `finish` collects and sends what the guest did up to
+the end of the slice, as for `MaxSeconds`, then `stats` with `end: bt_controller` at the bus's
+cycle, and `End::exit_code` is 5. The slice ends at the next whole emulated millisecond or earlier
+([the session](#the-session)), so `t` is at most 1 ms after the call. An ELF without the symbol gets
+no stub, and the run goes on as without the flag. On the ESP32-S3 (LX7) and the ESP32-C3 (RISC-V),
+`gatt_server` ends the run this way at 0.033 s (`tests/test_chips.py`); no image here starts the
+controller on the ESP32-C6.
+
 ### The socket
 
 `SocketLink` sets a 20 ms read and write timeout on the socket (`POLL`), so that no read or write
@@ -808,6 +843,9 @@ The command line and the usage text: [runner-user.md](runner-user.md#run-an-imag
   - `esp32tl-runner: ROM {path}`
   - `esp32tl-runner: flash {offset:#x}: {path} ({len} bytes)`
   - `esp32tl-runner: Bluetooth controller on the socket, VHCI hooks from {path}`, with `--bt`
+  - `esp32tl-runner: no Bluetooth controller: the guest's call to esp_bt_controller_init
+    ({addr:#x}, from {path}) ends the run`, with `--no-bt`, or `esp32tl-runner: --no-bt: {path}
+    has no esp_bt_controller_init, nothing to stop` for an ELF without it
   - `esp32tl-runner: chip reset at {seconds:.6} s, cause {cause:#x}`
   - `esp32tl-runner: SD card: reading block {lba}: {error}`, `writing block {lba}: {error}` and
     `erasing blocks {lo} to {hi}: {error}`, when the image file fails
@@ -957,7 +995,7 @@ Every message starts with `esp32tl-runner: `. Usage errors exit 2 and add a seco
 | `--flash-at {spec}: bad hex offset {offset:?}` | the offset is not hex after every leading `0x` is trimmed (`0x0x1000` is `0x1000`; `0X` is not trimmed) |
 | `--flash-mb: the flash takes 1, 2, 4, 8 or 16 MiB, got {v:?}` | any other value |
 | `--psram-mb: {title} supports only {sizes} MiB, got {v:?}` | a size the chip's `Profile::psram_mb` does not list, nor 0: `the classic ESP32 supports only 0 or 4`, `the ESP32-S3 supports only 0, 2, 4 or 8`, `the ESP32-C3 supports only 0`, `the ESP32-P4 supports only 0, 16 or 32`, `the ESP32-S31 supports only 0 or 16` |
-| `--wifi: {chip} has no Wi-Fi in esp32sim`, `--wifi-sta: {chip} has no virtual station for a SoftAP in esp32sim`, `--bt: {chip} has no VHCI hooks in esp32sim`, `--sd-spi: {chip} tells the board no SPI pins in esp32sim` | the flag on a chip whose `Profile` says esp32sim lacks it: `--wifi-sta` on all but the classic ESP32, the four of them on `esp32p4` and `esp32s31` |
+| `--wifi: {chip} has no Wi-Fi in esp32sim`, `--wifi-sta: {chip} has no virtual station for a SoftAP in esp32sim`, `--bt: {chip} has no VHCI hooks in esp32sim`, `--no-bt: {chip} has no Bluetooth in esp32sim`, `--sd-spi: {chip} tells the board no SPI pins in esp32sim` | the flag on a chip whose `Profile` says esp32sim lacks it: `--wifi-sta` on all but the classic ESP32, the four of them on `esp32p4` and `esp32s31` |
 | `--console: expected stdout, socket or both, got {v:?}` | any other value |
 | `--console-port: expected uart0 or usb, got {v:?}` | any other value |
 | `--console-port usb: {chip} has no USB-Serial/JTAG controller` | `--console-port usb` on a chip whose `Profile::usb_serial_jtag` is false: `esp32` |
@@ -979,6 +1017,8 @@ Every message starts with `esp32tl-runner: `. Usage errors exit 2 and add a seco
 | `--bt makes the peer the guest's Bluetooth controller: it needs --board` | `--bt` without `--board` |
 | `--parent-fd ends a run with a peer when the process that started it is gone: it needs --board` | `--parent-fd` without `--board` |
 | `--parent-fd: expected a file descriptor, a number from 0, got {v:?}` | not a whole number, or below 0 |
+| `--bt with --no-bt: the guest's controller is the peer's, or there is none` | both flags |
+| `--no-bt ends the run for the peer when the guest starts its Bluetooth controller: it needs --board` | `--no-bt` without `--board` |
 | `--wifi-nearby ssid={ssid}: a network around with the access point's SSID would be the access point` (or `BSSID`) | a nearby network with the access point's SSID, or its BSSID; esp32sim's own CLI leaves it out with `[emu] --wifi-nearby '{ssid}' left out: it has {why}` on stderr instead (`cli/src/lib.rs:521-527`) |
 
 Inputs that cannot be loaded exit 2 through `fail`, with no second line and no stop line:
@@ -988,6 +1028,7 @@ Inputs that cannot be loaded exit 2 through `fail`, with no second line and no s
 | `no esp32_rev300_rom.elf found: pass --rom, or set ESP32SIM_ROM_DIR` | no `--rom` and `find_rom` found nothing |
 | `{path}: {error}` | the ROM or a flash file cannot be read; `error` is the OS error, e.g. `No such file or directory (os error 2)` |
 | `{rom}: {error}` | esp32sim cannot load the ROM ELF, e.g. `not an ELF file`, `need ELF32 little-endian` (`esp-soc/src/elf.rs`) |
+| `--no-bt {path}: {error}` | the ELF of `--no-bt` is not one `esp_soc::elf::parse` takes: `not an ELF file` and its other errors |
 | `--bt {path}: {error}` | esp32sim refuses the ELF of `--bt`: `not an ELF file` and the other errors of `esp_soc::elf::parse`, or `Ble::enable`'s `BLE requires ELF symbol {name}`, `BLE controller init has no room for the guest task trampoline`, `BLE controller BSS is too small or outside DRAM` |
 | `--flash-at {offset:#x}={path}: flash image too large` | the file does not fit in `--flash-mb` from its offset (`esp32/src/bus.rs`, `write_flash`) |
 | `--sd-rw {image}: not a UTF-8 path` | esp32sim's `FileStore` takes a `&str` |
@@ -1018,6 +1059,7 @@ peer come from `session.rs` and `transport.rs`:
 | 3 | `protocol error by the peer at {board}: {what}: {line}` | `{what}` is one of: `version {v}, the runner speaks version 1`, `chip {chip:?}, the runner runs {name:?}` (the selected chip's), `watch holds GPIO {pin}, which the {name} does not have` (a pin outside the chip's `Profile::gpios`; on the classic ESP32 any pin but 0 to 39 without 24 and 28 to 31), `expected hello`, `hello after the handshake`, a parse error of `protocol::parse` (`not JSON: …`, `not a JSON object`, `no "type"`, `unknown type …`, `{type}: "{field}" is missing`, `… is not an integer`, `… is negative`, `… is not a GPIO number`, `uart_rx: bad base64 character …`, and the like), `t {t} is before this turn's sync at {b} (rule 2)`, `GPIO {pin} is not in the peer's watch`, `a baud of 0`, `ack {ack}, but the last event before this sync was seq {seq}`, `quiet_until {q} is not after this turn's sync at {b}`, `adc is not implemented yet`, `eth_rx without --wifi`, `wifi_ap without --wifi` (after the check of `t`), `eth_rx: an Ethernet frame of {n} bytes; one without FCS has 14 to 1518`, `eth_rx: bad base64 character …`, `hci_rx without --bt` (after the check of `t`), `hci_rx: an H4 packet of {n} bytes; esp32sim's VHCI carries 1 to 496`, `console_rx without --console-port usb, on a UART0 with pins` (after the check of `t`), `console_rx: bad base64 character …`, `wifi_ap: "on" is not true or false`, `sd_card without --sd-spi` (after the check of `t`), `sd_card: "image" is not a string`. `{line}` is the peer's line, cut after 200 characters with `...` |
 | 3 | `protocol error by the peer at {board}: a line longer than 1 MiB` or `…: a line that is not UTF-8` | from the socket, without the line |
 | 4 | `the peer at {board} is gone: {why}` | `{why}` is `the peer closed the socket`, `read failed: {error}`, `write failed: {error}`, `the socket accepts no more data`, `the peer's turn took longer than --peer-timeout`, `the peer read nothing for longer than --peer-timeout` or, while the last messages are written, `the peer did not read the last messages in time`; with `--parent-fd`, `end of file on --parent-fd: the process that started the runner has ended` (`parent::GONE`), for which no `stats` is sent |
+| 5 | `the guest called esp_bt_controller_init, and the run has no --bt: it has no Bluetooth controller` | under `--no-bt`, the stub answered the call (`End::BtController`) |
 
 A failure to write the last messages does not change the exit code: the first cause decides it.
 
@@ -1102,7 +1144,8 @@ a guest that programs a byte between two dumps;
   errors: `--wifi` without `--board`, `--wifi-nearby` without `--wifi`, a channel of 15, an entry
   without `=`, `epoch`, a nearby network without `ssid`, and one with the access point's SSID or
   BSSID. `bt_names_the_application_elf_and_needs_a_board` checks `--bt` with `--board`, without
-  it, and without a value.
+  it, and without a value. `no_bt_names_the_application_elf_needs_a_board_and_excludes_bt`
+  checks `--no-bt` with `--board`, without it, with `--bt`, and on `esp32p4` and `esp32s31`.
 - `runner/src/hci/tests.rs`: the `Forwarder` in an esp32sim `Session`, as the hooks drive it:
   `a_packet_the_host_sends_keeps_the_cycle_the_hook_moved_the_controller_to`,
   `the_host_reads_what_came_due_one_packet_a_poll_in_order`, and
@@ -1255,6 +1298,10 @@ a guest that programs a byte between two dumps;
   `on_the_emulator_the_flash_read_has_the_code_esp32sims_trampoline_covers` (`Guest::flash` on a
   real `esp32::Machine` with `original_flash` set: the code in the copy, the trampoline in the
   flash).
+  `under_no_bt_the_guests_call_to_its_bluetooth_controller_ends_the_run_at_the_slice_end` (what
+  the guest sent after the call in the same slice goes out, nothing later; `stats` with `end:
+  bt_controller` at the next whole millisecond; exit code 5) and
+  `under_no_bt_a_guest_that_never_starts_its_controller_runs_to_the_end`.
   The SD card slot: `the_peer_takes_the_card_out_and_puts_cards_in_at_their_times` (a card out,
   another in, then out and the first in again at one instant, each acknowledged at its time in
   the order sent, no `seq`, no turn of their own);

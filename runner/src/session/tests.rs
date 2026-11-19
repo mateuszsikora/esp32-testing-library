@@ -74,6 +74,8 @@ enum Act {
     Uptime(Uptime),
     /// Bytes UART0 sent, on a chip whose UARTs have no pins: no board callback sees them.
     Uart0Stream(Vec<u8>),
+    /// The guest calls `esp_bt_controller_init`, which the stub of `--no-bt` answers.
+    BtInit,
 }
 
 /// A guest that does what its script says at the cycles it says, and records UART bytes the way
@@ -127,6 +129,8 @@ struct FakeGuest {
     /// With its console on a UART0 without pins: what UART0 sent, not taken yet.
     uart0: Option<Vec<u8>>,
     uart0_in: Vec<(u64, Vec<u8>)>,
+    /// With `--no-bt`: the guest's calls to `esp_bt_controller_init` so far.
+    bt_inits: Option<u64>,
 }
 
 /// Why `FakeGuest` lost a received byte.
@@ -169,6 +173,7 @@ impl FakeGuest {
             uptime: Uptime::Stopped,
             uart0: None,
             uart0_in: Vec::new(),
+            bt_inits: None,
         }
     }
 
@@ -186,6 +191,12 @@ impl FakeGuest {
 
     fn with_bt(mut self) -> Self {
         self.hci = Some(hci::Shared::default());
+        self
+    }
+
+    /// With no Bluetooth controller (`--no-bt`).
+    fn with_no_bt(mut self) -> Self {
+        self.bt_inits = Some(0);
         self
     }
 
@@ -291,6 +302,7 @@ impl Guest for FakeGuest {
                     .as_mut()
                     .expect("a guest whose UART0 has no pins")
                     .extend(data),
+                Act::BtInit => *self.bt_inits.as_mut().expect("a guest with --no-bt") += 1,
             }
         }
         self.now = end;
@@ -379,6 +391,9 @@ impl Guest for FakeGuest {
     }
     fn uptime(&mut self) -> Uptime {
         self.uptime
+    }
+    fn bt_controller_inits(&self) -> u64 {
+        self.bt_inits.unwrap_or(0)
     }
     fn sleeps_through(&self) -> bool {
         self.steppable
@@ -618,6 +633,7 @@ fn run_with(
         realtime: false,
         flash_out,
         hci: guest.hci.clone(),
+        no_bt: guest.bt_inits.is_some(),
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     Run {
@@ -1555,6 +1571,7 @@ fn a_signal_ends_the_slice_in_progress_with_stats() {
         realtime: false,
         flash_out: None,
         hci: None,
+        no_bt: false,
     };
     let (end, _) = Session::new(&mut guest, &mut peer, shared, opts).run();
     assert!(matches!(end, End::Signal), "{end:?}");
@@ -1736,6 +1753,7 @@ fn on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point() 
         realtime: false,
         flash_out: None,
         hci: None,
+        no_bt: false,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     assert!(matches!(end, End::MaxSeconds), "{end:?}");
@@ -1814,6 +1832,7 @@ fn on_the_emulator_a_byte_into_a_full_rx_fifo_is_lost_and_raises_the_overflow_in
         realtime: false,
         flash_out: None,
         hci: None,
+        no_bt: false,
     };
     let (end, stats) = Session::new(&mut m, &mut peer, shared, opts).run();
     assert!(matches!(end, End::MaxSeconds), "{end:?}");
@@ -1888,6 +1907,7 @@ fn signalled(parent_gone: bool) -> (End, FakePeer) {
         realtime: false,
         flash_out: None,
         hci: None,
+        no_bt: false,
     };
     let (end, _) = Session::new(&mut guest, &mut peer, shared, opts).run();
     (end, peer)
@@ -2262,6 +2282,7 @@ fn on_the_emulator_gpio_in_reaches_the_guest_and_its_output_comes_back_as_gpio_o
         realtime: false,
         flash_out: None,
         hci: None,
+        no_bt: false,
     };
     let (end, stats) = Session::new(&mut m, &mut peer, shared, opts).run();
     assert!(matches!(end, End::MaxSeconds), "{end:?}");
@@ -2612,6 +2633,7 @@ fn run_wifi_mode(
         realtime: false,
         flash_out: None,
         hci: None,
+        no_bt: false,
     };
     let shared = guest.inner.shared.clone();
     Session::new(guest, peer, shared, opts).run()
@@ -3128,6 +3150,7 @@ fn run_with_slot(seconds: f64, peer: FakePeer, slot: &sd_card::Shared) -> Run {
         realtime: false,
         flash_out: None,
         hci: None,
+        no_bt: false,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     Run {
@@ -3428,6 +3451,7 @@ fn run_realtime(seconds: f64, mut guest: FakeGuest, mut peer: FakePeer) -> Run {
         realtime: true,
         flash_out: None,
         hci: None,
+        no_bt: false,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
     Run {
@@ -3770,6 +3794,7 @@ fn each_flash_dump_ack_starts_the_peer_timeout_again() {
         realtime: false,
         flash_out: Some(out.0.as_path()),
         hci: None,
+        no_bt: false,
     };
     Session::new(&mut guest, &mut peer, shared, opts).run();
     // the handshake's, the turn's first, then one after each answer; an input starts nothing
@@ -4342,4 +4367,41 @@ fn console_rx_needs_the_console_on_usb() {
     );
     // and no console_rx_lost in stats without it
     assert!(r.peer.stats().get("console_rx_lost").is_none());
+}
+
+#[test]
+fn under_no_bt_the_guests_call_to_its_bluetooth_controller_ends_the_run_at_the_slice_end() {
+    let ms = cycles(MS);
+    let mut script = tx(ms, 0, b"ab", 100);
+    script.extend([
+        (ms + 300, Act::BtInit),
+        // what the guest does after the call, in the same slice, still goes out; nothing later
+        (ms + 400, Act::Tx(0, b'c')),
+        (3 * ms, Act::Tx(0, b'd')),
+    ]);
+    let guest = FakeGuest::new(script)
+        .with_routes(&[route(0, Some(1), Some(3), Some(115_200))])
+        .with_no_bt();
+    let r = run_for(1.0, guest, FakePeer::new(&[], idle(None, None)), true);
+    assert!(matches!(r.end, End::BtController), "{:?}", r.end);
+    assert_eq!(r.end.exit_code(), 5);
+    let console: Vec<u8> = r.peer.of("console").iter().flat_map(|m| data(m)).collect();
+    assert_eq!(console, b"abc");
+    let stats = r.peer.msgs.last().expect("stats");
+    assert_eq!(kind(stats), "stats");
+    assert_eq!(
+        stats.get("end").and_then(Json::as_str),
+        Some("bt_controller")
+    );
+    // the end of the slice the call came in: the next whole millisecond
+    assert_eq!(num(stats, "t"), ns(2 * ms));
+}
+
+#[test]
+fn under_no_bt_a_guest_that_never_starts_its_controller_runs_to_the_end() {
+    let guest = FakeGuest::new(tx(cycles(MS), 0, b"a", 100))
+        .with_routes(&[route(0, Some(1), Some(3), Some(115_200))])
+        .with_no_bt();
+    let r = run_for(0.01, guest, FakePeer::new(&[], idle(None, None)), true);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
 }
