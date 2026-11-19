@@ -109,7 +109,7 @@ class Run:
     def _reset(self) -> None:
         t, cause = self.resets.pop(0)
         self.seq += 1
-        self.link.receive(Reset(self.seq, t, cause))
+        self.link.receive(Reset(self.seq, t, cause, 0))
 
     # What the console needs of the board.
 

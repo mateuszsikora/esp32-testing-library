@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 
 import pytest
+from test_reset_reasons import REASONS, printed_reasons
 
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.flash import Namespaces, i8, i16, i32, i64, u8, u16, u32, u64
@@ -47,6 +48,20 @@ NVS_CONFIG: Namespaces = {
 }
 
 
+def check_reset_reasons(board: Esp32Sim, console: Console) -> None:
+    """`firmware/reset_reasons` to its deep sleep: each boot's `Boot.idf_reason` is the
+    firmware's `esp_reset_reason()`, the panic's and the task watchdog's hint kept through the chip
+    reset by esp32sim or put back by the runner (C3, S31). Which chips wake from the sleep is the
+    runner's to say, not this test's."""
+    board.power_on()
+    software = REASONS[:4]
+    printed = printed_reasons(console, len(software), timeout=2)
+    assert [reason for reason, _ in printed] == software
+    assert [(boot.idf_reason, boot.cause) for boot in board.boots] == printed
+    assert [cause for _, cause in printed] == [POWERON_RESET, 12, 12, 12]
+    console.expect_exact("reset_reasons: sleeping 100 ms", timeout=1)
+
+
 def on_chip(chip: str, profile: str, banner: str) -> type:
     """The tests of one chip, as a class: its devkit profile on the class, and on each test the
     image built for the chip. The markers go on the test and its class, where esp32tl reads them
@@ -75,6 +90,12 @@ def on_chip(chip: str, profile: str, banner: str) -> type:
                 assert zero is not None, boot
                 assert zero.earliest <= boot.at <= zero.latest < zero.earliest + Duration(63)
             assert board.link.warnings == [] and board.link.error is None
+
+        @image("reset_reasons")
+        def test_each_boot_is_named_as_the_firmware_s_esp_reset_reason(
+            self, board: Esp32Sim, console: Console
+        ) -> None:
+            check_reset_reasons(board, console)
 
         @image("console_repl")
         def test_the_console_takes_a_command(self, board: Esp32Sim) -> None:
@@ -268,6 +289,12 @@ def on_new_chip(chip: str, profile: str, rom: str, banner: str) -> type:
             console.expect_exact("Hello world!", timeout=2)
             assert [boot.cause for boot in board.boots] == [POWERON_RESET, 12]
             assert board.link.warnings == [] and board.link.error is None
+
+        @image("reset_reasons")
+        def test_each_boot_is_named_as_the_firmware_s_esp_reset_reason(
+            self, board: Esp32Sim, console: Console
+        ) -> None:
+            check_reset_reasons(board, console)
 
         @image("console_repl")
         def test_the_console_on_uart0_takes_a_command(self, board: Esp32Sim) -> None:

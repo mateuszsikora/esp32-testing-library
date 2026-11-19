@@ -122,8 +122,7 @@ pub fn run_free<T: Target>(t: &mut T) -> Stop {
         t.machine().drain_console();
         match stop {
             Stop::SwReset => {
-                let cause = t.machine().reboot();
-                t.after_reset();
+                let cause = t.chip_reset();
                 eprintln!(
                     "esp32tl-runner: chip reset at {:.6} s, cause {cause:#x}",
                     t.machine_ref().seconds()
@@ -132,6 +131,22 @@ pub fn run_free<T: Target>(t: &mut T) -> Stop {
             stop => return stop,
         }
     }
+}
+
+/// `Guest::reset_hint` on a chip whose reset-reason hint register is at `address` of its bus:
+/// read there as the runner reads the bus, without a CPU's cost.
+pub(crate) fn read_reset_hint(bus: &mut impl emu_core::Bus, address: u32) -> u32 {
+    bus.read32_unpriced(address)
+        .expect("the reset-reason hint register is mapped")
+}
+
+/// Puts back the reset-reason hint `hint` at `address` after a reset of esp32sim that makes the
+/// register anew, which the chip keeps through every reset but a power-on: what ESP-IDF's
+/// `esp_reset_reason()` reads at the next boot (`components/esp_system/port/soc/<chip>/
+/// reset_reason.c`).
+pub(crate) fn keep_reset_hint(bus: &mut impl emu_core::Bus, address: u32, hint: u32) {
+    bus.write32_unpriced(address, hint)
+        .expect("the reset-reason hint register is mapped");
 }
 
 /// `Guest::wifi_access_point` on a chip whose Wi-Fi is esp32sim's shared `StationLink`: a fresh

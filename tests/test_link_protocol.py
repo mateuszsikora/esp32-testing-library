@@ -64,7 +64,7 @@ EVERY_MESSAGE: list[tuple[Sender, Message]] = [
     ("runner", UartCfg(3, 312_456_789, 1, (4,), 5, 9600)),
     ("runner", UartCfg(4, 312_456_789, 2, (), None, None)),
     ("runner", GpioOut(9, 2_000_000_000, ((4, 1), (5, 0)), (4,), (4,))),
-    ("runner", Reset(12, 4_100_000_000, 12)),
+    ("runner", Reset(12, 4_100_000_000, 12, 0x8004_0004)),
     ("runner", WifiLink(13, 4_200_000_000, True)),
     ("runner", WifiLink(14, 4_300_000_000, False)),
     ("runner", EthTx(13, 4_200_000_000, b"\xff" * 6 + b"\x24\x6f\x28\x00\x11\x22\x08\x06")),
@@ -201,7 +201,12 @@ def test_a_runner_hello_of_another_version_decodes_on_its_version_alone() -> Non
         ("runner", b'{"type":"sync","t":true}', "sync: t is not an integer: True"),
         ("runner", b'{"type":"sync","t":-1}', "sync: t is -1, below 0"),
         ("runner", b'{"type":"sync","t":"0"}', "sync: t is not an integer: '0'"),
-        ("runner", b'{"type":"reset","seq":0,"t":0,"cause":12}', "reset: seq is 0, below 1"),
+        (
+            "runner",
+            b'{"type":"reset","seq":0,"t":0,"cause":12,"hint":0}',
+            "reset: seq is 0, below 1",
+        ),
+        ("runner", b'{"type":"reset","seq":1,"t":0,"cause":12}', "reset: no hint"),
         (
             "runner",
             b'{"type":"uptime","t":0,"earliest":5,"latest":null}',

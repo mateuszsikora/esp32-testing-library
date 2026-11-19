@@ -2066,7 +2066,7 @@ print("Hello world!", flush=True)
 send(p.Console(1000, b"Hello world!\\r\\n"))
 send(p.Warn(1000, "unrouted_rx", "uart_rx on GPIO 5: 72 bytes dropped", pin=5, nbytes=72))
 if mode == "late":
-    send(p.Reset(5, 2000, 12))
+    send(p.Reset(5, 2000, 12, 0))
 if mode == "tx":
     send(p.UartTx(1, 1000, 1, (4,), 9600, b"$PMTK314,0*28\\r\\n"))
 if mode == "stall":

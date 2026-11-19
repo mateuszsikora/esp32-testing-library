@@ -440,6 +440,56 @@ def test_the_count_survives_a_power_cut(board: Board):
   A boot is there once the board has run into it: right after `board.reset()`, or the
   `power_on()` that follows a `power_off()`, `board.boot` is still the one before, until the test
   lets the board run, for as little as `board.wait(ms(1))`.
+- `boot.idf_reason` is what ESP-IDF's `esp_reset_reason()` reports for the boot, by name:
+  `ESP_RST_POWERON`, `ESP_RST_SW`, `ESP_RST_PANIC`, `ESP_RST_TASK_WDT`, `ESP_RST_DEEPSLEEP` and
+  the rest of `esp_reset_reason_t`. It is what an ESP-IDF application, an Arduino-ESP32 one
+  included, built with ESP-IDF v5.3 to v6.1 reports, not a property of the chip:
+  `get_reset_reason()` of each chip's `components/esp_system/port/soc/<chip>/reset_reason.c`,
+  the same in v5.3.6 (the classic ESP32, the S3, C3 and C6), v5.5.4 (the P4) and v6.1 (the S31),
+  the versions the validation images are built with. It needs more than `cause`: the ROM reports
+  12 (`SW_CPU_RESET`) alike for `esp_restart()` and for a panic, and only the hint the boot before
+  left in an RTC register (`RTC_RESET_CAUSE_REG`, `RTC_CNTL_STORE6` on the classic ESP32) tells
+  them apart, as `ESP_RST_SW` and `ESP_RST_PANIC`. After a reset of cause 3 or 12 the hint gives
+  `ESP_RST_PANIC`, `ESP_RST_INT_WDT`, `ESP_RST_TASK_WDT` or `ESP_RST_BROWNOUT`, and anything else,
+  no hint included, gives `ESP_RST_SW`; every other cause gives the same name whatever the
+  register holds. On esp32sim the runner reads the register at each reset
+  ([protocol 5.5](../protocol.md#55-reset)), and on the classic ESP32 `firmware/reset_reasons`
+  checks five of them against what the firmware printed: a power-on, `esp_restart()`, a panic, a
+  task watchdog's panic and a wake from deep sleep. A cause ESP-IDF does not map is
+  `ESP_RST_UNKNOWN`, as `esp_reset_reason()` reports it: on the classic ESP32 4 (`OWDT_RESET`), 10
+  (`INTRUSION_RESET`) and 14 (`EXT_CPU_RESET`, the APP CPU reset by the PRO CPU), on the S3 and
+  the C3 6, 19 and 23 among others, on the P4 6, 8, 17, 21 and 27 among others. Where a chip's tables differ:
+
+  | Cause | ESP32 | ESP32-S3 | ESP32-C3 | ESP32-C6 | ESP32-P4 | ESP32-S31 |
+  |---|---|---|---|---|---|---|
+  | 6 | `ESP_RST_SDIO` | `ESP_RST_UNKNOWN` | `ESP_RST_UNKNOWN` | `ESP_RST_SDIO` | `ESP_RST_UNKNOWN` | `ESP_RST_DEEPSLEEP` |
+  | 7 | `ESP_RST_TASK_WDT` | `ESP_RST_TASK_WDT` | `ESP_RST_TASK_WDT` | `ESP_RST_TASK_WDT` | `ESP_RST_WDT` | `ESP_RST_TASK_WDT` |
+  | 8 | `ESP_RST_INT_WDT` | `ESP_RST_INT_WDT` | `ESP_RST_INT_WDT` | `ESP_RST_INT_WDT` | `ESP_RST_UNKNOWN` | `ESP_RST_INT_WDT` |
+  | 17 | `ESP_RST_UNKNOWN` | `ESP_RST_WDT` | `ESP_RST_WDT` | `ESP_RST_WDT` | `ESP_RST_UNKNOWN` | `ESP_RST_UNKNOWN` |
+  | 18 | `ESP_RST_UNKNOWN` | `ESP_RST_WDT` | `ESP_RST_WDT` | `ESP_RST_WDT` | `ESP_RST_WDT` | `ESP_RST_WDT` |
+  | 19 | `ESP_RST_UNKNOWN` | `ESP_RST_UNKNOWN` | `ESP_RST_UNKNOWN` | `ESP_RST_UNKNOWN` | `ESP_RST_PWR_GLITCH` | `ESP_RST_PWR_GLITCH` |
+  | 20 | `ESP_RST_UNKNOWN` | `ESP_RST_UNKNOWN` | `ESP_RST_POWERON` | `ESP_RST_EFUSE` | `ESP_RST_EFUSE` | `ESP_RST_EFUSE` |
+  | 21 | `ESP_RST_UNKNOWN` | `ESP_RST_USB` | `ESP_RST_USB` | `ESP_RST_USB` | `ESP_RST_UNKNOWN` | `ESP_RST_UNKNOWN` |
+  | 22 | `ESP_RST_UNKNOWN` | `ESP_RST_USB` | `ESP_RST_USB` | `ESP_RST_USB` | `ESP_RST_USB` | `ESP_RST_USB` |
+  | 23 | `ESP_RST_UNKNOWN` | `ESP_RST_UNKNOWN` | `ESP_RST_UNKNOWN` | `ESP_RST_UNKNOWN` | `ESP_RST_USB` | `ESP_RST_USB` |
+  | 24 | `ESP_RST_UNKNOWN` | `ESP_RST_UNKNOWN` | `ESP_RST_UNKNOWN` | `ESP_RST_JTAG` | `ESP_RST_JTAG` | `ESP_RST_JTAG` |
+  | 26 | `ESP_RST_UNKNOWN` | `ESP_RST_UNKNOWN` | `ESP_RST_UNKNOWN` | `ESP_RST_UNKNOWN` | `ESP_RST_CPU_LOCKUP` | `ESP_RST_CPU_LOCKUP` |
+
+  On every chip 1 is `ESP_RST_POWERON`, 3 and 12 the software resets above, 5 `ESP_RST_DEEPSLEEP`,
+  15 `ESP_RST_BROWNOUT`, and 9, 11, 13 and 16 `ESP_RST_WDT`. On the P4 an eFuse CRC reset, 20, is
+  `ESP_RST_EFUSE` from chip revision v0.1 on, every revision esp32sim models; ESP-IDF says
+  `ESP_RST_DEEPSLEEP` for it on v0.0, which esp32tl does not tell apart. `idf_reason` is
+  `None` for a chip esp32tl has no table for, which no board profile names, and on the serial
+  backend, which skips `board.boots`. It takes no part in comparing two boots, as `uptime_zero`.
+
+  For a firmware that panics, the next boot:
+
+  ```python
+  booted = board.next_boot()
+  boot = board.wait_until(booted, within=seconds(5))
+  assert (boot.reason, boot.idf_reason) == ("SW_CPU_RESET", "ESP_RST_PANIC")
+  ```
+
 - `boot.uptime_zero` is where the boot's uptime counter, the one `esp_timer_get_time()` reads,
   counted zero on the board's clock, an `UptimeZero` (from `esp32tl`) of two
   `Duration`s, `earliest` and `latest`; `None` until the backend has seen the counter count, for a

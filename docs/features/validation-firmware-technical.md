@@ -49,7 +49,8 @@ the containers, and once inside each, which builds. With `IDF_LOCAL=1` it runs o
    `$PWD/firmware/console_repl_usb`, whose own `sdkconfig.defaults` ESP-IDF reads as the project's),
    then `hello_world`, `console_repl`, `console_repl_usb`, `gpio_echo`, `nvs_reader` and
    `hello_world_psram` on each of `esp32p4` and `esp32s31`, then `hello_world_rev1@esp32p4`
-   (`project_of`: ESP-IDF's `hello_world`); `gpio_echo@esp32` is unknown there. `--chip CHIP,...`
+   (`project_of`: ESP-IDF's `hello_world`), then `reset_reasons` on each of `esp32s3`, `esp32c3`,
+   `esp32c6`, `esp32p4` and `esp32s31` (`project_of`: `$PWD/firmware/reset_reasons`); `gpio_echo@esp32` is unknown there. `--chip CHIP,...`
    right after `--chips` keeps the entries whose chip it names, in their order
    (`--chip esp32h2: no images for these chips` when none is left). The family's output tree
    is `firmware/` for `--chips` as without a family, `examples/` for `--examples`.
@@ -173,7 +174,7 @@ next build is still incremental; the marker, removed first, is what says it fini
 The Makefile's `firmware` target runs `FIRMWARE_OUT= firmware/build.sh`; the pattern rule
 `firmware/%/build/esp32tl-built` runs `FIRMWARE_OUT= firmware/build.sh $*`, and `test` depends on
 `$(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)` with `FIRMWARE_IMAGES := hello_world
-nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep bt_spp_initiator bt_spp_initiator_psram`. `determinism` depends on
+nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake reset_reasons deep_sleep bt_spp_initiator bt_spp_initiator_psram`. `determinism` depends on
 the markers of `nmea_reader`, `pppos_client`, `mqtt_session`, `http_request` and `bt_spp_initiator`,
 and of the `position_tracker` example. The rule has no prerequisites, so make rebuilds
 an image only when its marker is missing: an edit to `firmware/nmea_reader/` needs `make firmware`, or
@@ -458,6 +459,28 @@ What it proves on esp32sim, measured on the runs of `tests/test_timer_wake.py`: 
 2.046 s apart on the board's clock, and the image reports `rom=5 wake=4` with the count going on.
 On the previous pin, `8c65215`, the chip never wakes, and the test fails with `NeverHappened` on
 the second boot.
+
+## `reset_reasons`
+
+`firmware/reset_reasons/main/main.c` depends on `esp_hw_support` (`esp_sleep.h`) and `esp_system`
+(`esp_private/system_internal.h`, for `esp_reset_reason_set_hint`), and uses ESP-IDF's default
+`sdkconfig` and partition table. `app_main` reads `esp_reset_reason()` once, prints it through
+`name()`, a switch over every `esp_reset_reason_t` of ESP-IDF v5.3 to v6.1 (`?` for any other
+value), and switches on it: the reason is the image's only state, so a boot needs neither NVS nor
+RTC memory to know which reset comes next. The panics are `abort()`. The task watchdog's is
+`esp_reset_reason_set_hint(ESP_RST_TASK_WDT)` then `abort()`, what ESP-IDF v5.3.6's
+`task_wdt_timeout_abort` (`components/esp_system/task_wdt/task_wdt.c`) does when the watchdog
+fires with `trigger_panic`; `esp_panic_handler` (`components/esp_system/panic.c`) keeps a hint it
+finds and sets `ESP_RST_PANIC` only where there is none. esp32sim's timer groups have no watchdog
+on the classic ESP32 (`esp-periph/src/timg.rs`): with `esp_task_wdt_reconfigure` at 1 s and
+`trigger_panic`, a task that never fed it ran on for the 6 s of the run. `SLEEP_US` (100 000) is
+the deep sleep's timer wake.
+
+What it proves on esp32sim, measured in a run of the runner without a peer at the pin `357b0e5`,
+the same boots `tests/test_reset_reasons.py` checks: the resets come at 0.045, 0.089, 0.134 and 0.277 s of the board's time, with causes 12,
+12, 12 and 5; the panic's and the task watchdog's hints survive esp32sim's chip reset in
+`RTC_CNTL_STORE6`, so the image prints `ESP_RST_PANIC` and `ESP_RST_TASK_WDT` where the ROM says
+`SW_CPU_RESET` for all three software resets.
 
 ## `deep_sleep`
 
@@ -928,7 +951,8 @@ write their arguments to `$FAKE_LOG`, with a `PATH` holding only them and `cat`,
 - `test_local_build_runs_idf_py_and_records_how`: with no image named, every image in order,
   `hello_world` and `sdspi` from the fake `IDF_PATH`, `nmea_reader`, `gpio_echo`, `sd_remount`,
   `modem_at`, `modem_recovery` and `nvs_reader` from `firmware/`, `pppos_client` from what a fake `python3` prints,
-  `mqtt_session`, `persistence`, `ota_state` and `timer_wake` from `firmware/`, `http_request`
+  `mqtt_session`, `persistence`, `ota_state`, `timer_wake` and `reset_reasons` from `firmware/`,
+  `http_request`
   from its copy, `.http_request-v9.9.9` in the output directory, which holds the fake example's
   `CMakeLists.txt`, and `deep_sleep`, `bt_spp_initiator`, `bt_spp_initiator_psram` and
   `hello_world_8mb` from the fake `IDF_PATH`; the `idf.py` arguments of each,

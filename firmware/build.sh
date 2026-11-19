@@ -43,7 +43,7 @@ P4_CONTAINER=espressif/idf:$P4_IDF_VERSION@sha256:b9f2d6ea1c19e0c9f7959bdb74a9e3
 # The ESP32-S31 is a target of ESP-IDF v6.1 on, as a preview.
 S31_IDF_VERSION=v6.1
 S31_CONTAINER=espressif/idf:$S31_IDF_VERSION@sha256:81893c71bb5e570088901f21def8684c25cd2a9020281bd01b843a7655edb18c
-IMAGES="hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake deep_sleep bt_spp_initiator bt_spp_initiator_psram hello_world_8mb"
+IMAGES="hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake reset_reasons deep_sleep bt_spp_initiator bt_spp_initiator_psram hello_world_8mb"
 # The images of the other chips: what their tests in tests/test_chips.py run.
 CHIP_IMAGES=
 for chip in esp32s3 esp32c3 esp32c6; do
@@ -63,6 +63,10 @@ for chip in esp32p4 esp32s31; do
 	done
 done
 CHIP_IMAGES="$CHIP_IMAGES hello_world_rev1@esp32p4"
+# Each boot's reset reason as ESP-IDF names it, on every chip.
+for chip in esp32s3 esp32c3 esp32c6 esp32p4 esp32s31; do
+	CHIP_IMAGES="$CHIP_IMAGES reset_reasons@$chip"
+done
 family=firmware
 if [ "${1:-}" = --chips ]; then
 	shift
@@ -155,6 +159,7 @@ project_of() {
 	persistence) echo "$PWD/firmware/persistence" ;;
 	ota_state) echo "$PWD/firmware/ota_state" ;;
 	timer_wake) echo "$PWD/firmware/timer_wake" ;;
+	reset_reasons) echo "$PWD/firmware/reset_reasons" ;;
 	sd_remount) echo "$PWD/firmware/sd_remount" ;;
 	http_server) echo "$PWD/firmware/http_server" ;;
 	esac

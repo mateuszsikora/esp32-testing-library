@@ -376,8 +376,8 @@ fn writes_the_runner_messages() {
         r#"{"type":"gpio_out","seq":10,"t":3,"changes":[],"enabled":[],"output":[4]}"#
     );
     assert_eq!(
-        reset(12, 4, 12),
-        r#"{"type":"reset","seq":12,"t":4,"cause":12}"#
+        reset(12, 4, 12, 0x8004_0004),
+        r#"{"type":"reset","seq":12,"t":4,"cause":12,"hint":2147745796}"#
     );
     assert_eq!(
         sd_card_ack(5, Some("/tmp/a \"b\".img"), None),

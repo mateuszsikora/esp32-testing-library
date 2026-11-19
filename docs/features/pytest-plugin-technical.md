@@ -694,11 +694,22 @@ pulse, unknown/released outputs, starting/end boundaries, input filtering and in
 `esp32tl` and, for existing imports, `esp32tl.pytest_plugin`. It declares the common clock, waiting,
 NVS, reporting and lifecycle API: `power_on`, `power_off`, `reset`, `powered`, `started` and `boots`
 are abstract, as are the waits, `wait`, `wait_until`, `wait_for_wake` and `wait_on_clock`, and
-`boot` is `boots[-1]`. `Boot(number, at, cause, uptime_zero=None)` and its `reason`, from
-`reset_reason(cause)` over `RESET_REASONS`, the classic chip's ROM names, are in the same module,
-with `POWERON_RESET = 1` and `DEEPSLEEP_RESET = 5`, and so is `UptimeZero(earliest, latest)`, two
-`Duration`s. `uptime_zero` is a `field(compare=False)`, so that a boot read before its zero came and
-one read after are equal, and `next_boot()` keeps returning the same boot. `next_boot(cause=None)`
+`boot` is `boots[-1]`. `Boot(number, at, cause, uptime_zero=None, idf_reason=None)` and its
+`reason`, from `reset_reason(cause)` over `RESET_REASONS`, the classic chip's ROM names, are in the
+same module, with `POWERON_RESET = 1` and `DEEPSLEEP_RESET = 5`, and so is
+`UptimeZero(earliest, latest)`, two `Duration`s. `uptime_zero` is a `field(compare=False)`, so that
+a boot read before its zero came and one read after are equal, and `next_boot()` keeps returning
+the same boot. `idf_reason` is one too: it follows from `cause` and the hint, which the backend
+knows and `Boot` does not keep, and a test that builds a `Boot` to compare, as
+`Boot(1, Duration(0), POWERON_RESET)`, need not name it. The backend fills it in with
+`idf_reset_reason(chip, cause, hint)`, in the same module: `_IDF_RESET_REASONS`, one table per
+ESP-IDF target name from each chip's `get_reset_reason()`, maps a cause to a name, a cause the table
+leaves out to `ESP_RST_UNKNOWN`, and causes 3 and 12 to `_SOFTWARE_RESET`, for which the hint
+decides as `esp_reset_reason_get_hint` does: a value with bit 31 set and its two 15-bit halves
+equal is the hint, and of the hints `_HINTED` names, 4, 5, 6 and 9, each is its own name; any other
+value gives `ESP_RST_SW`. A chip with no table gives `None`. `tests/test_reset_reasons.py` checks
+the decoding and each chip's causes that differ, without firmware, and the classic chip's five
+boots of `firmware/reset_reasons` with it. `next_boot(cause=None)`
 is concrete, on `boots` alone: it checks `cause` (an `int`, not a `bool`, or `None`), takes
 `len(self.boots)` as its boundary, and returns a `Condition` whose `find`, a
 [`FirstFrom`](#described-conditions) over `boots`, gives the first boot from that index with that

@@ -99,6 +99,9 @@ CHIP_IMAGES += [
         "hello_world_psram",
     )
 ] + [("hello_world_rev1", "esp32p4")]
+CHIP_IMAGES += [
+    ("reset_reasons", chip) for chip in ("esp32s3", "esp32c3", "esp32c6", "esp32p4", "esp32s31")
+]
 
 
 @pytest.mark.parametrize("chip", ["esp32s3", "esp32c3", "esp32c6", "esp32p4", "esp32s31"])

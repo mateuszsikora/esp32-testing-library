@@ -2254,3 +2254,30 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_spp_peer.py::test_a_next_write_poll_reads_only_the_events_since_the_last_one`,
   `tests/test_spp_peer.py::test_a_next_written_line_poll_reads_only_the_lines_since_the_last_one`,
   `tests/test_net_client.py::test_a_next_data_poll_searches_only_the_bytes_since_the_last_one`
+
+## The reset reason ESP-IDF reports
+
+- **267.** Each boot's `Boot.idf_reason` is what the firmware's `esp_reset_reason()` reports for
+  it, though the ROM reports `esp_restart()` and a panic alike: on the classic ESP32 for a
+  power-on, `esp_restart()`, a panic, a task watchdog's panic and a wake from deep sleep, and on
+  the S3, C3, C6, P4 and S31 for the first four. The runner sends with every `reset` the
+  reset-reason hint register as the guest left it, and 0 after a power-on; on every chip a chip
+  reset keeps the register, through esp32sim or the runner putting it back, and a power-on clears
+  it. A software reset (cause 3 or 12) takes the hint only for `ESP_RST_PANIC`, `ESP_RST_INT_WDT`,
+  `ESP_RST_TASK_WDT` and `ESP_RST_BROWNOUT`, and every other cause ignores it.
+  `tests/test_reset_reasons.py::test_each_boot_is_named_as_the_firmware_s_esp_reset_reason`,
+  `tests/test_chips.py::TestOnESP32S3::test_each_boot_is_named_as_the_firmware_s_esp_reset_reason`,
+  `tests/test_chips.py::TestOnESP32C3::test_each_boot_is_named_as_the_firmware_s_esp_reset_reason`,
+  `tests/test_chips.py::TestOnESP32C6::test_each_boot_is_named_as_the_firmware_s_esp_reset_reason`,
+  `tests/test_chips.py::TestOnESP32P4::test_each_boot_is_named_as_the_firmware_s_esp_reset_reason`,
+  `tests/test_chips.py::TestOnESP32S31::test_each_boot_is_named_as_the_firmware_s_esp_reset_reason`,
+  `tests/test_reset_reasons.py::test_a_software_reset_takes_the_hint_the_boot_before_left`,
+  `tests/test_reset_reasons.py::test_any_other_cause_ignores_the_hint`,
+  `runner/src/session/tests.rs::a_reset_is_forwarded_with_its_cause_its_hint_and_the_reset_routes`,
+  `runner/src/session/tests.rs::with_the_supply_off_the_guest_runs_nothing_and_its_time_goes_on`,
+  `runner/src/chip/tests.rs::the_classic_chip_keeps_its_reset_hint`,
+  `runner/src/chip/tests.rs::the_s3_keeps_its_reset_hint`,
+  `runner/src/chip/tests.rs::the_c3_keeps_its_reset_hint`,
+  `runner/src/chip/tests.rs::the_c6_keeps_its_reset_hint`,
+  `runner/src/chip/tests.rs::the_p4_keeps_its_reset_hint`,
+  `runner/src/chip/tests.rs::the_s31_keeps_its_reset_hint`

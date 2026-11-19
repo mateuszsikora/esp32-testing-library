@@ -57,13 +57,13 @@ firmware:
 # esp32tl-built when a build finishes. The CI test jobs receive the images
 # from the firmware job, so they build nothing (and the macOS ones have no
 # Docker). `make firmware` rebuilds them.
-FIRMWARE_IMAGES := hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake deep_sleep bt_spp_initiator bt_spp_initiator_psram hello_world_8mb
+FIRMWARE_IMAGES := hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake reset_reasons deep_sleep bt_spp_initiator bt_spp_initiator_psram hello_world_8mb
 firmware/%/build/esp32tl-built:
 	FIRMWARE_OUT= firmware/build.sh $*
 
 # The images of the other chips the runner emulates, each in
 # firmware/<image>/build-<chip>/, built only when missing too.
-CHIP_IMAGES := $(foreach chip,esp32s3 esp32c3 esp32c6,$(foreach image,hello_world console_repl gpio_echo nmea_reader nvs_reader http_request,firmware/$(image)/build-$(chip))) firmware/hello_world_psram/build-esp32s3 firmware/gatt_server/build-esp32s3 firmware/gatt_server/build-esp32c3 $(foreach chip,esp32s3 esp32c3 esp32c6,firmware/hello_world_8mb/build-$(chip)) $(foreach chip,esp32s3 esp32c3 esp32c6,firmware/console_repl_usb/build-$(chip)) $(foreach chip,esp32p4 esp32s31,$(foreach image,hello_world console_repl console_repl_usb gpio_echo nvs_reader hello_world_psram,firmware/$(image)/build-$(chip))) firmware/hello_world_rev1/build-esp32p4
+CHIP_IMAGES := $(foreach chip,esp32s3 esp32c3 esp32c6,$(foreach image,hello_world console_repl gpio_echo nmea_reader nvs_reader http_request,firmware/$(image)/build-$(chip))) firmware/hello_world_psram/build-esp32s3 firmware/gatt_server/build-esp32s3 firmware/gatt_server/build-esp32c3 $(foreach chip,esp32s3 esp32c3 esp32c6,firmware/hello_world_8mb/build-$(chip)) $(foreach chip,esp32s3 esp32c3 esp32c6,firmware/console_repl_usb/build-$(chip)) $(foreach chip,esp32p4 esp32s31,$(foreach image,hello_world console_repl console_repl_usb gpio_echo nvs_reader hello_world_psram,firmware/$(image)/build-$(chip))) firmware/hello_world_rev1/build-esp32p4 $(foreach chip,esp32s3 esp32c3 esp32c6 esp32p4 esp32s31,firmware/reset_reasons/build-$(chip))
 firmware/%/build-esp32s3/esp32tl-built:
 	FIRMWARE_OUT= firmware/build.sh --chips $*@esp32s3
 firmware/%/build-esp32c3/esp32tl-built:

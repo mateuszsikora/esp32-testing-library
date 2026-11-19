@@ -41,6 +41,12 @@ pub const PROFILE: Profile = Profile {
 /// The MAC esp32sim gives the P4 (`cli/src/lib.rs`, `setup_p4`).
 pub const MAC: [u8; 6] = [0x30, 0xed, 0xa0, 0x00, 0x11, 0x22];
 
+/// LP_SYSTEM_REG_LP_STORE6, `RTC_RESET_CAUSE_REG` of ESP-IDF's
+/// `esp_rom/esp32p4/include/esp32p4/rom/rtc.h`: `DR_REG_LP_SYS_BASE + 0x44` (v5.5.4
+/// `soc/esp32p4/register/hw_ver3/soc/lp_system_reg.h`, the same in `hw_ver1`). esp32sim's reset
+/// keeps it with the rest of LP_SYS (`esp32p4/src/soc.rs`, `reboot`).
+pub(crate) const RESET_HINT: u32 = 0x5011_0044;
+
 /// The P4 machine of revision `R`.
 pub type P4<R> = Machine<esp32p4::Esp32p4<R>>;
 
@@ -152,6 +158,9 @@ impl<R: esp32p4::Revision> Guest for P4<R> {
     }
     fn chip_reset(&mut self) -> u32 {
         self.reboot()
+    }
+    fn reset_hint(&mut self) -> u32 {
+        super::read_reset_hint(&mut self.bus, RESET_HINT)
     }
     fn power_on_reset(&mut self, rom: &[u8]) -> u32 {
         use esp32p4::bus::*;
