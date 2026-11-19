@@ -5016,3 +5016,25 @@ it ends as `"keepalive"`.
 CONNECT, PINGREQ, DISCONNECT and the rest. The end's cause answers the question the issue asked,
 whether a DISCONNECT came before the link went, and the transcript keeps every byte for a test that
 needs the PINGREQ times; the history waits for such a test.
+
+## NTP and DNS keep a history of what the device asked, with board times
+
+Status: decided (#273)
+
+`Ntp.exchanges` keeps every well-formed client request as an `NtpExchange(at, answered)`, silent
+or not, and `Dns.questions` every question it parsed as a `DnsQuestion(at, name, qtype)`, each at
+the board's time it reached the service. A firmware's SNTP client retries on its own schedule and
+resolves its server's name again when its DNS cache expires; a test checks either from these
+histories, or waits for the next record with `next_exchange(answered=...)` or
+`next_question(name)`, which follow the `next_*` rules of the MQTT conditions through `FirstFrom`.
+`Dns` takes the board's clock as `now`, as `Ntp` does.
+
+`Ntp.requests` and `Dns.asked` stay, as read-only properties derived from the histories: the
+number of answered exchanges and the list of the questions' names. They are the short form of the
+most common assertions, that the device synchronized and that it resolved a name, and a second
+record that the services kept apart from the history could disagree with it.
+
+**Rejected:** removing `requests` and `asked`, because every check of them would become a
+comprehension over the history saying the same thing. Also rejected: a test's own wrapper of
+`network.ip.udp[53]` and `network.ip.udp[123]`, the only way before, because that table is the
+network's, not the test's.

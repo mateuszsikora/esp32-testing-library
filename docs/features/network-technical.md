@@ -27,11 +27,12 @@ the path, and all hand IPv4 datagrams to
 when it is of their kind and raise `AttributeError` otherwise. The IP layer's MTU callback reads
 `Ppp.peer_mru`, `Ethernet.mtu` or `Station.mtu` (1500 for either Ethernet role).
 
-Every `Internet` builds the same services whatever its link: `Dns("10.64.0.1")` on UDP 53, `Ntp` on
-UDP 123, the `Broker` on TCP 1883, the `HttpServer` on TCP 80, each TCP one wrapped in `_Traced`
-for the transcript, and one `Dhcp`. Only `Ethernet` calls the `Dhcp`; a network behind a modem has
-one that nothing asks, as does a network behind a virtual station. That station uses its own
-DHCP client and updates the DNS answer to its leased address.
+Every `Internet` builds the same services whatever its link: `Dns("10.64.0.1", now, log)` on UDP
+53, `Ntp(now, world, log)` on UDP 123, both with `Internet.now`, which is the time a datagram
+reaches the network while `_arrive` hands it over, the `Broker` on TCP 1883, the `HttpServer` on
+TCP 80, each TCP one wrapped in `_Traced` for the transcript, and one `Dhcp`. Only `Ethernet` calls
+the `Dhcp`; a network behind a modem has one that nothing asks, as does a network behind a virtual
+station. That station uses its own DHCP client and updates the DNS answer to its leased address.
 
 `start(t)` stops the network first, then marks it active and, for PPP only, starts LCP. `stop(at)`
 marks it inactive, calls `_link_ended`, which loses the connections the test opened and leaves the
@@ -184,7 +185,12 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   ICMP or IPv6. The UDP limit's log line names it `peer MRU` behind the access point too.
 - `dns.py`: one bounded question, including compressed names with loop detection; preserves the
   query ID and recursion-desired bit. IN A answers have TTL 60 and address `10.64.0.1`,
-  except behind the virtual station, where they use the host's leased address.
+  except behind the virtual station, where they use the host's leased address. Every question it
+  parses, whatever its QTYPE, is appended to `questions` as a `DnsQuestion(at, name, qtype)`, `at`
+  being `Duration(now())`, before the answer is built; `asked` is a property that lists their
+  names. A query it refuses (a response, an opcode other than QUERY, other than one question, a
+  bad label, a name over 255 bytes or a truncated question) returns `None` before anything is
+  recorded.
 - `ethernet.py`: Ethernet II without FCS, ARP and the hand-off to DHCP. `Ethernet.receive` drops
   frames under 14 bytes and frames from a multicast source, and learns `device_mac` from every other
   frame. In esp32sim every frame from the station ends in 4 bytes more, libpp's guard word
@@ -215,15 +221,17 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   Calling it calls `find`; `repr` is `description`, which `board.wait_until` takes because the
   object has no `__qualname__`; `__bool__` raises
   `TypeError("call the <service> condition with (), or pass it to board.wait_until")`, `service`
-  being `MQTT`, `HTTP`, `DHCP` or `TLS`.
-- How a "next …" condition scans: MQTT's `next_message`, `next_delivery` and `next_subscribe`, and
-  HTTP's `next_request`, take as their `find` a `FirstFrom` of `esp32tl/interfaces/condition.py`
+  being `MQTT`, `HTTP`, `DHCP`, `TLS`, `NTP` or `DNS`.
+- How a "next …" condition scans: MQTT's `next_message`, `next_delivery` and `next_subscribe`,
+  HTTP's `next_request`, NTP's `next_exchange` and DNS's `next_question` take as their `find` a
+  `FirstFrom` of `esp32tl/interfaces/condition.py`
   ([described conditions](pytest-plugin-technical.md#described-conditions)) over their history,
-  `messages`, `deliveries`, `subscribe_requests` or `requests`. A poll reads, by index and without
-  copying the list, only the records appended since the last poll ended; a record it refused is
-  not read again, since the histories are only appended to. Once one matches, every later poll
-  returns that record and reads nothing else. So a wait of N polls over N records reads N of them,
-  not N × (N + 1) / 2, which `tests/test_net_mqtt.py` and `tests/test_net_http.py` count on 10 000.
+  `messages`, `deliveries`, `subscribe_requests`, `requests`, `exchanges` or `questions`. A poll
+  reads, by index and without copying the list, only the records appended since the last poll
+  ended; a record it refused is not read again, since the histories are only appended to. Once one
+  matches, every later poll returns that record and reads nothing else. So a wait of N polls over
+  N records reads N of them, not N × (N + 1) / 2, which `tests/test_net_mqtt.py`,
+  `tests/test_net_http.py` and `tests/test_net_services.py` count on 10 000.
   `next_connection`, `next_connection_attempt` and `next_lease` read one entry at their index, and
   the TLS conditions compare a count, so each of their polls costs the same at any length.
 - `dhcp.py`: a server for one device (RFC 2131, options of RFC 2132).
@@ -270,8 +278,12 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   origin timestamp copies the client's transmit field. Reference, receive and transmit stamps
   use world UTC plus emulated time, including fractions and the 32-bit NTP era wrap.
   `go_silent` / `resume` toggle whether new datagrams receive replies, without changing the
-  UDP binding, the clock or already queued packets. `requests` continues to count replies only;
-  each state transition is logged once, and resuming never replays unanswered datagrams.
+  UDP binding, the clock or already queued packets. Every client request, silent or not, is
+  appended to `exchanges` as an `NtpExchange(at, answered)` before the silence is checked, `at`
+  being `Duration(now())` and `answered` `not _silent`; a datagram under 48 bytes, not in client
+  mode or of a version other than 3 or 4 returns `None` before anything is recorded. `requests`
+  is a property that counts the answered exchanges. Each state transition is logged once, a
+  request while silent is not logged, and resuming never replays unanswered datagrams.
 - `mqtt.py`: incremental MQTT 3.1.1 parsing (up to 1 MiB per packet); CONNECT, QoS 0/1 PUBLISH,
   PUBACK, SUBSCRIBE/SUBACK, UNSUBSCRIBE/UNSUBACK, PING and DISCONNECT. Retained state belongs to
   the test's broker; session state (`_State`: subscriptions, the queue, the packet IDs in use and
@@ -750,9 +762,12 @@ with its 60 s keepalive, the Will 90 s after the device's last packet after `boa
 after `modem.lose_registration()`, and none after a power cycle of 5 s that takes the session over
 with Session Present.
 NTP tests cover silence from startup, idempotent transitions and resumed replies using elapsed
-world time. A MemoryBIO handshake with verification disabled solely for certificate inspection
-checks independent leaf validity dates, UTC normalization and a signature from the unchanged CA;
-firmware tests enforce those dates against its NTP clock.
+world time; `tests/test_net_services.py` also checks the `exchanges` and `questions` records, the
+`next_exchange` and `next_question` conditions, and `tests/test_net_path.py` that an exchange is
+stamped when the request comes off the path, not when the link carried it. A MemoryBIO handshake
+with verification disabled solely for certificate inspection checks independent leaf validity
+dates, UTC normalization and a signature from the unchanged CA; firmware tests enforce those dates
+against its NTP clock.
 `tests/test_modem_model.py` checks network selection, binary pluses, guarded escape, reset, the
 keepalive expiry run by the modem out of data mode, and the route-specific overflow policy.
 `tests/test_pppos_client.py` exercises unmodified firmware in

@@ -284,12 +284,18 @@ condition itself as a boolean
 (for example `assert reports.when_received()`) raises `TypeError`: call it with `()` to inspect
 it or pass it to `board.wait_until()`.
 
-TLS date tests use `CertificateAuthority(..., server_not_before=..., server_not_after=...)`;
-the NTP outage test uses `network.ntp.go_silent()`. After the firmware resolves
-`time.test`, it observes 30 seconds with no broker lookup, TLS attempt, MQTT connection or
-publication. It then calls `ntp.resume()` and requires a report with the GNSS position and UTC
-matching the advancing world clock within 60 seconds. These network controls belong to the
-library and know nothing about the tracker report format.
+TLS date tests use `CertificateAuthority(..., server_not_before=..., server_not_after=...)`; the NTP
+outage test uses `network.ntp.go_silent()`. After the firmware resolves `time.test`
+(`network.dns.next_question("time.test")`), it observes 30 seconds with only unanswered NTP requests
+and no broker lookup, TLS attempt, MQTT connection or publication. It then calls `ntp.resume()` and
+requires a report with the GNSS position and UTC matching the advancing world clock within 60
+seconds. A second outage test keeps the server silent for 160 seconds and reads the firmware's
+retries from `network.ntp.exchanges`, 30, 45 and 75 seconds apart, and its questions for `time.test`
+from `network.dns.questions`, three of them, one before the first request and one before each retry
+that comes after the 60-second TTL of the last answer; after `ntp.resume()` it waits for the next
+answered request and a report
+([NTP and DNS histories](network-user.md#when-the-device-asked-for-the-time-and-for-a-name)).
+These network controls belong to the library and know nothing about the tracker report format.
 
 The tests show a report within one second of connection, three subsequent 10-second intervals
 on `board.now`, position following a moving GNSS model, and timestamps following two different

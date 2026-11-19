@@ -376,11 +376,19 @@ use the public `server_not_before` / `server_not_after` constructor arguments, w
 certificate builder or TLS subclass.
 No-fix, lost-fix, silence and missing-NVS cases cover startup and stale data. A missing NTP
 responder, selected with `network.ntp.go_silent()`, is observed for 30 seconds after the
-firmware resolves `time.test`, with valid GNSS throughout. The test checks no broker DNS lookup,
+firmware resolves `time.test`, with valid GNSS throughout. The test checks that every NTP request
+in `network.ntp.exchanges` went unanswered, no broker DNS lookup,
 zero TLS attempts and empty cumulative MQTT connection/message histories, without matching NTP
 log wording. It then resumes NTP and waits up to 60 seconds for a positioned report, allowing
 SNTP's retry delay. The recovered report must contain Warsaw's position and current world UTC
 within the same 1.25-second tolerance; an NTP reply and TLS attempt must have occurred.
+`test_retries_ntp_further_apart_and_resolves_its_name_again` keeps NTP silent for 160 seconds
+from power-on. ESP-IDF v5.3's lwIP SNTP waits 15 s for an answer, then retries after an interval
+of 15 s that doubles at each retry, so the four requests come at about 0, 30, 75 and 150 s: the
+test compares the gaps with 30, 45 and 75 s within `JITTER` (0.25 s). With the DNS answer's TTL of
+60 s, the firmware asks for `time.test` before the first, third and fourth request, within
+`JITTER` before each, and not before the second. After `resume()` it waits up to 150 s for the next
+answered request, the fifth at about 285 s, and then for a report, and `requests` is 1.
 Transport assertions (TLS, QoS and retention) are separate from the immediate-report scenario.
 
 These are functional TLS tests. `tests/test_determinism.py::test_tls_on_the_device` runs this

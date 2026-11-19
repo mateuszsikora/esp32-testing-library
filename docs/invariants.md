@@ -2298,6 +2298,8 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_net_mqtt.py::test_a_next_delivery_poll_reads_only_the_deliveries_since_the_last_one`,
   `tests/test_net_mqtt.py::test_a_next_subscribe_poll_reads_only_the_requests_since_the_last_one`,
   `tests/test_net_http.py::test_a_next_request_poll_reads_only_the_requests_since_the_last_one`,
+  `tests/test_net_services.py::test_a_next_exchange_poll_reads_only_the_exchanges_since_the_last_one`,
+  `tests/test_net_services.py::test_a_next_question_poll_reads_only_the_questions_since_the_last_one`,
   `tests/test_spp_peer.py::test_a_next_write_poll_reads_only_the_events_since_the_last_one`,
   `tests/test_spp_peer.py::test_a_next_written_line_poll_reads_only_the_lines_since_the_last_one`,
   `tests/test_net_client.py::test_a_next_data_poll_searches_only_the_bytes_since_the_last_one`,
@@ -2364,3 +2366,17 @@ clones, and rejection of serial distributed execution before accessing hardware.
   address, without pairing again.
   `tests/test_ble.py::TestBleOnESP32S3::test_just_works_pairing_bonds_across_a_firmware_reset`,
   `tests/test_ble.py::TestBleOnESP32C3::test_just_works_pairing_bonds_across_a_firmware_reset`
+
+## What the device asked NTP and DNS
+
+- **277.** NTP keeps every client request the device sent, answered or not, and DNS every question
+  it parsed, each at the board's time it came off the path; a datagram that is neither is not
+  kept. A request while NTP is silent is kept with `answered=False`, one after `resume()` with
+  `answered=True`, and `requests` counts the answered ones. `next_exchange` and `next_question`
+  return the first record appended after their call, the same one at every later poll.
+  `tests/test_net_services.py::test_ntp_keeps_every_request_with_its_time_and_whether_it_was_answered`,
+  `tests/test_net_services.py::test_ntp_next_exchange_is_a_described_condition_from_its_call`,
+  `tests/test_net_services.py::test_dns_keeps_every_question_it_parsed_with_its_time_and_type`,
+  `tests/test_net_services.py::test_dns_next_question_is_a_described_condition_from_its_call`,
+  `tests/test_net_path.py::test_a_stated_rtt_is_exact_from_the_request_to_the_answers_stamp`,
+  `examples/position_tracker/tests/test_tracker.py::test_retries_ntp_further_apart_and_resolves_its_name_again`
