@@ -51,8 +51,9 @@ wanders while it stands still, the epochs of a cold start without a fix, which t
   the first at 1 s; a malformed log is refused with its line.
 - A capture made in a test with a [real source](real-source-user.md): `gnss.real(port)` and
   `gnss.tap("capture.jsonl")` on a run paced to wall time, then `esp32tl recording retime
-  capture.jsonl capture-emulated.jsonl`. The device's bytes keep their spacing, the first at 1 s,
-  and what the firmware sent the device is left out.
+  capture.jsonl capture-emulated.jsonl`. The tap's events keep their spacing, the first at 1 s,
+  and what the firmware sent the device is left out. An event is what one turn of the source
+  handed over, at one time: bytes within it keep no spacing of their own.
 
 ```python
 def test_reports_a_real_receiver_s_fix(board, gnss, console):

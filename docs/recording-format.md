@@ -144,10 +144,11 @@ do, and both add a field to the header, `converted`, of what was done. The forma
 `wall` clock, such as the tap of a route with a [real source](features/real-source-user.md), and
 gives:
 
-- its `in` events, each at its time less the first `in` event's, plus `start_ns`: the spacing the
-  device's bytes came at, and the first at `start_ns`. A `wall` time has no fixed origin, and a
-  real source's tap leaves out what the device sent before the run's first turn, so the times
-  start where the first byte came, not at the original's 0;
+- its `in` events, each at its time less the first `in` event's, plus `start_ns`: the spacing of the
+  events, and the first at `start_ns`. An event of a real source's tap is what one turn handed over,
+  stamped with one time, so the bytes within it keep no spacing of their own. A `wall` time has no
+  fixed origin, and a real source's tap leaves out what the device sent before the run's first turn,
+  so the times start where the first byte came, not at the original's 0;
 - none of its `out` events: what the firmware sent the device. A recording with requests answers
   the firmware's commands by [matching](features/matching-user.md), and a capture's commands would
   go unmatched there. The timing of the device's answers to commands is lost; a stream of NMEA
@@ -207,6 +208,7 @@ characters, a byte outside ASCII as `\xb5`:
 | `{sentence} is not an NMEA sentence: a sentence starts with $` | A line that is not a sentence, binary data among them |
 | `{sentence} is not an NMEA sentence: a sentence is printable ASCII` | A control character or a byte outside ASCII in it |
 | `{sentence} has no checksum: a sentence ends with * and two hex digits` | |
+| `{address} has no time field: an RMC or a GGA gives one, empty when the receiver has no time` | An RMC or a GGA with no field after its address, as `$GPRMC*4B`; an empty one, `$GPRMC,,V,…`, is a cold start's |
 | `{sentence}: checksum {hh}, and the sentence's is {HH}` | A checksum that does not match |
 | `time {value} is not hhmmss or hhmmss.ss` | An RMC's or a GGA's time field |
 | `time {t} is not after {t0}, the time on line {n}: the log goes back` | An epoch's time at or before the latest one's |

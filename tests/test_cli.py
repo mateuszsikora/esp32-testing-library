@@ -498,6 +498,38 @@ def test_a_conversion_refused_exits_2_and_writes_nothing(
     assert not (tmp_path / "out.jsonl").exists()
 
 
+def test_a_write_that_fails_leaves_the_recording_it_would_replace(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    header = recording.Header(
+        "esp32-devkitc", "uart.gnss", "real", recording.WALL, "2026-11-19T10:00:00Z"
+    )
+    captured = tmp_path / "capture.jsonl"
+    recording.write(
+        captured,
+        recording.Recording(header, (recording.Event(9_000, "in", b"$GP", recording.WALL),)),
+    )
+    before = captured.read_bytes()
+
+    def full(source: object, destination: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    # The capture converted into itself, and the disk full before the rename.
+    monkeypatch.setattr(os, "replace", full)
+    assert cli.main(["recording", "retime", str(captured), str(captured)]) == 2
+    assert capsys.readouterr().err == "esp32tl: [Errno 28] No space left on device\n"
+    assert captured.read_bytes() == before
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["capture.jsonl"]
+    monkeypatch.undo()
+    # Into itself it works, and the file keeps the mode a new one gets.
+    assert cli.main(["recording", "retime", str(captured), str(captured)]) == 0
+    assert recording.read(captured).header.clock == recording.EMULATED
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["capture.jsonl"]
+    umask = os.umask(0)
+    os.umask(umask)
+    assert captured.stat().st_mode & 0o777 == 0o666 & ~umask
+
+
 @pytest.mark.parametrize("start", ["-1", "inf", "soon"])
 def test_start_is_a_number_from_0(start: str, capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exit_info:

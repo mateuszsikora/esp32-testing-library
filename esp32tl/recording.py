@@ -610,7 +610,14 @@ def from_nmea(
             continue
         try:
             address, fields = _nmea_sentence(line)
-            text = _nmea_time(fields[1]) if _nmea_timed(address) and len(fields) > 1 else None
+            text = None
+            if _nmea_timed(address):
+                if len(fields) < 2:
+                    raise RecordingError(
+                        f"{address} has no time field: an RMC or a GGA gives one, empty when the"
+                        " receiver has no time"
+                    )
+                text = _nmea_time(fields[1])
         except RecordingError as error:
             raise RecordingError(error.what, line=number, file=name) from None
         if text is not None:

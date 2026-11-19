@@ -108,7 +108,7 @@ What each conversion does, and refuses, is in the
 
 | Option | Conversions | Default | Accepts |
 |---|---|---|---|
-| `IN`, `OUT` | both | none, required | the file to convert and the recording to write, relative to the working directory or absolute; `OUT` is written only once the conversion has succeeded, over a file already there |
+| `IN`, `OUT` | both | none, required | the file to convert and the recording to write, relative to the working directory or absolute; `OUT` may be `IN`. It is replaced only once the conversion has succeeded and the new recording is written whole, through `.{name}.{pid}.tmp` beside it, `{name}` being OUT's file name,, which a failed write removes; a write that fails, out of space for one, leaves an `OUT` already there as it was |
 | `--start S` | both | `1` | the emulated time of the first event, a finite number of seconds from 0 |
 | `--board BOARD` | `nmea` | `esp32-devkitc` | the board profile the recording is for, the header's `board` |
 | `--interface INTERFACE` | `nmea` | `uart.gnss` | a UART route of the profile, or its role alone, `gnss`: the header's `interface`, and the baud each epoch must fit in a period at |

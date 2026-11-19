@@ -17,6 +17,7 @@ connected; a second Ctrl-C kills it. The runner is in a session of its own, so t
 import argparse
 import contextlib
 import math
+import os
 import shutil
 import signal
 import socket
@@ -202,11 +203,26 @@ def convert(args: argparse.Namespace) -> int:
         print(f"esp32tl: {error}", file=sys.stderr)
         return CANNOT_START
     try:
-        recording.write(args.output, converted)
+        replace(args.output, recording.dumps(converted))
     except OSError as error:
         print(f"esp32tl: {error}", file=sys.stderr)
         return CANNOT_START
     return 0
+
+
+def replace(path: Path, text: str) -> None:
+    """Writes `text` to `path` through a file beside it, which replaces `path` only once it is
+    written whole: a write that fails, out of space for one, leaves `path` as it was, also when
+    it is the input. The file is made with the mode `path` would get, the umask's."""
+    partial = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    descriptor = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+            file.write(text)
+        os.replace(partial, path)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
 
 
 def at_least_zero(text: str) -> float:

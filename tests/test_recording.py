@@ -732,6 +732,11 @@ TIMED = sentence("GPRMC,120000.00,V,,,,,,,,,,N")
             " longer than its period of 1 s",
         ),
         (
+            nmea_log("GPRMC", "GPRMC,120000.00,V,,,,,,,,,,N"),
+            "log.nmea:1: GPRMC has no time field: an RMC or a GGA gives one, empty when the"
+            " receiver has no time",
+        ),
+        (
             nmea_log("GPGSV,1,1,00"),
             "log.nmea: no RMC or GGA sentence: the epochs cannot be told apart",
         ),
