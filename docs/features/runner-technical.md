@@ -1172,10 +1172,11 @@ a guest that programs a byte between two dumps;
   change of card, while the delay goes with the card;
   `a_rule_that_observes_changes_nothing_and_reports_what_it_meets`, the same exchange of writes,
   reads and an erase with and without rules that observe, byte for byte at the same cycles, the
-  two images whole, and what they met; and `every_rule_that_observes_an_operation_reports_it_beside_the_one_that_acts`, a write
-  met by two rules that observe and one that fails it, each with its own report in the order given,
-  an observer given after the error that does not take the write away from it, counts spent per
-  rule, and a delay under an observer.
+  two images whole, and what they met; and
+  `every_rule_that_observes_an_operation_reports_it_beside_the_one_that_acts`, a write met by two
+  rules that observe and one that fails it, each with its own report in the order given, an
+  observer given after the error that does not take the write away from it, counts spent per rule,
+  and a delay under an observer.
 - `runner/src/protocol/tests.rs` also parses `sd_fault` and `sd_clear`, refuses each `sd_fault`
   5.20 does not allow with its message, and writes `sd_op` for an error, a delay and an observe.
 - `runner/src/socket_board/tests.rs`: what `SocketBoard` records: every UART byte, and only the

@@ -227,9 +227,10 @@ that references to its number keep their meaning.
     instant the test gave them, before power-on at `t = 0`; only the slot sends `sd_fault` and
     `sd_clear`; each `sd_op` goes to the rule it names, which is spent once its count is reached,
     and a spent rule is not cleared; one that names no rule the test gave, or whose `op`, `action`
-    or `delay` is not its rule's, fails the link. A rule needs a card and a run that has not ended, and one the
-    card cannot take (an op the method does not take, a delay that is not a `Duration` of 1 ns to
-    10 s, a count outside 1 to 2**63 - 1, blocks the card does not have) is refused at the call.
+    or `delay` is not its rule's, fails the link. A rule needs a card and a run that has not ended,
+    and one the card cannot take (an op the method does not take, a delay that is not a `Duration`
+    of 1 ns to 10 s, a count outside 1 to 2**63 - 1, blocks the card does not have) is refused at
+    the call.
     `tests/test_sd_faults.py::test_rules_go_out_in_the_next_turn_at_the_instant_the_test_gave_them`,
     `tests/test_sd_faults.py::test_what_a_rule_did_reaches_the_rule_and_the_slot`,
     `tests/test_sd_faults.py::test_an_sd_op_that_is_not_what_its_rule_does_fails_the_link`,
