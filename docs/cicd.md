@@ -30,7 +30,8 @@ settings, not settings applied by the workflow files:
   self-hosted runners. Do not register a machine with private network access for public CI.
 - The default workflow permission is `read`. On 16 November 2026, the owner enabled
   **Allow GitHub Actions to create and approve pull requests** for the release-preparation
-  workflow; that workflow only creates PRs, never approves or merges them.
+  workflow; that workflow creates PRs and approves their workflow runs, but never reviews or
+  merges a PR.
   Each CI workflow also declares `contents: read`. The repository allows all actions;
   action tags are not required to be pinned to full commit SHAs.
 - Secret scanning, secret scanning push protection and Dependabot vulnerability alerts
@@ -488,10 +489,18 @@ release trigger will not accept the mixed change.
 Repository setup: **Settings → Actions → General → Workflow permissions → Allow GitHub Actions
 to create and approve pull requests** must be enabled for `GITHUB_TOKEN` to open the PR. This
 option was enabled with the owner's approval on 16 November 2026; the default token permission
-remains `read`. The workflow creates PRs; it does not approve or merge them. Its write permissions are limited to
-contents, pull requests and Actions. It explicitly dispatches `ci.yml` on the PR branch because
-pushes with `GITHUB_TOKEN` do not start push CI. This also provides CI without relying on approval
-of an automatically created PR's event-triggered workflow runs.
+remains `read`. The workflow creates PRs; it does not review or merge them. Its write permissions are limited to
+contents, pull requests and Actions.
+
+The PR's `pull_request` runs of **CI** and **Runtime release** start in `action_required`: the
+fork approval policy above counts `github-actions[bot]` as an external contributor, and the
+required checks wait with them. The workflow's last step, **Approve the pull request's workflow
+runs**, waits up to two minutes for the PR's CI run, then approves every run of the PR's head
+commit in `action_required` (`POST /repos/{owner}/{repo}/actions/runs/{run_id}/approve`, with the
+job's `actions: write`). Dispatching `ci.yml` on the branch is no substitute: for v0.2.0 (#272) a
+dispatched run passed all 30 required checks on the PR's head commit, yet the PR stayed
+`BLOCKED`: the PR's checks list only runs GitHub links to the PR, and the dispatched run's check
+suite links none.
 
 CLI equivalent:
 
@@ -500,9 +509,10 @@ gh workflow run prepare-release.yml --ref main -f version=0.1.1
 ```
 
 The preparation job has a five-minute timeout and is serialized. Existing release branches are
-never force-pushed. If creating the PR or dispatching CI fails after the branch push, use the
-existing branch to open the PR or run `gh workflow run ci.yml --ref build/release-0.1.1`; do not
-rerun preparation expecting it to overwrite that branch.
+never force-pushed. If creating the PR fails after the branch push, open it from the existing
+branch; do not rerun preparation expecting it to overwrite that branch. If the approval step
+fails, its error names each run left waiting: approve it with **Approve and run** on the PR, or with
+`gh api -X POST repos/mateuszsikora/esp32-testing-library/actions/runs/RUN_ID/approve`.
 
 ## Version-only CI
 

@@ -657,7 +657,7 @@ cache keys and test failure handling remain unchanged.
 
 ## Prepare versions in a PR and build releases after merge
 
-Status: decided (16 November 2026)
+Status: decided (amended 19 November 2026; originally 16 November 2026)
 
 A manual workflow takes an explicit increasing stable version, updates only the Python package,
 runner and runner lockfile metadata, and creates a normal PR. After a pure version bump reaches
@@ -671,6 +671,17 @@ pushes to main (bypass the ordinary review/check path), and deriving versions fr
 workflows, so the caller explicitly reuses Runtime release. A stored PAT or GitHub App credential
 solely to trigger a tag-push event adds setup and privilege without benefit. Direct manual runs of
 Runtime release remain verification-only; the explicit reusable input is a distinct release path.
+
+Amended 19 November 2026, after v0.2.0 (#272): the preparation workflow approves its PR's
+`pull_request` runs instead of dispatching `ci.yml` on the branch. The approval policy counts
+`github-actions[bot]` as an external contributor, so those runs wait in `action_required`, and the
+dispatched run's checks, though all 30 passed on the head commit, did not count for the PR, which
+stayed blocked until a maintainer approved the runs by hand. **Rejected:** lowering the approval
+policy, which would also lift it for forks (see
+[the fork approval decision](#public-fork-runs-require-approval-from-all-external-contributors));
+a PAT or GitHub App token to open the PR, whose runs would then start without approval, which adds
+a stored credential and its setup as the tag would; and leaving approval as a manual step, which
+every release would hit.
 
 ## Verify exact version diffs before using lightweight CI
 

@@ -56,9 +56,34 @@ jobs:
 
           ## Verification
 
-          The Prepare release workflow validated all three versions. CI will validate the diff and package metadata before merge. Merging this exact version-only change starts the native release builds; publishing the resulting draft remains manual.
+          The Prepare release workflow validated all three versions and approved this pull request's CI and Runtime release runs. CI will validate the diff and package metadata before merge. Merging this exact version-only change starts the native release builds; publishing the resulting draft remains manual.
           EOF
           gh pr create --base main --head "$branch" --title "build: prepare release $VERSION" \
             --body-file "$RUNNER_TEMP/release-pr.md" --label area:ci
-          # GITHUB_TOKEN does not trigger push CI; explicitly dispatch on the PR head.
-          gh workflow run ci.yml --ref "$branch"
+      - name: Approve the pull request's workflow runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # github-actions[bot] is an external contributor to the approval policy, so the runs
+          # its pull request starts wait in action_required, and the required checks with them.
+          # A run dispatched on the branch does not count: its checks are not the pull request's.
+          head=$(git rev-parse HEAD)
+          runs="repos/$GITHUB_REPOSITORY/actions/runs?event=pull_request&head_sha=$head"
+          for _ in $(seq 24); do
+            sleep 5
+            gh api "$runs" --jq '.workflow_runs[].name' | grep -qx CI && break
+          done
+          sleep 5
+          gh api "$runs" --jq '.workflow_runs[] | [.id, .name, .conclusion // ""] | @tsv' > "$RUNNER_TEMP/runs.tsv"
+          if ! cut -f2 "$RUNNER_TEMP/runs.tsv" | grep -qx CI; then
+            echo "::error::No CI run started for $head in two minutes; approve the pull request's runs under Actions."
+            exit 1
+          fi
+          while IFS=$'\t' read -r id name conclusion; do
+            [ "$conclusion" = action_required ] || continue
+            if ! gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$id/approve" > /dev/null; then
+              echo "::error::Could not approve $name run $id; approve it under Actions or with: gh api -X POST repos/$GITHUB_REPOSITORY/actions/runs/$id/approve"
+              exit 1
+            fi
+            echo "Approved $name run $id"
+          done < "$RUNNER_TEMP/runs.tsv"
