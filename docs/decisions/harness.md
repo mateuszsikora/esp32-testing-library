@@ -4984,3 +4984,35 @@ payload, not a command. A `ModemCommand` for it would be a line the firmware nev
 call and there is no online command mode, so functionality never ends a call, and the cause could
 never be recorded. `AT+CFUN=0` and `=4` no longer call `_end_data`, which in command mode only
 stopped an `Internet` already stopped.
+
+## The broker keeps how each connection ended in connection_ends, not on MqttClient
+
+Status: decided (#274)
+
+A `_Session` ended in six ways, by a DISCONNECT, its keepalive, a takeover, its stream closing,
+a malformed packet or `broker.disconnect`, and only the transcript's lines told which, and the
+DISCONNECT had no line at all. A test asking whether the device said goodbye before its link went
+reassembled MQTT packets from `network.events` hex. Each accepted connection now gets one frozen
+`ConnectionEnd` (`at`, `client_id`, `connection_id`, `by`, `will_sent`) in
+`broker.connection_ends`, in the order they ended, and a DISCONNECT is logged
+`mqtt: <id> sent DISCONNECT`. `broker.ended(connection_id)` reads one connection's end, and
+`broker.next_end(client_id=None)` is a `FirstFrom` condition over the list, as `next_subscribe` is
+over `subscribe_requests`.
+
+A history, because `MqttClient` is frozen and appended at CONNECT, when its end is unknown, and a
+`next_*` condition needs an append-only list to scan from where its last poll ended; ends come in
+another order than connections, so the list is its own. The record carries `client_id`, as
+`MqttClient` does, since `next_end` filters by it, and `connection_id`, which ties it to its
+`MqttClient`. A connection never accepted records no end: a rejected CONNECT's outcome is in
+`connection_attempts` already, and a stream broken before its CONNECT has no client ID to name.
+
+**Rejected:** a mutable `ended` field on `MqttClient`, because the record would change after a test
+read it, and every other history record of the broker but `Delivery.acknowledged_at` is frozen; a
+`Literal` cause `"lost"` for a lost link, because the broker cannot tell one, which is the point of
+[the half-open connection](#a-lost-link-leaves-the-devices-connections-half-open-until-their-keepalive):
+it ends as `"keepalive"`.
+
+**Postponed:** a per-connection history of control packets, `broker.packets(connection_id)` of
+CONNECT, PINGREQ, DISCONNECT and the rest. The end's cause answers the question the issue asked,
+whether a DISCONNECT came before the link went, and the transcript keeps every byte for a test that
+needs the PINGREQ times; the history waits for such a test.

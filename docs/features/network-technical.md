@@ -329,13 +329,29 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   of disconnect, not the time of CONNECT. A replacement client ID closes the old connection
   (MQTT-3.1.4-2) and logs `mqtt: <id> (connection <new>) took over connection <old>`. When the
   old connection's `_State` is not `clean` and the new CONNECT has CleanSession=0, `_connect`
-  sets the old session's `will` to `None` before `on_close`, and the line ends `, its Will
+  sets the old session's `will` to `None` before closing it, and the line ends `, its Will
   discarded`: mosquitto's rule in `connect__on_authorised`, which sends the old Will only when
   either side starts clean. MQTT 3.1.1 (MQTT-3.1.2-8) would publish it at every close but a
   DISCONNECT; a device back inside its keepalive has not gone, and its backend should not hear it
   had. A keepalive deadline that has come by then, though `poll` has not yet expired it (a CONNECT
   in the turn of the deadline comes first), keeps the Will: it goes at the takeover, and the
   session is resumed all the same.
+  Every way a `_Session` ends goes through `_end(by, will_sent=...)`, whose first call closes it:
+  a DISCONNECT calls it directly with `"disconnect"`, after the log line `mqtt: <id> sent
+  DISCONNECT` and with the Will cleared; the rest call `_lose(by)`, which takes the Will, keeps it
+  only for an accepted connection not yet closed, calls `_end` and then routes the Will at the
+  board's time. `Connection.on_close`, which the TCP flow (`_notify`) and the TLS layer call, is
+  `_lose("closed")`; `Broker.poll` passes `"keepalive"`, `Broker.disconnect` `"test"`, `_connect`
+  `"takeover"` for the old connection, and `on_data` `"malformed"` for a refused packet and for a
+  remaining length over 1 MiB or longer than four bytes; a rejected CONNECT and a policy that
+  raises close with `_end()` and no cause. `_end` appends a frozen `ConnectionEnd`
+  (board time, client ID, connection ID, `by`, `will_sent`) to `Broker.connection_ends` only when
+  `connected` is set, so a stream refused before or at its CONNECT records none. It appends once
+  the session is cleaned up and before it closes the stream; `_lose` routes the Will after that,
+  so the end is in `connection_ends` before the Will is in `messages`. The stream's own close
+  that follows calls `on_close` on a closed session, which records nothing.
+  `ended(connection_id)` scans `connection_ends`; `next_end(client_id)` is a `FirstFrom` over it
+  from its length at the call, filtered by client ID.
   QoS 2 publication is unsupported. Credentials are observed by default;
   authentication is performed only by an installed test policy, with no external auth service.
   SUBSCRIBE and UNSUBSCRIBE parse every filter of the packet into a `RequestedFilter` before they

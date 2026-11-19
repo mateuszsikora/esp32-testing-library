@@ -1549,6 +1549,26 @@ that references to its number keep their meaning.
     `next_message` names its condition by them; `find_messages` combines `will` with `client=`,
     which the other two do not take. Any other `will` than `True`, `False` or `None` is refused.
     `tests/test_net_mqtt.py::test_a_will_is_told_apart_from_the_same_bytes_the_client_published_itself`
+- **272.** Each accepted MQTT connection gets one `ConnectionEnd` in `broker.connection_ends` when
+    it ends, at the board time it ended, with `by` the way it did: `disconnect` (the client's
+    DISCONNECT, logged `mqtt: <id> sent DISCONNECT`), `keepalive`, `takeover`, `closed` (its stream
+    closed under it), `malformed` or `test` (`broker.disconnect`), and `will_sent` whether the
+    broker published its Will then, after the end is recorded. A connection never accepted gets
+    none, and the stream's own close after the broker's adds none. A lost link
+    (`modem.drop_call()`) ends the connection as `keepalive` at 1.5 times its keepalive after the
+    device's last packet, Will sent; a DISCONNECT ends it at once, no Will.
+    `broker.next_end(client_id=None)` waits for the next end, of one client ID when given, and
+    polling consumes nothing.
+    `tests/test_net_mqtt_ends.py::test_each_way_a_connection_ends_has_its_own_cause`,
+    `tests/test_net_mqtt_ends.py::test_the_end_is_recorded_before_the_will_is_published`,
+    `tests/test_net_mqtt_ends.py::test_the_tls_layer_closing_under_a_session_ends_it_as_closed`,
+    `tests/test_net_mqtt_ends.py::test_a_takeover_that_discards_the_will_says_so`,
+    `tests/test_net_mqtt_ends.py::test_a_connection_never_accepted_records_no_end`,
+    `tests/test_net_mqtt_ends.py::test_next_end_keeps_one_client_id_and_consumes_nothing`,
+    `tests/test_net_mqtt_ends.py::test_a_lost_link_ends_the_connection_at_its_keepalive_with_the_will`,
+    `tests/test_net_mqtt_ends.py::test_a_reset_of_the_network_ends_the_connection_as_closed`,
+    `tests/test_modem_model.py::test_a_dropped_call_ends_the_mqtt_connection_at_its_keepalive_with_the_will`,
+    `tests/test_modem_model.py::test_a_disconnect_ends_the_mqtt_connection_at_once_with_no_will`
 
 - **126.** TLS next-event conditions require a started/completed counter increment after construction.
     Prior successes cannot satisfy them after closure or reset, and a failed new attempt does

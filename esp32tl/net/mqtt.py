@@ -58,6 +58,28 @@ class MqttClient:
     session_present: bool = False
 
 
+EndCause = Literal["disconnect", "keepalive", "takeover", "closed", "malformed", "test"]
+
+
+@dataclass(frozen=True)
+class ConnectionEnd:
+    """How and when this connection ended, on the board's time.
+
+    One for each accepted connection, the one of `MqttClient` with the same `connection_id`, once
+    it has ended. `by` says how: `"disconnect"` the client's DISCONNECT, `"keepalive"` 1.5 times its
+    keepalive with nothing from it, `"takeover"` a CONNECT with the same client ID on another
+    connection, `"closed"` its stream closing under it (the device's FIN or RST, `ip.reset`, the
+    TLS layer under it closing), `"malformed"` a packet the broker could not take, `"test"`
+    `Broker.disconnect`. `will_sent` is whether the broker published the connection's Will then.
+    """
+
+    at: Duration
+    client_id: str
+    connection_id: int
+    by: EndCause
+    will_sent: bool
+
+
 @dataclass
 class Delivery:
     """One PUBLISH the broker wrote to a client's stream, a retransmission included.
@@ -319,6 +341,7 @@ class Broker:
         self._log = log
         self.messages: list[Message] = []
         self.clients: list[MqttClient] = []
+        self.connection_ends: list[ConnectionEnd] = []
         self.connection_attempts: list[ConnectionAttempt] = []
         self.subscribe_requests: list[SubscribeRequest] = []
         self.deliveries: list[Delivery] = []
@@ -373,7 +396,7 @@ class Broker:
         for session in list(self._sessions):
             if session.connected and session.client_id == client_id:
                 self._log(f"mqtt: {client_id} disconnected by the test")
-                session.on_close()
+                session._lose("test")
                 return True
         return False
 
@@ -518,6 +541,23 @@ class Broker:
 
         return Condition(find, "the next MQTT connection attempt", "MQTT")
 
+    def ended(self, connection_id: int) -> ConnectionEnd | None:
+        """How and when the connection `connection_id` ended, or None while it has not."""
+        return next((e for e in self.connection_ends if e.connection_id == connection_id), None)
+
+    def next_end(self, client_id: str | None = None) -> Callable[[], ConnectionEnd | None]:
+        """A non-consuming condition for the first connection end recorded after this call; with
+        `client_id`, the first of a connection with that client ID."""
+        find = FirstFrom(
+            lambda: self.connection_ends,
+            len(self.connection_ends),
+            lambda end: client_id is None or end.client_id == client_id,
+        )
+        description = "the next MQTT connection end" + (
+            f" of {client_id!r}" if client_id is not None else ""
+        )
+        return Condition(find, description, "MQTT")
+
     def next_subscribe(self, filter: str | None = None) -> Callable[[], SubscribeRequest | None]:
         """A non-consuming condition for the first SUBSCRIBE recorded after this call; with
         `filter`, the first that names exactly that topic filter. UNSUBSCRIBE never matches."""
@@ -545,7 +585,7 @@ class Broker:
         for session in list(self._sessions):
             if session.deadline is not None and self._now() >= session.deadline:
                 self._log(f"mqtt: {session.client_id} keepalive expired")
-                session.on_close()
+                session._lose("keepalive")
         # Connection expiry wins a tie with a PUBACK deadline.
         for publication in self.pending:
             if publication._due is not None and self._now() >= publication._due:
@@ -757,7 +797,7 @@ class _Session:
             length, multiplier, at = 0, 1, 1
             while True:
                 if at > 4:
-                    self.on_close()
+                    self._lose("malformed")
                     return
                 if at >= len(self.buffer):
                     return
@@ -768,7 +808,7 @@ class _Session:
                 if not byte & 0x80:
                     break
             if length > 1024 * 1024:
-                self.on_close()
+                self._lose("malformed")
                 return
             if len(self.buffer) < at + length:
                 return
@@ -782,7 +822,7 @@ class _Session:
                     self._handle(first >> 4, first & 0x0F, body)
             except (ValueError, IndexError, struct.error):
                 self.broker._log("mqtt: malformed or unsupported packet, closing")
-                self.on_close()
+                self._lose("malformed")
             if connect is not None:
                 # Test policy errors must reach the test, not become malformed wire input.
                 self._connect(connect)
@@ -887,7 +927,7 @@ class _Session:
                     f" connection {session.connection_id}"
                     + (", its Will discarded" if discarded else "")
                 )
-                session.on_close()
+                session._lose("takeover")
         if connect.clean_session or self.client_id not in broker._states:
             if self.client_id in broker._states:
                 broker._log(f"mqtt: {self.client_id} CleanSession=1 discarded the stored session")
@@ -1027,8 +1067,9 @@ class _Session:
         elif kind == DISCONNECT:
             if body:
                 raise ValueError("DISCONNECT payload")
+            broker._log(f"mqtt: {self.client_id} sent DISCONNECT")
             self.will = None
-            self._end()
+            self._end("disconnect")
         elif kind == PUBACK:
             if len(body) != 2:
                 raise ValueError("invalid PUBACK")
@@ -1061,12 +1102,21 @@ class _Session:
         )
 
     def on_close(self) -> None:
+        self._lose("closed")
+
+    def _lose(self, by: EndCause) -> None:
+        """End as a connection lost `by` this: with its Will, if it was accepted with one."""
         will, self.will = self.will, None
-        self._end()
-        if will is not None and self.connected:
+        if self.closed or not self.connected:
+            will = None
+        self._end(by, will_sent=will is not None)
+        if will is not None:
             self.broker._route(replace(will, at=Duration(self.broker._now())))
 
-    def _end(self) -> None:
+    def _end(self, by: EndCause | None = None, *, will_sent: bool = False) -> None:
+        """Close once. An accepted connection records how, `by`, in `Broker.connection_ends`,
+        before its Will is published; one never accepted, closed with no `by`, records nothing,
+        its CONNECT's outcome being in `Broker.connection_attempts`."""
         if not self.closed:
             self.closed = True
             self.deadline = None
@@ -1079,4 +1129,10 @@ class _Session:
                 self.state.connection = None
                 if self.state.clean:
                     del self.broker._states[self.client_id]
+            if self.connected:
+                assert by is not None
+                now = Duration(self.broker._now())
+                self.broker.connection_ends.append(
+                    ConnectionEnd(now, self.client_id, self.connection_id, by, will_sent)
+                )
             self.close()
