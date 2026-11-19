@@ -108,12 +108,14 @@ class GpioOut:
 
 @dataclass(frozen=True)
 class Reset:
-    """The guest reset, `cause` the ROM's reset reason (5.5)."""
+    """The guest reset, `cause` the ROM's reset reason, `hint` the register ESP-IDF keeps its
+    reset-reason hint in, as the reset found it (5.5)."""
 
     TYPE: ClassVar[str] = "reset"
     seq: int
     t: int
     cause: int
+    hint: int
 
 
 @dataclass(frozen=True)
@@ -791,7 +793,9 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
             f.pins("enabled"),
             f.pins("output"),
         ),
-        "reset": lambda f: Reset(f.integer("seq", 1), f.integer("t"), f.integer("cause")),
+        "reset": lambda f: Reset(
+            f.integer("seq", 1), f.integer("t"), f.integer("cause"), f.integer("hint")
+        ),
         "wifi_link": lambda f: WifiLink(f.integer("seq", 1), f.integer("t"), f.boolean("ready")),
         "eth_tx": lambda f: EthTx(f.integer("seq", 1), f.integer("t"), f.frame("data")),
         "hci_tx": lambda f: HciTx(f.integer("seq", 1), f.integer("t"), f.packet("data")),

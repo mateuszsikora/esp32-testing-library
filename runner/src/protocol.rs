@@ -516,8 +516,10 @@ pub fn gpio_out(seq: u64, t: u64, changes: &[(u8, bool)], enabled: u64, output: 
     )
 }
 
-pub fn reset(seq: u64, t: u64, cause: u32) -> String {
-    format!(r#"{{"type":"reset","seq":{seq},"t":{t},"cause":{cause}}}"#)
+/// `reset` (5.5): `cause` the ROM's reset reason, `hint` the reset-reason hint register as the
+/// guest left it.
+pub fn reset(seq: u64, t: u64, cause: u32, hint: u32) -> String {
+    format!(r#"{{"type":"reset","seq":{seq},"t":{t},"cause":{cause},"hint":{hint}}}"#)
 }
 
 pub fn eth_tx(seq: u64, t: u64, data: &[u8]) -> String {

@@ -58,6 +58,13 @@ const RX_FIFO: usize = 128;
 /// The baud a byte of `console_rx` is paced at before the guest has set one.
 const DEFAULT_BAUD: u64 = 115_200;
 
+/// LP_SYSTEM_REG_LP_STORE6, `RTC_RESET_CAUSE_REG` of ESP-IDF's
+/// `esp_rom/esp32s31/include/esp32s31/rom/rtc.h`: `DR_REG_LP_SYS_BASE + 0x44` (v6.1
+/// `soc/esp32s31/register/soc/lp_system_reg.h`). esp32sim 357b0e5's reset makes the S31's bus
+/// anew, the LP_STORE registers zero (`esp32s31/src/soc.rs`, `reboot`), where the chip keeps
+/// them: `chip_reset` puts this one back.
+pub(crate) const RESET_HINT: u32 = 0x2070_0044;
+
 /// esp32sim's S31 machine, with what the run loop needs of it that esp32sim does not do: the
 /// console's input paced into UART0, and GPIO output reported to the board with its cycle.
 pub struct S31 {
@@ -247,9 +254,14 @@ impl Guest for S31 {
         }
     }
     fn chip_reset(&mut self) -> u32 {
+        let hint = self.reset_hint();
         let cause = self.m.reboot();
         self.after_any_reset();
+        super::keep_reset_hint(&mut self.m.bus, RESET_HINT, hint);
         cause
+    }
+    fn reset_hint(&mut self) -> u32 {
+        super::read_reset_hint(&mut self.m.bus, RESET_HINT)
     }
     fn power_on_reset(&mut self, _rom: &[u8]) -> u32 {
         // esp32sim's chip reset makes the S31's whole digital side again, its SRAM and LP memory

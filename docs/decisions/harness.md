@@ -4148,6 +4148,29 @@ ROM's names for them differ (`RTC_SW_CPU_RESET` for 12 on the S3).
 **Rejected:** a table per chip, because `Boot` would need the profile and the four chips' common
 causes would read differently in reports for the same event.
 
+## A boot's ESP-IDF reason comes from each chip's own table
+
+Status: decided (#261)
+
+`Boot.idf_reason` names a boot as ESP-IDF's `esp_reset_reason()` does, from a table per chip of
+`get_reset_reason()` and the hint the runner reads with each `reset`. The backend computes it and
+puts it in `Boot`, a field that takes no part in comparing two boots, so `Boot` needs neither the
+profile nor the hint. `Boot.reason` keeps the ROM's names of the classic ESP32
+([above](#boot-reasons-keep-the-classic-esp32s-names-on-every-chip)): the IDF names are the
+same strings on every chip, and where a chip's table gives another name for a cause, that is what
+its firmware reports.
+
+**Rejected:** naming the hint's reason from `Boot.cause` alone, because the ROM reports 12
+(`SW_CPU_RESET`) for `esp_restart()` and for a panic alike; a `hint` field on `Boot`, because a
+test would then have to name a register's raw value to build a boot to compare, and the field
+would mean nothing to the serial backend; and a table per ESP-IDF version, because v5.3.6, v5.5.4
+and v6.1, every version the validation images are built with, have the same `get_reset_reason()`
+on each chip.
+
+**Not yet:** the serial backend has no `idf_reason`: it does not see the chip's resets, and skips
+`board.boots`. The P4's eFuse CRC reset is `ESP_RST_DEEPSLEEP` on chip revision v0.0, which the
+table does not tell apart; esp32sim models none of them.
+
 ## The serial backend runs the classic ESP32 only
 
 Status: postponed (#236)

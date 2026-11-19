@@ -152,10 +152,14 @@ command. Each line is the board's time, who, and what:
   end sent in, at the time they crossed, whether the route is tapped or not. Printable ASCII is
   shown as it is, `\r`, `\n`, `\t` and `\\` escaped, any other byte as `\xNN`; after 100 bytes the
   line is cut, with the length: `... (512 bytes)`.
-- `chip`: the chip reset, at the time of the reset, with the boot it starts and why:
-  `boot 2: SW_CPU_RESET (reset cause 12)` after `esp_restart()`, `boot 3: POWERON_RESET (reset
-  cause 1)` after `board.reset()` or the `board.power_on()` that follows a `board.power_off()`,
-  which are `test` steps of their own ([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)).
+- `chip`: the chip reset, at the time of the reset, with the boot it starts and why, the ROM's
+  name and then ESP-IDF's (`boot.idf_reason`): `boot 2: SW_CPU_RESET, ESP_RST_SW (reset cause 12)`
+  after `esp_restart()`, `boot 2: SW_CPU_RESET, ESP_RST_PANIC (reset cause 12)` after a panic,
+  `boot 3: POWERON_RESET, ESP_RST_POWERON (reset cause 1)` after `board.reset()` or the
+  `board.power_on()` that follows a `board.power_off()`, which are `test` steps of their own
+  ([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)). On a chip esp32tl
+  has no ESP-IDF table for, the line has the ROM's name alone, `boot 2: SW_CPU_RESET (reset cause
+  12)`.
   Kept as the test's steps are, however long the console.
 - `{line} out`, as `modem.pwrkey out`: a level the firmware drove a line of the profile's
   `[lines.<role>]` sets to, `0` or `1`, or `not driven` once its output is off, at the time it

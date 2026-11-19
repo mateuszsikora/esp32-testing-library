@@ -85,7 +85,8 @@ without starting anything:
    that no two interfaces share a pin. `hold` holds every turn until the test waits; `_printed`
    appends each console message's bytes to `console_output`, feeds them to `console_lines` and hands
    them to `log.console`, in the link's thread. `_reset` puts each `reset` the runner sends into the
-   run's log, `boot N: REASON (reset cause C)`, through `RunLog.chip`, and calls
+   run's log, `boot N: REASON, IDF_REASON (reset cause C)`, IDF_REASON the boot's `idf_reason`
+   (`REASON` alone when it is `None`), through `RunLog.chip`, and calls
    `Bluetooth.chip_reset(t)`, then `Internet.device_reset(t, "the device reset")` on every
    simulated network the test gave (`_networks()`: the modem's, `wifi`'s), also in the link's
    thread: the connections the test opened to the device are lost, and the device has no address
@@ -233,7 +234,10 @@ cannot fail with this backend; it is there for another caller:
   `BoardOff: the board is off already: call board.power_on() to switch it on`.
 - `boots` is `Boot(1, Duration(0), 1)`, then one `Boot(n, Duration(reset.t), reset.cause)` per
   `reset` in `BoardLink.resets`, numbered from 2; `boot` is the last (`esp32tl/interfaces/board.py`,
-  which also names the causes, `RESET_REASONS`). Each is built anew at every read, with its
+  which also names the causes, `RESET_REASONS`). Each `idf_reason` is
+  `idf_reset_reason(profile.chip, cause, hint)`, with the `reset`'s `hint`
+  ([protocol 5.5](../protocol.md#55-reset)) and 0 for the first boot, a power-on's. Each is built
+  anew at every read, with its
   `uptime_zero` from `BoardLink.uptimes`, which keeps the last `uptime` of each boot by number
   (the boot after the `reset`s read before it, [protocol 5.24](../protocol.md#524-uptime-ext-245)):
   `UptimeZero(Duration(earliest), Duration(latest))`, or `None` for a boot that has none yet and

@@ -330,6 +330,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A board profile's chip decides its pads, UARTs and console pins](harness.md#a-board-profiles-chip-decides-its-pads-uarts-and-console-pins) | `harness.md` | decided (#236) |
 | [esp32sim's gaps on a chip skip the test that asks for them](harness.md#esp32sims-gaps-on-a-chip-skip-the-test-that-asks-for-them) | `harness.md` | decided (#236) |
 | [Boot reasons keep the classic ESP32's names on every chip](harness.md#boot-reasons-keep-the-classic-esp32s-names-on-every-chip) | `harness.md` | decided (#236) |
+| [A boot's ESP-IDF reason comes from each chip's own table](harness.md#a-boots-esp-idf-reason-comes-from-each-chips-own-table) | `harness.md` | decided (#261) |
 | [The serial backend runs the classic ESP32 only](harness.md#the-serial-backend-runs-the-classic-esp32-only) | `harness.md` | postponed (#236) |
 | [Project defaults are esp32tl ini options that the markers override](harness.md#project-defaults-are-esp32tl-ini-options-that-the-markers-override) | `harness.md` | decided (#237) |
 | [A model that frames by silence tells on_frame when the frame's data came](harness.md#a-model-that-frames-by-silence-tells-on_frame-when-the-frames-data-came) | `harness.md` | decided (#237) |
@@ -420,3 +421,4 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The P4's and the S31's GPIO output is reported where esp32sim does not report it](runner.md#the-p4s-and-the-s31s-gpio-output-is-reported-where-esp32sim-does-not-report-it) | `runner.md` | decided (#233) |
 | [A power-on reset of the P4 clears what esp32sim's chip reset keeps](runner.md#a-power-on-reset-of-the-p4-clears-what-esp32sims-chip-reset-keeps) | `runner.md` | decided (#233) |
 | [The P4 reports its uptime as the other SYSTIMER chips do, the S31 none yet](runner.md#the-p4-reports-its-uptime-as-the-other-systimer-chips-do-the-s31-none-yet) | `runner.md` | decided (#233) |
+| [The runner puts the reset-reason hint back where esp32sim forgets it](runner.md#the-runner-puts-the-reset-reason-hint-back-where-esp32sim-forgets-it) | `runner.md` | decided (#261) |

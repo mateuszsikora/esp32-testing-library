@@ -94,8 +94,10 @@ its pin, `357b0e5`.
      to.
 4. **Run.** Without `--board`, `chip::run_free`: the wall clock starts here, after setup. `m.run(u64::MAX)`
    runs until a `Stop`; `m.drain_console()` then flushes what the guest printed, so it comes out
-   before the runner's own line. On `Stop::SwReset` the runner calls `m.reboot()`, prints the
-   `chip reset` line with the cause `reboot()` returns, and runs again, from the reset vector as
+   before the runner's own line. On `Stop::SwReset` the runner calls `Guest::chip_reset`, which
+   is `m.reboot()` and what the chip's reset leaves wrong in esp32sim put right (the console's RX
+   pad, the [reset-reason hint](#the-reset-reason-hint)), prints the `chip reset` line with the
+   cause `reboot()` returns, and runs again, from the reset vector as
    the chip would. Any other `Stop` returns. `Stop::Halted` is what `Machine::run` returns once
    `bus.cycles() >= max_cycles` (`esp-soc/src/machine.rs`).
 
@@ -130,8 +132,8 @@ and `chip` in `hello`), `title` (in messages), `cpu_hz`, `gpios` and `input_only
 `uarts`, `uart_pins` (whether esp32sim tells the board UART bytes and routes), and what esp32sim
 models on it that a flag asks for (`sd_spi`, `wifi_station`, `wifi`, `bt`, `usb_serial_jtag`,
 `psram_mb`). Deep sleep is no flag: a chip whose `Guest` does not step through it
-(`sleeps_through`, `false` by default) has it as esp32sim does, which on the S3, C3 and C6 never
-wakes. `chip::ALL` lists the six. One process runs one chip, so `main` selects its profile
+(`sleeps_through`, `false` by default) has it as esp32sim does, which on the S3, C3, C6, P4 and
+S31 never wakes. `chip::ALL` lists the six. One process runs one chip, so `main` selects its profile
 once (`chip::select`, a `OnceLock`) before anything reads it, and `chip::selected()` is the
 classic chip's until then, as in the unit tests: `protocol::ns`, `protocol::cycles` and
 `protocol::hello` read the selected chip's clock and name, and the session checks the peer's
@@ -155,6 +157,7 @@ dump in `runner/src/session/tests.rs` cover the code the others run.
 | U0RXD's IO_MUX register (`reset_console_rx`) | `0x3ff4_9084` (GPIO 3) | `0x6000_9004 + 4 × 44` | `0x6000_9004 + 4 × 20` | `0x6009_0004 + 4 × 17` |
 | What `power_on_reset` zeroes | DRAM, IRAM, cache RAM, RTC fast and slow | `DRAM_LOW..DRAM_HIGH`, `IRAM_LOW..IRAM_HIGH`, RTC fast and slow (`esp32s3::bus`) | DRAM, IRAM, RTC memory (`esp32c3::bus`) | `SRAM_LOW..SRAM_HIGH`, `LP_SRAM_LOW..LP_SRAM_HIGH` (`esp32c6::bus`) |
 | Its RTC registers after `power_on_reset` | a new `ClassicRtc` | a new `RtcCntl`, keeping the board's analog inputs | the same | a new `LpSys` |
+| The reset-reason hint (`RESET_HINT`, [below](#the-reset-reason-hint)) | `0x3ff4_80b8`, kept by `reboot` | `0x6000_80c8`, kept | `0x6000_80c0`, zeroed by `reboot`: `chip_reset` writes it back | `0x600b_1018`, kept |
 | Deep sleep stepped through | yes | no: not modelled | no | no |
 | `flash()` without the trampoline | yes | yes | yes | no: `ble.original_flash` is private to esp32sim's C6 crate |
 | `uptime()` | TIMG0's LACTCONFIG and LACTLOAD through `Device::read` on `periph.timg[0]` (`chip::esp32::lact`): `Counting`, LACTLOAD's 64 bits and a tick of LACT_DIVIDER times `lact::apb_tick`, 3 or 6 bus cycles | `chip::systimer_uptime` on `periph.systimer`, 15 bus cycles a tick | the same, 10 a tick | the same, 10 a tick |
@@ -175,6 +178,7 @@ models that the runner can use, and their buses call none of the board's UART or
 | `take_gpio_inputs` | `gpio_set_input`, and the GPIO's own `release_input` (the P4's `SocBus::gpio_release_input` is the trait's no-op) | `gpio_set_input`, `gpio_release_input`, then drops the pad events they caused |
 | What `power_on_reset` zeroes | `L2MEM_LOW..L2MEM_HIGH`, `TCM_LOW..TCM_HIGH`, `LP_RAM_LOW..LP_RAM_HIGH` (`esp32p4::bus`), after `reboot`, which keeps them; the ROM is loaded again | nothing more: esp32sim's `reboot` makes `S31Bus` again, SRAM and LP memory with it, and reloads the ROM it kept |
 | Its LP registers after `power_on_reset` | a new `LpAon`, reset cause POWERON | `SocBus::set_reset_cause(1)` |
+| The reset-reason hint (`RESET_HINT`, [below](#the-reset-reason-hint)) | `0x5011_0044`, kept by `reboot` | `0x2070_0044`, zeroed by `reboot`: `chip_reset` writes it back |
 | `uptime()` | `esp32p4::systimer_uptime` on `periph.systimer.st`: as `chip::systimer_uptime`, at 22.5 bus cycles a tick (`SYSTIMER_HALF_TICK`, the XTAL divider of the clock tree times 5, in half cycles), the zero to within 23 | `Stopped`, the trait's default: `SystimerS31` keeps its divider private, so the runner sends no `uptime` |
 | Refused at the command line | `--wifi`, `--wifi-sta`, `--bt`, `--no-bt`, `--sd-spi` | the same |
 | `--psram-mb` | 16 or 32 | 16 |
@@ -401,7 +405,7 @@ a chip whose UARTs have no pins ([Chips](#chips)), the same goes for UART0: `col
 `Guest::uart0_console_input`; `stats` has `console_rx_lost` then too.
 
 `Session` runs the protocol over two traits, `Guest` (the machine: cycles, `run_until`,
-`chip_reset`, `power_on_reset`, `idle_until`, `uart_route`, `rx_pending`, `uart_receive`, `uart_frame_error`,
+`chip_reset`, `reset_hint`, whose default is a guest that writes no hint, `power_on_reset`, `idle_until`, `uart_route`, `rx_pending`, `uart_receive`, `uart_frame_error`,
 `gpio_drive`, `take_gpio_inputs`, for `--console-port usb` `take_usb_console` and
 `usb_console_input`, whose defaults are a chip without the controller, for a UART0 without pins
 `take_uart0_console` and `uart0_console_input`, whose defaults are a chip whose UART0 has them, and for Wi-Fi `take_eth_frames`, `eth_input`,
@@ -445,6 +449,28 @@ it gives goes on `pending` as `Item::Uptime { cycle: now, zero }`, and `process_
 `protocol::uptime`, with no `seq`, its `earliest` through `protocol::ns` and its `latest` through
 `protocol::ns_up`, rounded up, and `null` for both when `zero` is `None`
 ([protocol 5.24](../protocol.md#524-uptime-ext-245)).
+
+#### The reset-reason hint
+
+After `Stop::SwReset`, `Session::drive` asks `Guest::reset_hint` before `Guest::chip_reset`, and
+`Session::reset(cause, hint)` puts both on `pending` as `Item::Reset`, which `process_pending`
+sends as `protocol::reset` ([protocol 5.5](../protocol.md#55-reset)). `power_on_reset` passes 0:
+the chip's power-on, and the runner's, makes the RTC registers anew. Each chip's `reset_hint` is
+`chip::read_reset_hint`, a `read32_unpriced` of its bus at the chip module's `RESET_HINT`,
+`RTC_RESET_CAUSE_REG` of ESP-IDF's `esp_rom/<chip>/include/<chip>/rom/rtc.h`: through the bus,
+so that the classic chip's `ClassicRtc`, which keeps its registers at other offsets than the bus's
+(`esp32/src/periph.rs`, `ClassicRtc::off`), answers as the guest reads it.
+
+The chip keeps the register through every reset but a power-on. esp32sim 357b0e5's `reboot`
+keeps it on the classic chip, the S3 (RTC_CNTL's `ram`), the C6 (`lpsys`) and the P4 (`lp`), and
+makes it anew, zero, on the C3, whose `reboot` makes a new `RtcCntl` and keeps only its
+`reset_cause`, and on the S31, whose `reboot` makes a new `S31Bus`, its `lp_store` with it. Their
+`chip_reset` reads the register before `reboot` and writes it back after, with
+`chip::keep_reset_hint`, so that the firmware's `esp_reset_reason()` reads what it would on the
+chip; nothing else of RTC_CNTL or LP_SYS is put back. `chip::run_free`, the run without a peer,
+resets the chip through `Guest::chip_reset` too. `chip::tests` checks each chip's register before
+and after a chip reset and after a power-on, and that esp32sim alone forgets it on the C3 and the
+S31.
 
 #### Received bytes
 
@@ -1110,7 +1136,9 @@ a guest that programs a byte between two dumps;
   leaves POWERON as the cause; `the_c3_has_no_uart2` and `the_c6_has_no_uart2` that UART2 is a route
   without pins and takes nothing; `the_s3_has_the_psram_the_board_has` and
   `the_c3_and_the_c6_have_no_psram` the PSRAM sizes; `*_takes_a_byte_into_its_fifo` that a byte goes
-  into the RX FIFO at once.
+  into the RX FIFO at once; `the_*_keeps_its_reset_hint` that the reset-reason hint the guest wrote
+  is what `reset_hint` reads before and after `chip_reset`, and 0 after `power_on_reset`, and
+  `esp32sim_forgets_the_c3_and_s31_reset_hint` that `reboot` alone zeroes it on the C3 and the S31.
 - The uptime counter: in `runner/src/chip/tests.rs`,
   `the_classic_lact_reads_as_counting_from_its_load_once_enabled_and_a_reset_stops_it` and
   `the_s3_systimer_reads_zero_at_its_reset_and_where_it_is_loaded`, with the C3's and the C6's,

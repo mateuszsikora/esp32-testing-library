@@ -92,7 +92,7 @@ def test_a_restart_keeps_ram_and_rtc_memory_and_board_reset_clears_them(
     assert board.now - pressed < seconds(1)
     assert third.uptime_ms < 1000 < pressed.ns // 1_000_000
     console.expect_exact("persistence: done")
-    assert "boot 3: POWERON_RESET (reset cause 1)" in board.report(run=True)
+    assert "boot 3: POWERON_RESET, ESP_RST_POWERON (reset cause 1)" in board.report(run=True)
 
 
 def test_each_boot_s_uptime_zero_puts_the_firmware_s_uptime_on_the_board_s_clock(

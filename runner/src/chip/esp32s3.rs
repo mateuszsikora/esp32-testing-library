@@ -83,6 +83,11 @@ impl Target for esp32s3::Machine {
     }
 }
 
+/// RTC_CNTL_STORE6, `RTC_RESET_CAUSE_REG` of ESP-IDF's `esp_rom/esp32s3/include/esp32s3/rom/rtc.h`:
+/// `DR_REG_RTCCNTL_BASE + 0xc8` (v5.3.6 `soc/esp32s3/include/soc/rtc_cntl_reg.h`). esp32sim's
+/// reset keeps it with the rest of RTC_CNTL (`esp32s3/src/soc.rs`, `reboot`).
+pub(crate) const RESET_HINT: u32 = 0x6000_80c8;
+
 /// Work around esp32sim 357b0e5's zeroed IO_MUX reset state on U0RXD, GPIO 44, as on the classic
 /// chip (`chip::esp32::reset_console_rx`): the ESP32-S3 TRM, table 6.13-1, gives it function 0,
 /// U0RXD, input and pull-up enabled, drive strength 2. Set only at reset; what the firmware writes
@@ -117,6 +122,9 @@ impl Guest for esp32s3::Machine {
         let cause = self.reboot();
         reset_console_rx(self);
         cause
+    }
+    fn reset_hint(&mut self) -> u32 {
+        super::read_reset_hint(&mut self.bus, RESET_HINT)
     }
     fn power_on_reset(&mut self, rom: &[u8]) -> u32 {
         use esp32s3::bus::*;

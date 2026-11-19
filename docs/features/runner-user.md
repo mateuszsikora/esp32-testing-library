@@ -641,8 +641,10 @@ tracks each gap.
   initialisation times out (`sdmmc_card_init failed (0x107)`). A driver that moves every byte
   through the CPU would reach the card; none is tested here. The esp32sim backend skips a test's
   `sd_card` on these chips ([esp32sim backend](esp32sim-backend-user.md#chips-other-than-the-classic-esp32)).
-- **Deep sleep.** On the S3, C3 and C6, `esp_deep_sleep_start()` puts the guest to sleep and
-  nothing wakes it: the run goes on to its end without another boot.
+- **Deep sleep.** On the S3, C3, C6, P4 and S31, `esp_deep_sleep_start()` puts the guest to sleep
+  and nothing wakes it: the run goes on to its end without another boot. On the P4 and the S31,
+  `firmware/reset_reasons` with a 100 ms timer wake had no other boot in the 3 s after its sleep,
+  measured in a run without a peer at the esp32sim pin `357b0e5`.
 - **The console's input.** esp32sim starts every chip with its IO_MUX zeroed, which leaves U0RXD
   without its input; the runner sets the pad's reset state at power-on and after every reset
   (GPIO 3 on the classic ESP32, 44 on the S3, 20 on the C3, 17 on the C6), and what the firmware
@@ -676,6 +678,18 @@ tracks each gap.
   its banner on UART0 and on the controller alike.
 - **Reset causes** are the chip's numbers, as its ROM prints them: 1 is a power-on reset, 5 a
   wake from deep sleep, 12 a software CPU reset (`esp_restart()`), on every chip.
+- **The reset-reason hint.** ESP-IDF's panic handler and its watchdogs leave the reason of the
+  software reset they make in an RTC register the chip keeps through the reset,
+  `RTC_RESET_CAUSE_REG`, where the next boot's `esp_reset_reason()` reads it: `ESP_RST_PANIC`
+  rather than `ESP_RST_SW` after a panic, whose ROM cause, 12, is `esp_restart()`'s. esp32sim
+  keeps the register on the classic ESP32, the S3, the C6 and the P4, and zeroes it at a reset
+  on the C3 and the S31; there the runner writes it back, so that the firmware reads what it
+  would on the chip. The peer gets it in every `reset` message, as `hint`
+  ([protocol 5.5](../protocol.md#55-reset)).
+- **Timer-group watchdogs on the classic ESP32.** esp32sim's timer groups have no watchdog
+  (`esp-periph/src/timg.rs`): ESP-IDF's task watchdog and interrupt watchdog never fire, and a
+  firmware that starves either runs on. The RTC watchdog resets the chip, with causes 9, 13 and 16
+  ([protocol 5.5](../protocol.md#55-reset)).
 - **The flash dump with `--bt` on the C6** holds esp32sim's trampoline over
   `esp_bt_controller_init`, which the other chips' dumps do not: esp32sim keeps the C6's copy of
   the code under it to itself.

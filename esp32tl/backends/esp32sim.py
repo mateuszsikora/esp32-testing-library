@@ -82,7 +82,14 @@ from esp32tl.build import Build, BuildError
 from esp32tl.flash import FlashSnapshot, Namespaces, Partition
 from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
 from esp32tl.interfaces.bluetooth import TAP_SOURCE, Bluetooth
-from esp32tl.interfaces.board import DEEPSLEEP_RESET, POWERON_RESET, Board, Boot, UptimeZero
+from esp32tl.interfaces.board import (
+    DEEPSLEEP_RESET,
+    POWERON_RESET,
+    Board,
+    Boot,
+    UptimeZero,
+    idf_reset_reason,
+)
 from esp32tl.interfaces.console import ConsoleInput, ConsoleLines
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
@@ -996,12 +1003,19 @@ class Esp32Sim(Board):
         """The chip's boots, in order: the first at power-on, then one at each reset, whatever
         caused it."""
         self._on()
-        starts = [(Duration(0), POWERON_RESET)] + [
-            (Duration(r.t), r.cause) for r in self.link.resets
+        # the run's first boot is a power-on's, which leaves no hint
+        starts = [(Duration(0), POWERON_RESET, 0)] + [
+            (Duration(r.t), r.cause, r.hint) for r in self.link.resets
         ]
         return tuple(
-            Boot(n, at, cause, self._uptime_zero(n))
-            for n, (at, cause) in enumerate(starts, start=1)
+            Boot(
+                n,
+                at,
+                cause,
+                self._uptime_zero(n),
+                idf_reset_reason(self.profile.chip, cause, hint),
+            )
+            for n, (at, cause, hint) in enumerate(starts, start=1)
         )
 
     def _uptime_zero(self, boot: int) -> UptimeZero | None:
@@ -1014,8 +1028,10 @@ class Esp32Sim(Board):
 
     def _reset(self, message: Reset) -> None:
         """The chip reset: into the run's log, from the link's thread."""
-        boot = Boot(len(self.link.resets) + 1, Duration(message.t), message.cause)
-        self.log.chip(message.t, f"boot {boot.number}: {boot.reason} (reset cause {boot.cause})")
+        idf = idf_reset_reason(self.profile.chip, message.cause, message.hint)
+        boot = Boot(len(self.link.resets) + 1, Duration(message.t), message.cause, idf_reason=idf)
+        reason = boot.reason if idf is None else f"{boot.reason}, {idf}"
+        self.log.chip(message.t, f"boot {boot.number}: {reason} (reset cause {boot.cause})")
         self._bluetooth.chip_reset(message.t)
         # The chip's TCP and address go with it: the test's connections to it are lost.
         for _, network in self._networks():

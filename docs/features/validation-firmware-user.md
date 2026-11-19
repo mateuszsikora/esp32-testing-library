@@ -51,6 +51,7 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `persistence` | `firmware/persistence`: counts its boots in NVS, RTC memory, RAM and on an SD card, prints them with its reset reason, and restarts itself once ([below](#persistence)) |
 | `ota_state` | `firmware/ota_state`: copies its app to the next OTA slot, boots it, marks it valid, then does it again and rolls back, reporting its state at each step ([below](#ota_state)) |
 | `timer_wake` | `firmware/timer_wake`: sleeps in deep sleep twice with a 2 s timer wake, counting its boots in RTC memory ([below](#timer_wake)) |
+| `reset_reasons` | `firmware/reset_reasons`: prints `esp_reset_reason()` by name at each boot and resets the next way, through `esp_restart()`, a panic, a task watchdog's panic and a 100 ms deep sleep ([below](#reset_reasons)) |
 | `deep_sleep` | ESP-IDF's `examples/system/deep_sleep`, unmodified, with its own `sdkconfig.defaults`, for target `esp32`: sleeps 20 s at a time with a timer wake, and reports after each wake how long it slept ([below](#deep_sleep)) |
 | `bt_spp_initiator` | ESP-IDF's `examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator`, unmodified, with its own `sdkconfig.defaults`, for target `esp32`: finds a device named `ESP_SPP_ACCEPTOR` over Bluetooth Classic, pairs with it, opens SPP and writes to it without end ([below](#bt_spp_initiator)) |
 | `bt_spp_initiator_psram` | The same example, unmodified, with `firmware/bt_spp_initiator_psram/sdkconfig.defaults` after its own: PSRAM on, and Bluedroid's buffers taken from it first; on a profile with `psram_mb = 4` it does what the plain image does ([below](#bt_spp_initiator_psram)) |
@@ -85,13 +86,15 @@ profile:
 | `gatt_server` | `esp32s3`, `esp32c3` | ESP-IDF's `examples/bluetooth/bluedroid/ble/gatt_server`, unmodified, with its own `sdkconfig.defaults`: a BLE GATT server that advertises as `ESP_GATTS_DEMO`. Not for the C6, whose BLE esp32sim runs only for ESP-IDF v5.5.x images |
 | `console_repl_usb` | the three, `esp32p4`, `esp32s31` | Not built for the classic ESP32, which has no USB-Serial/JTAG controller: `firmware/console_repl_usb`, `console_repl` with its console on the chip's USB-Serial/JTAG controller ([below](#console_repl_usb)) |
 | `hello_world`, `console_repl`, `gpio_echo`, `nvs_reader` | `esp32p4`, `esp32s31` | As for the three; the P4's are built for chip revision v3.0 and later, ESP-IDF's default |
+| `reset_reasons` | the three, `esp32p4`, `esp32s31` | Nothing; the deep sleep of its fourth boot does not wake on any of the five, which esp32sim does not model there, so `tests/test_chips.py` runs it to the sleep ([below](#reset_reasons)) |
 | `hello_world_rev1` | `esp32p4` | ESP-IDF's `hello_world` with `firmware/hello_world_rev1/sdkconfig.defaults`: `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y` and `CONFIG_ESP32P4_REV_MIN_100=y`, for P4 revisions below v3.0 (v0.x, v1.x), which the runner runs on esp32sim's rev < 3 model |
 
-The images that need what esp32sim does not model on these chips, deep sleep (`timer_wake`,
-`deep_sleep`, `persistence`), an SD card over SPI (`sdspi`, `sd_remount`) or Bluetooth Classic
+The images that need what esp32sim does not model on these chips, a wake from deep sleep
+(`timer_wake`, `deep_sleep`, `persistence`), an SD card over SPI (`sdspi`, `sd_remount`) or Bluetooth Classic
 (`bt_spp_initiator`), are not built for them, nor, for the P4 and the S31, those that need a UART
 route (`nmea_reader`), Wi-Fi (`http_request`) or Bluetooth (`gatt_server`)
-([issue #229](https://github.com/mateuszsikora/esp32-testing-library/issues/229)).
+([issue #229](https://github.com/mateuszsikora/esp32-testing-library/issues/229)). `reset_reasons`
+is built for all five although its last boot sleeps: what it checks comes before the sleep.
 `tests/test_chips.py` runs every one of these images.
 
 ## `console_repl_usb`
@@ -249,6 +252,34 @@ timer_wake: boot=2 rom=5 wake=4
 first two boots it prints `timer_wake: sleeping 2000 ms`, arms a 2 s timer wake and calls
 `esp_deep_sleep_start()`; on the third it prints `timer_wake: done` and returns.
 `tests/test_timer_wake.py` runs it.
+
+## `reset_reasons`
+
+`reset_reasons` checks that each boot's `Boot.idf_reason` is the firmware's own
+`esp_reset_reason()`, also for the software resets the ROM reports alike. Build it with
+`firmware/build.sh reset_reasons`; `make firmware` and `make test` include it. Each boot prints
+the reason by name with the ROM's reset reason for core 0, `esp_rom_get_reset_reason(0)`:
+
+```text
+reset_reasons: reason=ESP_RST_PANIC rom=12
+```
+
+then resets the chip the next way from that reason, so that one power-on runs through five boots
+with no state kept between them:
+
+| `reason` | `rom` | Then | Line |
+|---|---|---|---|
+| `ESP_RST_POWERON` | 1 | `esp_restart()` | `reset_reasons: restarting` |
+| `ESP_RST_SW` | 12 | `abort()`, a panic | `reset_reasons: panicking` |
+| `ESP_RST_PANIC` | 12 | the task watchdog's panic | `reset_reasons: panicking as the task watchdog` |
+| `ESP_RST_TASK_WDT` | 12 | a deep sleep with a 100 ms timer wake | `reset_reasons: sleeping 100 ms` |
+| `ESP_RST_DEEPSLEEP` | 5 | returns from `app_main` | `reset_reasons: done` |
+
+esp32sim models no timer-group watchdog on the classic ESP32, so no task watchdog fires there:
+the fourth boot does what ESP-IDF does when one fires with `trigger_panic`, the hint
+`ESP_RST_TASK_WDT` and then the panic. The five boots take about 0.3 s of the board's time.
+`tests/test_reset_reasons.py` runs it, and `tests/test_chips.py` runs the image of each other chip
+to its sleep, through the first four boots.
 
 ## `deep_sleep`
 

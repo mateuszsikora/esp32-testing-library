@@ -20,10 +20,11 @@ real device at the far end of a route (section 12), came with #28. #105 adds `po
 `chip_reset`, the board's supply and the chip's EN pin, on both sides, #107 the SD card's fault
 rules, `sd_fault`, `sd_clear` and `sd_op` (#260 the `observe` action), #131 `flash_dump` and
 `flash_dump_ack`, a read of the flash in a turn, #34 `hci_tx` and `hci_rx`, the guest's Bluetooth
-HCI with `--bt`, and #245 `uptime`, where each boot's `esp_timer` counts zero on the socket's clock
-(5.24). `console_rx` and `stats.console_rx_lost` are the console on the chip's USB-Serial/JTAG
-controller, with `--console-port usb`, and since #233 on UART0 of the ESP32-P4 and the ESP32-S31,
-whose UARTs have no pins in esp32sim (5.23).
+HCI with `--bt`, #245 `uptime`, where each boot's `esp_timer` counts zero on the socket's clock
+(5.24), and #261 the `hint` of `reset`, the register ESP-IDF's `esp_reset_reason()` reads at the
+next boot (5.5). `console_rx` and `stats.console_rx_lost` are the console on the chip's
+USB-Serial/JTAG controller, with `--console-port usb`, and since #233 on UART0 of the ESP32-P4 and
+the ESP32-S31, whose UARTs have no pins in esp32sim (5.23).
 
 ## 1. Transport
 
@@ -152,7 +153,7 @@ seen exactly the events up to the block point, however the emulator schedules it
 | runner → harness | `uart_tx` | `seq`, `t`, `port`, `tx_pins`, `baud`, `data` | M1 |
 | runner → harness | `uart_cfg` *ext* | `seq`, `t`, `port`, `tx_pins`, `rx_pin`, `baud` | M1 |
 | runner → harness | `gpio_out` | `seq`, `t`, `changes`, `enabled`, `output` | M3 |
-| runner → harness | `reset` | `seq`, `t`, `cause` | M1 |
+| runner → harness | `reset` | `seq`, `t`, `cause`, `hint` | M1, #261 |
 | runner → harness | `sync` | `t` | M1 |
 | runner → harness | `console` | `t`, `data` | M1 |
 | runner → harness | `warn` *ext* | `t`, `kind`, `detail`, and per kind `port`, `pin`, `baud`, `bytes` | M1 |
@@ -210,6 +211,9 @@ to a peer that asked, and without `--flash-out` the message is a protocol error.
 `uptime` (5.24) left the version at 2. The runner sends it on every run, and a harness built before
 it refuses it as `no message type 'uptime' from the runner`; the harness and the runner come from
 one checkout.
+
+`reset`'s `hint` (5.5) left the version at 2 for the same reason. A peer that does not know it
+ignores it (section 2); the harness refuses a `reset` without it, `reset: no hint`.
 
 The Bluetooth messages (`hci_tx`, `hci_rx`, 5.22) pass only on a run started with `--bt`, and the
 version originally stayed 1, as with the Wi-Fi ones: the runner sends `hci_tx` only with `--bt`, which only a
@@ -354,7 +358,7 @@ block point, so a peer that answers a pin, a modem's power key for one, sees it 
 ### 5.5 `reset`
 
 ```json
-{"type": "reset", "seq": 12, "t": 4100000000, "cause": 12}
+{"type": "reset", "seq": 12, "t": 4100000000, "cause": 12, "hint": 2147745796}
 ```
 
 The guest reset. From the run loop: `run` returned `Stop::SwReset`, and `cause` is what
@@ -365,6 +369,31 @@ ESP-IDF's `esp_rom/esp32/include/esp32/rom/rtc.h`). The classic chip in esp32sim
 peer: a `chip_reset` (5.18) and a `power` that brings the supply back (5.17) reset the chip with
 cause 1 (`POWERON_RESET`), at the input's `t`. The power-on at the start of the run sends no
 `reset`, so the `n`-th `reset` of a run starts the chip's boot `n + 1`.
+
+`hint` is the register ESP-IDF keeps its reset-reason hint in, `RTC_RESET_CAUSE_REG` of the chip's
+`esp_rom/<chip>/include/<chip>/rom/rtc.h`, as the guest left it: the runner reads it through the
+bus just before `reboot()`, as a 32-bit number. The panic handler, the task and interrupt
+watchdogs and the brownout handler write `h | h << 16 | 0x80000000` there for an
+`esp_reset_reason_t` `h` before they reset the chip, and the next boot's `esp_reset_reason()`
+takes it for the reason of a software reset, causes 3 and 12, which the ROM reports alike for
+`esp_restart()` and a panic. The example is `ESP_RST_PANIC`'s, 4. The register also holds a
+deep-sleep wake stub's address, and whatever else the guest wrote there; the runner sends it as it
+is. A reset from the peer has `hint` 0: a power-on clears the RTC registers.
+
+| Chip | Register | Address |
+|---|---|---|
+| ESP32 | `RTC_CNTL_STORE6_REG` | `0x3ff480b8` |
+| ESP32-S3 | `RTC_CNTL_STORE6_REG` | `0x600080c8` |
+| ESP32-C3 | `RTC_CNTL_STORE6_REG` | `0x600080c0` |
+| ESP32-C6 | `LP_AON_STORE6_REG` | `0x600b1018` |
+| ESP32-P4 | `LP_SYSTEM_REG_LP_STORE6_REG` | `0x50110044` |
+| ESP32-S31 | `LP_SYSTEM_REG_LP_STORE6_REG` | `0x20700044` |
+
+The chip keeps the register through every reset but a power-on, and so does esp32sim on four of
+the six chips. On the ESP32-C3 and the ESP32-S31 esp32sim's reset makes it anew, zero, and the
+runner writes the value it read back after `reboot()`, so that the firmware's
+`esp_reset_reason()` reads it as on the chip
+([runner technical documentation](features/runner-technical.md#the-reset-reason-hint)).
 
 The board persists across a reset, as on a real board where a firmware restart does not reset the
 modem (the supply going off is another matter, 5.17): levels the peer drives stay driven, queued inputs stay queued, and paced bytes keep coming.

@@ -27,6 +27,7 @@ from esp32tl.bluetooth.air import Air, AirError
 from esp32tl.bluetooth.controller import GIAC, Controller
 from esp32tl.bluetooth.guest import ACL_LENGTH, ADDRESS, GuestController
 from esp32tl.bluetooth.peer import SERVICE_NAME, BluetoothDevice, SppPeer
+from esp32tl.boards import profile
 from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import NeverHappened, SourceError
 from esp32tl.interfaces.bluetooth import LATENCY_NS, Bluetooth, BluetoothError
@@ -942,6 +943,8 @@ def test_the_guest_controller_is_a_controller_of_the_air() -> None:
 def backend_with(bt: Bluetooth) -> Esp32Sim:
     """An `Esp32Sim` past power-on, with only what its supply, its reset and its Bluetooth read."""
     backend = Esp32Sim.__new__(Esp32Sim)
+    # its chip names the reset in the run's log
+    backend.profile = profile("esp32-devkitc")
     backend._bluetooth = bt
     backend._hold = HeldClock()
     backend.process = cast(Any, object())
@@ -978,7 +981,7 @@ def test_the_backend_s_supply_and_the_runner_s_resets_reach_the_controller(
     backend._switch(True)
     assert bt.air._link.present(GUEST)
     bt.air.call(lambda: bt.on_packet(bytes.fromhex("040e0401030c00")))
-    backend._reset(Reset(1, 5 * MS, 1))
+    backend._reset(Reset(1, 5 * MS, 1, 0))
     assert bt.air.now == Duration(5 * MS) and list(bt.poll(5 * MS)) == []
     assert peer.present
 

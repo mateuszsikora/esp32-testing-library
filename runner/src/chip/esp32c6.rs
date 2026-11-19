@@ -72,6 +72,11 @@ impl Target for esp32c6::Machine {
     }
 }
 
+/// LP_AON_STORE6, `RTC_RESET_CAUSE_REG` of ESP-IDF's `esp_rom/esp32c6/include/esp32c6/rom/rtc.h`:
+/// `DR_REG_LP_AON_BASE + 0x18` (v5.3.6 `soc/esp32c6/include/soc/lp_aon_reg.h`). esp32sim's reset
+/// keeps it with the rest of the LP domain (`esp32c6/src/soc.rs`, `reboot`).
+pub(crate) const RESET_HINT: u32 = 0x600b_1018;
+
 /// Work around esp32sim 357b0e5's zeroed IO_MUX reset state on U0RXD, GPIO 17, as on the
 /// classic chip (`chip::esp32::reset_console_rx`): the ESP32-C6 TRM, table 7.12-1, gives it function 0, U0RXD, input and
 /// pull-up enabled, drive strength 2. Set only at reset; what the firmware writes afterwards stays.
@@ -102,6 +107,9 @@ impl Guest for esp32c6::Machine {
         let cause = self.reboot();
         reset_console_rx(self);
         cause
+    }
+    fn reset_hint(&mut self) -> u32 {
+        super::read_reset_hint(&mut self.bus, RESET_HINT)
     }
     fn power_on_reset(&mut self, rom: &[u8]) -> u32 {
         use esp32c6::bus::*;

@@ -70,9 +70,12 @@ keeps it, and the build's files are never written. The test reads it with
 after the run. The card in the slot is the test's image file,
 which keeps what the firmware wrote through every reset and power cycle; with the supply off the
 card loses its power, and the firmware's driver has to mount it again. Each reset goes into the
-run's log as `boot N: REASON (reset cause C)`, and into the link's statistics as one of its
-`resets`. A reset, whatever caused it, and `board.power_off()` end the TCP connections the test
-opened to the device, as `lost`, and leave the device without an address on the simulated network
+run's log as `boot N: REASON, IDF_REASON (reset cause C)`, and into the link's statistics as one
+of its `resets`. REASON is the ROM's name for the cause, and IDF_REASON the name ESP-IDF's
+`esp_reset_reason()` gives the boot, `boot.idf_reason`, from the cause and the hint the runner
+read with it: `ESP_RST_PANIC` rather than `ESP_RST_SW` after a panic, which the ROM reports as
+`esp_restart()`'s `SW_CPU_RESET`. A reset, whatever caused it, and `board.power_off()` end the TCP
+connections the test opened to the device, as `lost`, and leave the device without an address on the simulated network
 until it takes one again ([network](network-user.md#open-a-tcp-connection-to-the-device)).
 
 A classic ESP32 in deep sleep with a timer wake wakes on its RTC timer, through a
@@ -386,16 +389,19 @@ work is skipped at the call that asks for it:
 | An SD card (`sd_card`) | `esp32sim's ESP32-P4 tells the board no SPI pins (#229, G6)` | `esp32sim's ESP32-S31 tells the board no SPI pins (#229, G7)` |
 | Wi-Fi (`wifi`) | `the ESP32-P4 has no Wi-Fi of its own, and esp32sim's co-processor for it is not in the runner` | `esp32sim's ESP32-S31 has no Ethernet relay for the test's network (#229, G7)` |
 | Bluetooth (`bt`) | `the ESP32-P4 has no Bluetooth` | `esp32sim models no Bluetooth on the ESP32-S31` |
-| Deep sleep | Not modelled by esp32sim; no validation image sleeps there. TODO(owner): what a firmware that sleeps sees, not measured | the same |
+| Deep sleep | Not modelled by esp32sim: the firmware goes to sleep and never wakes, as on the S3, C3 and C6. `firmware/reset_reasons`, which sleeps with a 100 ms timer wake, prints nothing more and has no other boot in the 3 s of the board's time after its sleep, measured in a run of the runner without a peer at the esp32sim pin `357b0e5` | the same |
 
 On the S3 and the C3, `bt` is the firmware's controller: a BLE host gets through its start-up and
 advertises (`bt.unknown_commands()` stays empty), and `bt.tap(path)` records its HCI. esp32tl's
 own Bluetooth peers are Bluetooth Classic devices, which a BLE-only chip cannot reach, so a test
 cannot yet scan for the firmware or connect to it:
 [issue #234](https://github.com/mateuszsikora/esp32-testing-library/issues/234). A boot's reason
-names the chip's reset cause with the classic ESP32's names (`boot N: SW_CPU_RESET (reset cause
-12)`): the numbers 1, 3, 5 and 12 mean the same on every chip, a power-on, a software system
-reset, a wake from deep sleep and `esp_restart()`.
+names the chip's reset cause with the classic ESP32's names (`boot N: SW_CPU_RESET, ESP_RST_SW
+(reset cause 12)`): the numbers 1, 3, 5 and 12 mean the same on every chip, a power-on, a software system
+reset, a wake from deep sleep and `esp_restart()`. Its `idf_reason` follows the chip's own ESP-IDF
+table ([pytest plugin](pytest-plugin-user.md#resets-and-power-cycles)), and on the C3 and the S31
+too it is what the firmware's `esp_reset_reason()` reads: esp32sim forgets the hint register at a
+reset there, and the runner puts it back ([runner](runner-user.md#chips)).
 
 ### A console on USB-Serial/JTAG
 

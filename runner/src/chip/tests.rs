@@ -489,3 +489,81 @@ fn the_s31_console_input_waits_until_uart0_takes_it() {
     Guest::chip_reset(&mut s);
     assert_eq!(s.console_queued(), 0);
 }
+
+/// The reset-reason hint the guest leaves in `RTC_RESET_CAUSE_REG` is what `reset_hint` reads,
+/// before and after a chip reset, which keeps it, through esp32sim or the runner putting it back;
+/// a power-on clears it.
+macro_rules! reset_hint_test {
+    ($name:ident, $machine:ty, $m:ident => $bus:expr, $address:expr) => {
+        #[test]
+        fn $name() {
+            let mut $m = <$machine as Target>::new(4 << 20);
+            // ESP_RST_PANIC, as `esp_reset_reason_set_hint` writes it
+            let hint = 0x8004_0004;
+            $bus.write32($address, hint).unwrap();
+            assert_eq!(Guest::reset_hint(&mut $m), hint);
+            $bus.request_reset(12);
+            assert_eq!(Guest::chip_reset(&mut $m), 12);
+            assert_eq!(
+                Guest::reset_hint(&mut $m),
+                hint,
+                "kept through the chip reset"
+            );
+            Guest::power_on_reset(&mut $m, &empty_rom());
+            assert_eq!(Guest::reset_hint(&mut $m), 0, "cleared by the power-on");
+        }
+    };
+}
+reset_hint_test!(
+    the_classic_chip_keeps_its_reset_hint,
+    ::esp32::Machine,
+    m => m.bus,
+    esp32::RESET_HINT
+);
+reset_hint_test!(
+    the_s3_keeps_its_reset_hint,
+    ::esp32s3::Machine,
+    m => m.bus,
+    esp32s3::RESET_HINT
+);
+reset_hint_test!(
+    the_c3_keeps_its_reset_hint,
+    ::esp32c3::Machine,
+    m => m.bus,
+    esp32c3::RESET_HINT
+);
+reset_hint_test!(
+    the_c6_keeps_its_reset_hint,
+    ::esp32c6::Machine,
+    m => m.bus,
+    esp32c6::RESET_HINT
+);
+reset_hint_test!(
+    the_p4_keeps_its_reset_hint,
+    esp32p4::P4<::esp32p4::RevGe3>,
+    m => m.bus,
+    esp32p4::RESET_HINT
+);
+reset_hint_test!(
+    the_s31_keeps_its_reset_hint,
+    esp32s31::S31,
+    s => s.m.bus,
+    esp32s31::RESET_HINT
+);
+
+/// Without the runner, esp32sim's chip reset forgets the C3's and the S31's hint register, which
+/// the chip keeps: what `chip_reset` puts back there.
+#[test]
+fn esp32sim_forgets_the_c3_and_s31_reset_hint() {
+    let mut c3 = <::esp32c3::Machine as Target>::new(4 << 20);
+    c3.bus.write32(esp32c3::RESET_HINT, 0x8004_0004).unwrap();
+    c3.reboot();
+    assert_eq!(c3.bus.read32(esp32c3::RESET_HINT).unwrap(), 0);
+    let mut s31 = <esp32s31::S31 as Target>::new(4 << 20);
+    s31.m
+        .bus
+        .write32(esp32s31::RESET_HINT, 0x8004_0004)
+        .unwrap();
+    s31.m.reboot();
+    assert_eq!(s31.m.bus.read32(esp32s31::RESET_HINT).unwrap(), 0);
+}

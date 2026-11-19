@@ -153,7 +153,7 @@ def test_build_refuses_an_unknown_image(tmp_path: Path) -> None:
         " hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at"
         " modem_recovery nvs_reader"
         " pppos_client mqtt_session http_request http_server persistence ota_state timer_wake"
-        " deep_sleep"
+        " reset_reasons deep_sleep"
         " bt_spp_initiator bt_spp_initiator_psram hello_world_8mb\n"
     )
     assert not (tmp_path / "out").exists()
@@ -275,6 +275,7 @@ def test_local_build_runs_idf_py_and_records_how(tmp_path: Path, local_idf: dict
         "persistence": str(ROOT / "firmware" / "persistence"),
         "ota_state": str(ROOT / "firmware" / "ota_state"),
         "timer_wake": str(ROOT / "firmware" / "timer_wake"),
+        "reset_reasons": str(ROOT / "firmware" / "reset_reasons"),
         "deep_sleep": f"{tmp_path}/idf/examples/system/deep_sleep",
         "bt_spp_initiator": (
             f"{tmp_path}/idf/examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator"
@@ -463,6 +464,9 @@ def test_chip_images_build_their_projects_for_the_chip(
         (image, chip, project) for chip in ("esp32p4", "esp32s31") for image, project in new.items()
     ]
     entries.append(("hello_world_rev1", "esp32p4", hello))
+    resets = str(ROOT / "firmware" / "reset_reasons")
+    chips = ("esp32s3", "esp32c3", "esp32c6", "esp32p4", "esp32s31")
+    entries += [("reset_reasons", chip, resets) for chip in chips]
     expected = []
     for image, chip, project in entries:
         build = out / image / f"build-{chip}"
@@ -560,6 +564,7 @@ def test_chip_filter_keeps_the_images_of_the_chips_it_names(tmp_path: Path) -> N
             "nvs_reader",
             "hello_world_psram",
             "hello_world_rev1",
+            "reset_reasons",
         )
     ]
     assert arguments.count("firmware/build.sh") == 1

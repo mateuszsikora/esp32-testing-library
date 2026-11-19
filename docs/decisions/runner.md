@@ -1289,3 +1289,23 @@ keeps the trait's `uptime`, `Stopped`, and the run sends no `uptime`
 moves the source or the divider would make wrong without a word.
 
 **Not yet:** the S31's uptime, which needs the divider from esp32sim.
+
+## The runner puts the reset-reason hint back where esp32sim forgets it
+
+Status: decided (#261)
+
+On the ESP32-C3 and the ESP32-S31, esp32sim 357b0e5's chip reset makes RTC_CNTL or the S31's bus
+anew, and with it zeroes `RTC_RESET_CAUSE_REG`, which the chip keeps through every reset but a
+power-on. The runner's `chip_reset` reads the register before `reboot()` and writes it back after,
+so that a firmware's `esp_reset_reason()` reports a panic as `ESP_RST_PANIC` there as on the chip,
+and `Boot.idf_reason`, computed from the same value, agrees with it. Only this register is put
+back: the rest of RTC_CNTL's and LP_SYS's store registers stay as esp32sim leaves them.
+
+**Rejected:** sending the hint without putting it back, because the firmware under test would then
+report `ESP_RST_SW` after a panic while `Boot.idf_reason` says `ESP_RST_PANIC`; and putting back
+every store register, because the ROM and the bootloader read others of them (the XTAL
+frequency, a wake stub and its CRC), and what they would do with them on esp32sim's C3 and S31 is
+untested here.
+
+**Not yet:** esp32sim keeping RTC_CNTL's registers through the C3's reset, and the S31's LP_STORE
+registers, as it does on the other chips; the runner's write goes once it does.

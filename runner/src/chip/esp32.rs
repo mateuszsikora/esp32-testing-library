@@ -82,6 +82,11 @@ impl Target for esp32::Machine {
     }
 }
 
+/// RTC_CNTL_STORE6, `RTC_RESET_CAUSE_REG` of ESP-IDF's `esp_rom/esp32/include/esp32/rom/rtc.h`:
+/// `DR_REG_RTCCNTL_BASE + 0xb8` (v5.3.6 `soc/esp32/include/soc/rtc_cntl_reg.h`). esp32sim's reset
+/// keeps it with the rest of RTC_CNTL (`esp32/src/soc.rs`, `reboot`).
+pub(crate) const RESET_HINT: u32 = 0x3ff4_80b8;
+
 /// Where the classic chip's SRAM and RTC memories are on the data bus, besides the DRAM, which
 /// ends at `esp32::bus::DRAM_HIGH` (`esp32/src/bus.rs`, `SocBus::memory`).
 const CACHE_RAM: u32 = 0x4007_0000;
@@ -183,6 +188,9 @@ impl Guest for esp32::Machine {
         let cause = self.reboot();
         reset_console_rx(self);
         cause
+    }
+    fn reset_hint(&mut self) -> u32 {
+        super::read_reset_hint(&mut self.bus, RESET_HINT)
     }
     fn power_on_reset(&mut self, rom: &[u8]) -> u32 {
         // the cores, the digital peripherals and PSRAM, as at any reset

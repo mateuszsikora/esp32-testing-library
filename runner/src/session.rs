@@ -73,8 +73,17 @@ pub trait Guest {
     fn cycles(&self) -> u64;
     /// Runs until the bus reaches `cycle` or something stops the guest first.
     fn run_until(&mut self, cycle: u64) -> Stop;
-    /// After `Stop::SwReset`: the chip reset, returning the cause the ROM will report.
+    /// After `Stop::SwReset`: the chip reset, returning the cause the ROM will report. A chip
+    /// whose reset in esp32sim forgets its reset-reason hint register (`reset_hint`), which the
+    /// chip keeps, puts it back.
     fn chip_reset(&mut self) -> u32;
+    /// The register ESP-IDF keeps its reset-reason hint in, `RTC_RESET_CAUSE_REG` of the chip's
+    /// `esp_rom/<chip>/include/<chip>/rom/rtc.h` (`RTC_CNTL_STORE6` on the classic ESP32), as
+    /// the guest left it: read before `chip_reset`, for `reset` (protocol 5.5). The default is a
+    /// scripted guest's, which writes none.
+    fn reset_hint(&mut self) -> u32 {
+        0
+    }
     /// The chip's power-on reset, from EN or from the board's supply coming back: SRAM, the RTC
     /// memories and the RTC registers start again as at the run's first power-on, and the flash
     /// keeps what the guest wrote to it. `rom` is the mask ROM's ELF. Returns the cause the ROM
@@ -319,6 +328,7 @@ enum Item {
     Reset {
         cycle: u64,
         cause: u32,
+        hint: u32,
     },
     /// The routes as read at a slice boundary or right after a reset.
     Routes {
@@ -600,8 +610,9 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     // what the guest did before the reset goes out before it
                     self.collect();
                     self.count_wifi_drops();
+                    let hint = self.guest.reset_hint();
                     let cause = self.guest.chip_reset();
-                    self.reset(cause);
+                    self.reset(cause, hint);
                 }
                 stop => return Err(End::Emulator(stop)),
             }
@@ -835,16 +846,17 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         }
     }
 
-    /// What follows every reset of the chip, at the bus's cycle: the `reset` with its `cause`, and
-    /// the routes and pins the reset changed without the hooks that would report them.
-    fn reset(&mut self, cause: u32) {
+    /// What follows every reset of the chip, at the bus's cycle: the `reset` with its `cause` and
+    /// the reset-reason `hint` the guest left, and the routes and pins the reset changed without
+    /// the hooks that would report them.
+    fn reset(&mut self, cause: u32, hint: u32) {
         let cycle = self.guest.cycles();
         eprintln!(
             "esp32tl-runner: chip reset at {:.6} s, cause {cause:#x}",
             ns(cycle) as f64 / 1e9
         );
         self.stats.resets += 1;
-        self.pending.push_back(Item::Reset { cycle, cause });
+        self.pending.push_back(Item::Reset { cycle, cause, hint });
         // the reset stops the counter: the new boot's starts from it at the earliest
         self.uptime = UptimeWatch::new(cycle);
         let routes = self.routes();
@@ -873,7 +885,8 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 self.guest.wifi_forget();
             }
         }
-        self.reset(cause);
+        // a power-on clears the RTC registers, the hint's among them
+        self.reset(cause, 0);
     }
 
     /// The board's supply goes off: the guest stops where it is, no pad is driven and no UART
@@ -1080,8 +1093,8 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                         protocol::gpio_out(seq, t, &changes, enabled, output)
                     })?;
                 }
-                Item::Reset { cause, .. } => {
-                    self.event(t, |seq| protocol::reset(seq, t, cause))?;
+                Item::Reset { cause, hint, .. } => {
+                    self.event(t, |seq| protocol::reset(seq, t, cause, hint))?;
                 }
                 Item::Routes { routes, .. } => {
                     for route in routes {

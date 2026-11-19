@@ -52,6 +52,8 @@ enum Act {
     Tx(usize, u8),
     Route(UartRoute),
     Reset(u32),
+    /// The guest writes its reset-reason hint register (`Guest::reset_hint`).
+    Hint(u32),
     /// The guest reads its RX FIFO empty.
     Drain(usize),
     /// The guest writes `GPIO_ENABLE` and `GPIO_OUT`, and the pads follow them.
@@ -131,6 +133,8 @@ struct FakeGuest {
     uart0_in: Vec<(u64, Vec<u8>)>,
     /// With `--no-bt`: the guest's calls to `esp_bt_controller_init` so far.
     bt_inits: Option<u64>,
+    /// The reset-reason hint register, as `Act::Hint` last wrote it.
+    hint: u32,
 }
 
 /// Why `FakeGuest` lost a received byte.
@@ -174,6 +178,7 @@ impl FakeGuest {
             uart0: None,
             uart0_in: Vec::new(),
             bt_inits: None,
+            hint: 0,
         }
     }
 
@@ -255,6 +260,7 @@ impl Guest for FakeGuest {
                     byte,
                 }),
                 Act::Route(r) => self.routes[r.port] = r,
+                Act::Hint(hint) => self.hint = hint,
                 Act::Reset(cause) => {
                     self.script.push_front((at, Act::Reset(cause)));
                     return Stop::SwReset;
@@ -321,7 +327,11 @@ impl Guest for FakeGuest {
         self.uptime = Uptime::Stopped;
         cause
     }
+    fn reset_hint(&mut self) -> u32 {
+        self.hint
+    }
     fn power_on_reset(&mut self, _rom: &[u8]) -> u32 {
+        // the hint stays, so that a `reset` with none shows the run loop sent none
         self.power_resets.push(self.now);
         if self.hci.is_some() {
             self.forwarder().reset();
@@ -1102,10 +1112,12 @@ fn bytes_before_the_block_point_go_out_before_the_sync() {
 }
 
 #[test]
-fn a_reset_is_forwarded_with_its_cause_and_the_reset_routes() {
+fn a_reset_is_forwarded_with_its_cause_its_hint_and_the_reset_routes() {
     let at = cycles(2 * MS) + 5;
     let guest = FakeGuest::new(vec![
         (cycles(MS), Act::Tx(1, b'x')),
+        // ESP_RST_PANIC, as `esp_reset_reason_set_hint` writes it
+        (at - 1, Act::Hint(0x8004_0004)),
         (at, Act::Reset(12)),
         (at + 100, Act::Route(modem(115_200))),
     ])
@@ -1139,6 +1151,7 @@ fn a_reset_is_forwarded_with_its_cause_and_the_reset_routes() {
         ]
     );
     assert_eq!(num(r.peer.of("reset")[0], "cause"), 12);
+    assert_eq!(num(r.peer.of("reset")[0], "hint"), 0x8004_0004);
     let after_reset = r.peer.of("uart_cfg")[1];
     assert_eq!(after_reset.get("baud"), Some(&Json::Null));
     assert_eq!(after_reset.get("rx_pin"), Some(&Json::Null));
@@ -2836,7 +2849,7 @@ fn scripted(script: Vec<(u64, String)>) -> impl FnMut(&Turn) -> Vec<String> {
 
 #[test]
 fn with_the_supply_off_the_guest_runs_nothing_and_its_time_goes_on() {
-    let guest = FakeGuest::new(vec![]).with_routes(&[modem(115_200)]);
+    let guest = FakeGuest::new(vec![(10, Act::Hint(0x8004_0004))]).with_routes(&[modem(115_200)]);
     let peer = FakePeer::new(
         &[MODEM_TX, MODEM_RX],
         scripted(vec![
@@ -2867,6 +2880,8 @@ fn with_the_supply_off_the_guest_runs_nothing_and_its_time_goes_on() {
     let reset = r.peer.of("reset");
     assert_eq!(reset.len(), 1);
     assert_eq!((num(reset[0], "t"), num(reset[0], "cause")), (40 * MS, 1));
+    // the power-on clears the RTC registers: no hint is left for the new boot
+    assert_eq!(num(reset[0], "hint"), 0);
     assert_eq!(r.guest.power_resets, [on]);
     assert_eq!(r.stats.resets, 1);
 }
