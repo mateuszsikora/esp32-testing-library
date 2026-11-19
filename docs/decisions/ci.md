@@ -673,15 +673,14 @@ solely to trigger a tag-push event adds setup and privilege without benefit. Dir
 Runtime release remain verification-only; the explicit reusable input is a distinct release path.
 
 Amended 19 November 2026, after v0.2.0 (#272): the preparation workflow approves its PR's
-`pull_request` runs instead of dispatching `ci.yml` on the branch. The approval policy counts
-`github-actions[bot]` as an external contributor, so those runs wait in `action_required`, and the
-dispatched run's checks, though all 30 passed on the head commit, did not count for the PR, which
-stayed blocked until a maintainer approved the runs by hand. **Rejected:** lowering the approval
-policy, which would also lift it for forks (see
-[the fork approval decision](#public-fork-runs-require-approval-from-all-external-contributors));
-a PAT or GitHub App token to open the PR, whose runs would then start without approval, which adds
-a stored credential and its setup as the tag would; and leaving approval as a manual step, which
-every release would hit.
+`pull_request` runs instead of dispatching `ci.yml` on the branch. GitHub starts the runs of a
+PR opened with `GITHUB_TOKEN` in an approval-required state, whatever the fork approval policy,
+so those runs wait in `action_required`; the dispatched run's checks, though all 30 passed on the
+head commit, did not count for the PR, which stayed blocked until a maintainer approved the runs
+by hand. **Rejected:** a PAT or GitHub App token to open the PR, GitHub's documented way to start
+the runs without approval, which adds a stored credential and its setup as the tag would; it is
+the fallback if GitHub refuses `GITHUB_TOKEN` the approval, which is not yet tested. Also
+rejected: leaving approval as a manual step, which every release would hit.
 
 ## Verify exact version diffs before using lightweight CI
 

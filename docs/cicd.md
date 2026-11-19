@@ -492,13 +492,18 @@ option was enabled with the owner's approval on 16 November 2026; the default to
 remains `read`. The workflow creates PRs; it does not review or merge them. Its write permissions are limited to
 contents, pull requests and Actions.
 
-The PR's `pull_request` runs of **CI** and **Runtime release** start in `action_required`: the
-fork approval policy above counts `github-actions[bot]` as an external contributor, and the
-required checks wait with them. The workflow's last step, **Approve the pull request's workflow
-runs**, waits up to two minutes for the PR's CI run, then approves every `pull_request` run of
-the PR's head commit in `action_required` (`POST /repos/{owner}/{repo}/actions/runs/{run_id}/approve`, with the
+The PR's `pull_request` runs of **CI** and **Runtime release** start in `action_required`, and
+the required checks wait with them. This is GitHub's rule for a PR opened or updated with
+`GITHUB_TOKEN`, not the fork approval policy above, and it applies whether or not the PR comes
+from a fork: such runs wait until a user with write access selects **Approve workflows to run**
+([GitHub's `GITHUB_TOKEN` documentation](https://docs.github.com/en/actions/concepts/security/github_token)).
+The workflow's last step, **Approve the pull request's workflow runs**, waits up to two minutes
+until both runs exist for the PR's head commit, then approves every `pull_request` run of that
+commit in `action_required` (`POST /repos/{owner}/{repo}/actions/runs/{run_id}/approve`, with the
 job's `actions: write`). It tries every such run before failing, and logs a line when none
-waits. Dispatching `ci.yml` on the branch is no substitute: for v0.2.0 (#272) a
+waits. Whether GitHub lets `GITHUB_TOKEN` approve runs it caused is not yet known; the next
+preparation is the first test, and if it is refused, the documented way out is a GitHub App
+token for opening the PR. Dispatching `ci.yml` on the branch is no substitute: for v0.2.0 (#272) a
 dispatched run passed all 30 required checks on the PR's head commit, yet the PR stayed
 `BLOCKED`: the PR's checks list only runs GitHub links to the PR, and the dispatched run's check
 suite links none.
@@ -512,8 +517,9 @@ gh workflow run prepare-release.yml --ref main -f version=0.1.1
 The preparation job has a five-minute timeout and is serialized. Existing release branches are
 never force-pushed. If creating the PR fails after the branch push, open it from the existing
 branch; do not rerun preparation expecting it to overwrite that branch. If an approval fails,
-the step's errors name each run it could not approve; if no CI run appeared in two minutes, the
-error names none. Either way, approve the waiting runs with **Approve and run** on the PR, or with
+the step's errors name each run it could not approve; if a run did not appear in two minutes,
+the error names the workflow but no run. Either way, approve the waiting runs with **Approve
+workflows to run** on the PR, or with
 `gh api -X POST repos/mateuszsikora/esp32-testing-library/actions/runs/RUN_ID/approve`. The PR's
 description says the last step approves its runs, whether or not it managed to.
 

@@ -64,19 +64,28 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # github-actions[bot] is an external contributor to the approval policy, so the runs
-          # its pull request starts wait in action_required, and the required checks with them.
-          # A run dispatched on the branch does not count: its checks are not the pull request's.
+          # A pull request opened with GITHUB_TOKEN starts its pull_request runs in an
+          # approval-required state, and the required checks wait with them. A run dispatched on
+          # the branch does not count: its checks are not the pull request's.
+          # Both workflows run on this pull request: Runtime release's paths cover pyproject.toml
+          # and runner/.
           head=$(git rev-parse HEAD)
           runs="repos/$GITHUB_REPOSITORY/actions/runs?event=pull_request&head_sha=$head"
+          expected=(CI 'Runtime release')
+          missing=("${expected[@]}")
           for _ in $(seq 24); do
             sleep 5
-            gh api "$runs" --jq '.workflow_runs[].name' | grep -qx CI && break
+            gh api "$runs" --jq '.workflow_runs[] | [.id, .name, .conclusion // ""] | @tsv' > "$RUNNER_TEMP/runs.tsv" || continue
+            missing=()
+            for name in "${expected[@]}"; do
+              cut -f2 "$RUNNER_TEMP/runs.tsv" | grep -qxF "$name" || missing+=("$name")
+            done
+            [ "${#missing[@]}" -eq 0 ] && break
           done
-          sleep 5
-          gh api "$runs" --jq '.workflow_runs[] | [.id, .name, .conclusion // ""] | @tsv' > "$RUNNER_TEMP/runs.tsv"
-          if ! cut -f2 "$RUNNER_TEMP/runs.tsv" | grep -qx CI; then
-            echo "::error::No CI run started for $head in two minutes; approve the pull request's runs under Actions once they appear."
+          if [ "${#missing[@]}" -gt 0 ]; then
+            for name in "${missing[@]}"; do
+              echo "::error::No $name run started for $head in two minutes; approve it with Approve workflows to run on the pull request once it appears."
+            done
             exit 1
           fi
           waiting=0
