@@ -17,6 +17,8 @@ first, a connection, a disconnection and its reason, a write, a notification, a 
 the device's `events` and, on the board's air, into the run log and `board.report()`.
 """
 
+import asyncio
+import re
 from collections.abc import Callable, Coroutine, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, NamedTuple, TypeVar
@@ -74,6 +76,9 @@ PROPERTIES = {
     "notify": gatt.Characteristic.Properties.NOTIFY,
     "indicate": gatt.Characteristic.Properties.INDICATE,
 }
+
+# The Client Characteristic Configuration descriptor (Vol 3, Part G, 3.3.3.3).
+CCCD = UUID.from_16_bits(0x2902)
 
 # The IO capabilities a device's user has for LE pairing (Vol 3, Part H, 2.3.2), by the names a
 # test gives them: the Classic ones, and a keyboard with a display.
@@ -460,7 +465,16 @@ class BleDevice(Radio):
             keys = await self.device.keystore.get(str(connection.peer_address))
         try:
             if keys is not None and _has_ltk(keys):
-                await connection.encrypt()
+                try:
+                    await connection.encrypt()
+                except Exception as error:
+                    # As a peer that forgot the bond refuses the key: noted, and not paired again
+                    # by itself; `central.pair()` pairs again.
+                    if self._connection is connection:
+                        self._note(
+                            f"encryption with {_named(connection.peer_address)} failed:"
+                            f" {_why(error)}"
+                        )
             else:
                 await connection.pair()
         except Exception:
@@ -549,6 +563,13 @@ class BleDevice(Radio):
         async def run() -> None:
             try:
                 outcome["result"] = await coroutine
+            except asyncio.CancelledError:
+                # The task itself cancelled, as when the air is over, stays cancelled; what Bumble
+                # cancels under it, the pending answer of a link that fell, ends the operation.
+                task = asyncio.current_task()
+                if task is not None and task.cancelling():
+                    raise
+                outcome["error"] = BleError("the connection ended before the answer came")
             except Exception as error:
                 outcome["error"] = error
 
@@ -710,7 +731,7 @@ class BlePeripheral(BleDevice):
                 else AdvertisingType.UNDIRECTED_SCANNABLE
             ),
             own_address_type=hci.OwnAddressType.PUBLIC,
-            auto_restart=True,
+            auto_restart=False,
             advertising_data=self._advertising_data,
             scan_response_data=self._scan_response,
             advertising_interval_min=interval_ms,
@@ -771,6 +792,10 @@ class BlePeripheral(BleDevice):
 
     def _disconnected(self, connection: Connection) -> None:
         self._subscribed.clear()
+        # Advertising again once the connection ends, while switched on: Bumble's own restart
+        # (`auto_restart`) runs also after the disconnection a power loss makes.
+        if self._on:
+            self.air._loop.create_task(self._advertise())
 
     def subscribed(self, uuid: str) -> bool:
         """Whether the connected central subscribed to the characteristic's notifications or
@@ -1047,7 +1072,13 @@ class BleCentral(BleDevice):
 
             return on
 
-        self._receiver = received
+        # One callback for each characteristic and kind, so that subscribing again adds none.
+        receivers: dict[tuple[str, bool], Callable[[bytes], None]] = {}
+
+        def receiver(key: str, indication: bool) -> Callable[[bytes], None]:
+            return receivers.setdefault((key, indication), received(key, indication))
+
+        self._receiver = receiver
 
     def _disconnected(self, connection: Connection) -> None:
         self._peer = None
@@ -1142,6 +1173,14 @@ class BleCentral(BleDevice):
 
         async def subscribe() -> Subscription:
             characteristic = await self._characteristic(key)
+            wanted = PROPERTIES["indicate" if indicate else "notify"]
+            what = "indications" if indicate else "notifications"
+            if not characteristic.properties & wanted:
+                raise BleError(f"{key} of {self.peer} sends no {what}")
+            if not any(d.type == CCCD for d in characteristic.descriptors):
+                raise BleError(
+                    f"{key} of {self.peer} has no Client Characteristic Configuration descriptor"
+                )
             await characteristic.subscribe(
                 self._receiver(key, indicate), prefer_notify=not indicate
             )
@@ -1190,23 +1229,35 @@ class BleCentral(BleDevice):
 # Helpers.
 
 
+# A UUID as a test writes it: 4 hex digits, or 32, bare or with the dashes of the 8-4-4-4-12 form.
+UUID_TEXT = re.compile(
+    r"[0-9A-Fa-f]{4}|[0-9A-Fa-f]{32}"
+    r"|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
+)
+
+# The tail of the Bluetooth base UUID, 0000xxxx-0000-1000-8000-00805F9B34FB, in hex.
+BASE_UUID_TAIL = "00001000800000805F9B34FB"
+
+
 def _uuid(kind: str, text: str) -> UUID:
     """`text` as a UUID: 4 hex digits for a 16-bit one, or a 128-bit one; a `PeerError` naming
     `kind` for anything else."""
-    if isinstance(text, str):
-        bare = text.replace("-", "")
-        if len(bare) in (4, 32) and all(c in "0123456789abcdefABCDEF" for c in bare):
-            return UUID(text)
+    if isinstance(text, str) and UUID_TEXT.fullmatch(text):
+        return UUID(text)
     raise PeerError(
         f"{kind}: uuid is {text!r}, not a 16-bit UUID in hex, as 'FF01', or a 128-bit one"
     )
 
 
 def _text(uuid: UUID) -> str:
-    """A UUID as the test writes it: `FF01`, or the 128-bit form with its dashes."""
-    if len(uuid.uuid_bytes) == 2:
-        return uuid.to_hex_str()
+    """A UUID as the test writes it, and as esp32tl compares UUIDs: `FF01`, also for the 128-bit
+    form of a 16-bit UUID on the Bluetooth base (Vol 3, Part B, 2.5.1), and the 128-bit form with
+    its dashes for any other."""
     hex_ = uuid.to_hex_str()
+    if len(uuid.uuid_bytes) == 2:
+        return hex_
+    if hex_.startswith("0000") and hex_.endswith(BASE_UUID_TAIL):
+        return hex_[4:8]
     return f"{hex_[:8]}-{hex_[8:12]}-{hex_[12:16]}-{hex_[16:20]}-{hex_[20:]}"
 
 
@@ -1255,37 +1306,44 @@ def _advertising(
     scan response. A name too long for either goes as a shortened name, its first bytes, as many
     whole characters as a scan response holds (Supplement, Part A, 1.2); the device's GATT name is
     whole. Anything else that fits in neither is a `PeerError`."""
-    parts = []
+    fields: list[tuple[str, int, bytes]] = []
     if len(name) > AD_MAX - 2:
         short = name[: AD_MAX - 2].decode(errors="ignore").encode()
-        parts.append(("the shortened name", _ad(AD_SHORT_NAME, short)))
+        fields.append(("the shortened name", AD_SHORT_NAME, short))
     elif name:
-        parts.append(("the name", _ad(AD_NAME, name)))
+        fields.append(("the name", AD_NAME, name))
     sixteen = [_uuid("BlePeripheral", u) for u in uuids if len(u) == 4]
     long = [_uuid("BlePeripheral", u) for u in uuids if len(u) != 4]
     if sixteen:
-        parts.append(
-            ("the 16-bit service UUIDs", _ad(AD_UUIDS_16[1], b"".join(bytes(u) for u in sixteen)))
+        fields.append(
+            ("the 16-bit service UUIDs", AD_UUIDS_16[1], b"".join(bytes(u) for u in sixteen))
         )
     if long:
-        parts.append(
-            ("the 128-bit service UUIDs", _ad(AD_UUIDS_128[1], b"".join(bytes(u) for u in long)))
+        fields.append(
+            (
+                "the 128-bit service UUIDs",
+                AD_UUIDS_128[1],
+                b"".join(u.to_bytes(force_128=True) for u in long),
+            )
         )
     if manufacturer is not None:
         company, data = manufacturer
-        parts.append(
-            ("the manufacturer data", _ad(AD_MANUFACTURER, company.to_bytes(2, "little") + data))
+        fields.append(
+            ("the manufacturer data", AD_MANUFACTURER, company.to_bytes(2, "little") + data)
         )
     advertising = _ad(AD_FLAGS, bytes([FLAGS]))
     scan_response = b""
-    for what, part in parts:
-        if len(advertising) + len(part) <= AD_MAX:
+    for what, kind, data in fields:
+        # Its length checked before it is encoded: an AD structure's length is one byte.
+        size = len(data) + 2
+        part = _ad(kind, data) if size <= AD_MAX else b""
+        if part and len(advertising) + len(part) <= AD_MAX:
             advertising += part
-        elif len(scan_response) + len(part) <= AD_MAX:
+        elif part and len(scan_response) + len(part) <= AD_MAX:
             scan_response += part
         else:
             raise PeerError(
-                f"BlePeripheral: {what} ({len(part)} bytes) fit neither in the advertising data nor"
+                f"BlePeripheral: {what} ({size} bytes) fit neither in the advertising data nor"
                 f" in the scan response, {AD_MAX} bytes each"
             )
     return advertising, scan_response

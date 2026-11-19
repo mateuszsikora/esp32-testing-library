@@ -92,6 +92,8 @@ RESOLVABLE_OR_RANDOM = 0x03
 # The bit of the LE event mask that unmasks `LE_Enhanced_Connection_Complete` (7.8.1), and the
 # LE event mask after a reset, which leaves it masked.
 ENHANCED_CONNECTION_COMPLETE = 1 << 9
+# The bit that unmasks `LE_Advertising_Report` (7.8.1).
+ADVERTISING_REPORT = 1 << 1
 LE_EVENT_MASK_DEFAULT = 0x1F
 
 # The RPA timeout until a host sets one, 900 s (7.8.45).
@@ -101,6 +103,15 @@ RPA_TIMEOUT_DEFAULT_S = 900
 # the peer (7.8.12).
 ACTIVE_SCAN = 0x01
 FILTER_ACCEPT_LIST = 0x01
+# The scanning filter policies that report only advertisers on the filter accept list (7.8.10):
+# 0x01, and 0x03, which also takes directed advertising this link does not carry.
+FILTERED_SCANS = {0x01, 0x03}
+
+# The unit of a connection interval, 1.25 ms, and how many intervals a central waits for the
+# peripheral's first packet before the connection is lost as never established (Vol 6, Part B,
+# 4.5.2: 6 connection intervals, `CONNECTION_FAILED_TO_BE_ESTABLISHED`).
+INTERVAL_UNIT_S = 0.00125
+ESTABLISHMENT_INTERVALS = 6
 
 # What the link carries of LE: legacy advertising and connections, on the 1M PHY. Bumble's other
 # defaults stay: encryption, the connection parameters request, the extended reject, the
@@ -372,7 +383,8 @@ class LinkLayer(BumbleController):
         the scan is active, and taken by an initiation it matches."""
         legacy = advertiser.le_legacy_advertiser
         kind = AdvertisingType(legacy.advertising_type)
-        if self.le_scan_enable:
+        listed = self._listed(pdu.advertiser_address)
+        if self.le_scan_enable and (self.le_scanning_filter_policy not in FILTERED_SCANS or listed):
             self._report(pdu.advertiser_address, REPORTED[kind], pdu.data, advertiser.rssi)
             if self.le_scan_type == ACTIVE_SCAN and kind in SCANNABLE:
                 self._report(
@@ -389,14 +401,23 @@ class LinkLayer(BumbleController):
         ):
             self._connect(pdu.advertiser_address, advertiser)
 
+    def _listed(self, address: hci.Address) -> bool:
+        """Whether `address` is on the filter accept list."""
+        return (int(address.address_type), bytes(address)) in self.filter_accept_list
+
     def _report(self, address: hci.Address, kind: int, data: bytes, rssi: int) -> None:
-        if self.filter_duplicates:
-            key = (bytes(address) + bytes([address.address_type]), kind)
-            if key in self._reported:
-                return
-            self._reported.add(key)
+        """An advertising report for the host, unless its LE event mask masks reports; with
+        duplicate filtering, once for each address and type, counted only once the host has
+        taken it, so that one dropped for want of credits is reported later."""
+        if not self.le_event_mask & ADVERTISING_REPORT:
+            return
+        key = (bytes(address) + bytes([address.address_type]), kind)
+        if self.filter_duplicates and key in self._reported:
+            return
         if not self.admits_report():
             return
+        if self.filter_duplicates:
+            self._reported.add(key)
         report = hci.HCI_LE_Advertising_Report_Event.Report(
             event_type=kind,
             address_type=address.address_type,
@@ -416,7 +437,7 @@ class LinkLayer(BumbleController):
     ) -> bool:
         """Whether the initiation `pending` connects to the advertiser at `address`."""
         if pending.initiator_filter_policy == FILTER_ACCEPT_LIST:
-            return (int(address.address_type), bytes(address)) in self.filter_accept_list
+            return self._listed(address)
         return bool(pending.peer_address == address)
 
     def _connect(self, peer_address: hci.Address, advertiser: "LinkLayer") -> None:
@@ -426,9 +447,13 @@ class LinkLayer(BumbleController):
         assert isinstance(pending, hci.HCI_LE_Create_Connection_Command)
         if peer_address in self.le_connections:
             return
-        self_address = self.own_address(
-            pending.own_address_type, pending.peer_address_type, pending.peer_address
-        )
+        # The peer the resolving list is looked up for: the advertiser the filter accept list chose,
+        # whose address the host could not name, or the one the host named (7.8.12).
+        if pending.initiator_filter_policy == FILTER_ACCEPT_LIST:
+            peer_type, peer = int(peer_address.address_type), peer_address
+        else:
+            peer_type, peer = pending.peer_address_type, pending.peer_address
+        self_address = self.own_address(pending.own_address_type, peer_type, peer)
         connection = Connection(
             controller=self,
             handle=self.allocate_connection_handle(),
@@ -456,6 +481,26 @@ class LinkLayer(BumbleController):
             )
         )
         self._connection_complete(connection, interval, latency, timeout)
+        # The peripheral takes the CONNECT_IND at this instant or never, as when another central's
+        # came first: `_established` looks once the link has delivered it.
+        asyncio.get_running_loop().call_soon(self._established, connection, advertiser, interval)
+
+    def _established(self, connection: Connection, advertiser: "LinkLayer", interval: int) -> None:
+        """A central's connection the advertiser did not take: its first packet never comes, and
+        the connection is lost 6 intervals on with `CONNECTION_FAILED_TO_BE_ESTABLISHED` (0x3E),
+        where Bumble's stays up with nobody at the other end."""
+        if advertiser._le_peers.get(connection.self_address) is self:
+            return
+
+        def lost() -> None:
+            if self.le_connections.get(connection.peer_address) is connection:
+                self.on_le_disconnected(
+                    connection, hci.HCI_ErrorCode.CONNECTION_FAILED_TO_BE_ESTABLISHED_ERROR
+                )
+
+        asyncio.get_running_loop().call_later(
+            ESTABLISHMENT_INTERVALS * interval * INTERVAL_UNIT_S, lost
+        )
 
     def on_le_connect_ind(
         self, packet: ll.ConnectInd, central: BumbleController | None = None
@@ -602,7 +647,13 @@ class LinkLayer(BumbleController):
     def on_hci_le_connection_update_command(
         self, command: hci.HCI_LE_Connection_Update_Command
     ) -> None:
+        """7.8.18: Bumble's, which tells both hosts the update took effect, while the peer is in
+        contact. Without contact, the `LL_CONNECTION_UPDATE_IND` reaches nobody: the command is
+        pending, the update never completes, and the connection falls at the timeout it had."""
         connection = self.find_le_connection_by_handle(command.connection_handle)
+        if connection is not None and connection.peer_address in self._le_lost_contact:
+            self._send_hci_command_status(hci.HCI_COMMAND_STATUS_PENDING, command.op_code)
+            return
         if connection is not None:
             self._le_timeouts[connection.peer_address] = command.supervision_timeout
         super().on_hci_le_connection_update_command(command)

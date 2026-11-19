@@ -303,17 +303,27 @@ esp32sim --chip esp32 --board none --boot rom --console uart0 --flash-mb 4 --max
 
 `tools/hci_probe` runs on a real board, not on esp32sim: it asks the chip's own Bluetooth controller,
 through VHCI, what it reports, and prints every HCI packet both ways, `TX` and `RX` in hex, on the
-USB-Serial/JTAG console. For an ESP32-S3, in the v5.3.6 container:
+USB-Serial/JTAG console. For an ESP32-S3, in the v5.3.6 container, into a build directory of its
+own whose `sdkconfig` is made anew from `sdkconfig.defaults` (ESP-IDF reads the defaults only for
+what an existing `sdkconfig` leaves unset, so an older one would keep its host configuration):
 
 ```sh
-idf.py -C tools/hci_probe -DIDF_TARGET=esp32s3 build
+rm -rf tools/hci_probe/build-probe
+idf.py -C tools/hci_probe -B tools/hci_probe/build-probe \
+  -D SDKCONFIG=tools/hci_probe/build-probe/sdkconfig -DIDF_TARGET=esp32s3 build
 ```
 
-then, on the host, from `tools/hci_probe/build`, `python -m esptool --chip esp32s3 --port PORT
-write-flash @flash_args`, and read the console for 20 s after a reset.
+then, on the host, from `tools/hci_probe/build-probe`, with esptool 5 (`python -m esptool --chip
+esp32s3 --port PORT write-flash @flash_args`; esptool 4, as ESP-IDF v5.3.6 ships, spells it
+`write_flash`), and read the console for 20 s after a reset. Check that the console says
+`BLE_INIT: Feature Config, …, BLE_50:0, …` before comparing what follows.
 Its `sdkconfig.defaults` configure Bluedroid as ESP-IDF's BLE 4.2 examples do, without starting it,
-so that the controller runs as under them (`BLE_50:0` in `BLE_INIT: Feature Config`); without
-Bluedroid in the build the controller runs with `BLE_50:1` and answers otherwise. The ESP32-S3's
+so that the controller runs as under them; without Bluedroid in the build the controller runs with
+`BLE_50:1` and answers otherwise. The discard event of the flow control of advertising reports
+comes only when more legacy advertising than the 2 credits and the lost threshold of 3 reaches the
+3 s scan: a device that advertises in range, at an interval of a few hundred ms or less, is
+enough; on a quiet bench the event does not come. Its count is what the scan heard and dropped,
+104 in the capture below, not a constant. The ESP32-S3's
 answers, of 2026-11-19, are in `tools/hci_probe/esp32s3.txt`, its address masked and the
 advertising reports of the devices around left out; `esp32tl/bluetooth/guest.py` reports them for
 an LE-only chip.

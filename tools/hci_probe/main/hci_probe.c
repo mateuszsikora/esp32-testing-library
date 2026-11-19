@@ -48,7 +48,9 @@ static int drain(int ms)
 static void command(uint16_t op, const uint8_t *params, uint8_t len, int wait_ms)
 {
     uint8_t packet[260] = { 0x01, op & 0xff, op >> 8, len };
-    memcpy(packet + 4, params, len);
+    if (len != 0) {
+        memcpy(packet + 4, params, len);
+    }
     while (!esp_vhci_host_check_send_available()) vTaskDelay(1);
     hex("TX", packet, 4 + len);
     esp_vhci_host_send_packet(packet, 4 + len);
@@ -59,12 +61,16 @@ void app_main(void)
 {
     ESP_ERROR_CHECK(nvs_flash_init());
     rx = xQueueCreate(256, sizeof(packet_t));
+    if (rx == NULL) {
+        printf("hci_probe: no memory for the receive queue\n");
+        return;
+    }
     vTaskDelay(pdMS_TO_TICKS(3000));
     printf("hci_probe: start\n");
     esp_bt_controller_config_t config = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_bt_controller_init(&config));
     ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_BLE));
-    esp_vhci_host_register_callback(&callbacks);
+    ESP_ERROR_CHECK(esp_vhci_host_register_callback(&callbacks));
 
     command(0x0c03, NULL, 0, 200);                       /* HCI_Reset */
     command(0x0c31, (uint8_t[]){ 1 }, 1, 100);           /* Set_Controller_To_Host_Flow_Control */

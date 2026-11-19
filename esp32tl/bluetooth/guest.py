@@ -60,6 +60,9 @@ LE_ONLY_FEATURES = (
 # policies. Built with `BLE_50:1`, as a controller-only build is, it reports `0x080001F9FF`: the
 # 2M PHY, the coded PHY, extended and periodic advertising and more, which this link leaves out.
 LE_FEATURES = 0xFF
+# `LE_Read_Supported_States`: every state and combination of the first 42 bits (7.8.27), where
+# Bumble's says `ffff3fffff030000`.
+LE_STATES = bytes.fromhex("ffffffffff030000")
 # `LE_Read_Buffer_Size`: 251 bytes, 12 packets.
 LE_ACL_LENGTH = 251
 LE_ACL_PACKETS = 12
@@ -125,6 +128,7 @@ class GuestController(Controller):
             self.hci_revision = self.lmp_subversion = LE_REVISION
             self.manufacturer_company_identifier = ESPRESSIF
             self.le_features = hci.LeFeatureMask(LE_FEATURES)
+            self.le_states = LE_STATES
             self.le_acl_data_packet_length = LE_ACL_LENGTH
             self.total_num_le_acl_data_packets = LE_ACL_PACKETS
             self.filter_accept_list_size = FILTER_ACCEPT_LIST_SIZE

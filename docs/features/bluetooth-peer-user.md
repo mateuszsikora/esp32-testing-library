@@ -157,7 +157,7 @@ reports is the chip's, which it takes from the board profile's `chip`:
   (Controller)` and `BR/EDR Not Supported`; LE features `0xFF`, encryption to the extended scanner
   filter policies, with no 2M or coded PHY and no extended advertising (a controller-only build,
   whose controller runs with `BLE_50:1`, reports `0x080001F9FF` instead); `LE_Read_Buffer_Size` 251
-  bytes and 12 packets; a filter accept list of 12 and a resolving list of 10; a maximum data
+  bytes and 12 packets; `LE_Read_Supported_States` `ffffffffff030000`; a filter accept list of 12 and a resolving list of 10; a maximum data
   length of 251 octets and 17040 µs each way; an advertising power of 9 dBm; its own
   `Read_Local_Supported_Commands`, and 5 command packets in each `Command_Complete` and
   `Command_Status`. A command that list does not name, as `Read_Buffer_Size`,
@@ -171,7 +171,9 @@ reports is the chip's, which it takes from the board profile's `chip`:
   Bluedroid sends an LE controller right after `HCI_Reset`: `0xFD09` turns it on with a number of
   credits and a lost threshold, and completes; the controller then sends no more `LE Advertising
   Report` events than the credits and drops the rest; `0xFD0A` gives credits back, and gets no
-  event, as Bluedroid expects of it. Once the reports dropped since the last count reach the lost
+  command acknowledgment, as Bluedroid expects of it. With duplicate filtering, an advertiser whose
+  report was dropped is not taken for reported, and its next advertising event is reported once a
+  credit has come back. Once the reports dropped since the last count reach the lost
   threshold, the next credit given back brings, before any report, Espressif's vendor LE Meta
   event `0xF0` with their number, four bytes little-endian, which takes a credit: the S3 sent
   `04 3E 05 F0 68 00 00 00` for 104 reports when 2 credits came back. The report says
@@ -618,9 +620,11 @@ io_capability="no_input_no_output", confirms=True, passkey=None, bonding=True)`:
 | `rssi` | The signal strength a scan hears it at, in dBm, -127 to 20 |
 | `io_capability`, `confirms`, `passkey`, `bonding` | How it pairs ([below](#pairing)) |
 
-A UUID is 4 hex digits for a 16-bit one, `"FF01"`, or a 128-bit one with or without its dashes,
-`"6E400002-B5A3-F393-E0A9-E50E24DCCA9E"`; esp32tl writes them back the first way for 16 bits and
-the second for 128. A characteristic's `properties` are any of `read`, `write`,
+A UUID is 4 hex digits for a 16-bit one, `"FF01"`, or a 128-bit one, 32 hex digits bare or in the
+8-4-4-4-12 form with its dashes, `"6E400002-B5A3-F393-E0A9-E50E24DCCA9E"`; esp32tl writes them back
+the first way for 16 bits and the second for 128. A 16-bit UUID written in its 128-bit form on the
+Bluetooth base, `"0000180D-0000-1000-8000-00805F9B34FB"`, is the same UUID as `"180D"`, and esp32tl
+writes it back so: two characteristics so named are one twice, and a filter on either finds both. A characteristic's `properties` are any of `read`, `write`,
 `write_without_response`, `notify` and `indicate`; one that notifies or indicates has a Client
 Characteristic Configuration descriptor. With `encrypted`, it is read and written only over an
 encrypted link: an unencrypted one gets `INSUFFICIENT_ENCRYPTION`. A read of one without `read`
@@ -693,8 +697,16 @@ WRITE_NOT_PERMITTED (0x03)`:
 | `central.disconnect()` | The end of the connection | `Disconnection(at, peer, reason)` |
 
 `read`, `write` and `subscribe` name a characteristic by its UUID, the first of that UUID in the
-peer's database, and discover the database first when the central has not. One connection at a
-time. Its connections have Bumble's parameters: an interval of 15 to 30 ms, a latency of 0 and a
+peer's database, and discover the database first when the central has not. `subscribe` needs the
+characteristic to notify, or with `indicate` to indicate, and to have a Client Characteristic
+Configuration descriptor, else its condition raises `BleError`; subscribing again to what the
+central is subscribed to changes nothing, and each notification is still received once. A request
+the peer never answers because the link fell first, as when the peer left the air, ends with
+`BleError` when the connection falls: `esp32tl central's read of FF01: the connection ended before
+the answer came`. One connection at a time. When two centrals take one advertising event for a
+connection, the peripheral takes the first `CONNECT_IND` the link delivers; the other central's
+host is told of a connection, as a real one's is, which falls 6 connection intervals later with
+`CONNECTION_FAILED_TO_BE_ESTABLISHED` (`0x3E`). Its connections have Bumble's parameters: an interval of 15 to 30 ms, a latency of 0 and a
 supervision timeout of 720 ms, until the peripheral asks for others: `gatt_server` asks for 20 to
 40 ms and 4 s, and gets them. The notifications and indications it received are in
 `central.notifications`.
@@ -735,8 +747,10 @@ of LE Secure Connections or of legacy pairing. The device then keeps the keys un
 
 - **The central starts it** with `central.pair()`, or when the peer asks for security
   (`gatt_security_server` does as soon as it is connected): with keys kept for the peer, the
-  central encrypts the link with them; without, it pairs, as a phone does. A peripheral answers the
-  pairing it is asked for; it does not start one.
+  central encrypts the link with them; without, it pairs, as a phone does. A peer that has forgotten
+  the bond refuses the kept key: the link stays unencrypted, the central's events say
+  `encryption with ADDRESS failed: …`, and it does not pair again by itself; `central.pair()` pairs
+  again. A peripheral answers the pairing it is asked for; it does not start one.
 - **Across a reset of the firmware.** Bluedroid keeps its bonds in the NVS, which a reset keeps:
   after `board.reset()` `gatt_security_server` advertises from a new resolvable private address, the
   central resolves it with the identity key it got when pairing, and the link is encrypted with the
@@ -764,9 +778,12 @@ confirm value that failed, a passkey typed that differs from the one shown.
   `gatt_client` is gone: the firmware logs `reason 0x08` at its own supervision timeout, and
   `gatt_client` does not scan again.
 - **Advertising is not heard** from a device off the air, and a device off the air hears none.
+- **An update of the connection's parameters** asked for once the device has left never
+  completes: the connection falls at the timeout it had.
 
 At the device itself, a switch off ends its connections at once, which its own Bumble host hears
-with `0x08`; switched on, a peripheral advertises again and a central scans again. Out of range, it
+with `0x08`, and a connection being made; a peripheral does not advertise while off; switched on,
+a peripheral advertises again and a central scans again. Out of range, it
 runs on, and its connection falls at its timeout as the other side's does. The board's own
 supply and resets take the firmware's controller off the air as for Classic
 ([above](#in-front-of-the-firmware-boardbluetooth)): a central connected to the firmware sees its
@@ -796,7 +813,8 @@ Client Characteristic Configuration is written, before Bumble has the write's re
 The events: `advertising seen from 'NAME' ADDRESS (public|random)`, once for each address;
 `connected to ADDRESS, as central` or `connected from ADDRESS, as peripheral`; `disconnected from
 ADDRESS: CONNECTION_TIMEOUT_ERROR (0x08)` with the reason; `encrypted with ADDRESS`; `paired with
-ADDRESS, bonded` or `pairing with ADDRESS failed: reason 0x04`; on a central `discovered N services
+ADDRESS, bonded` or `pairing with ADDRESS failed: reason 0x04`; `encryption with ADDRESS failed:
+…`; on a central `discovered N services
 of ADDRESS: …`, `read UUID of ADDRESS: HEX`, `wrote UUID of ADDRESS: HEX`, `subscribed to
 notifications of UUID of ADDRESS`, `notification of UUID from ADDRESS: HEX`; on a peripheral
 `ADDRESS wrote UUID: HEX`, `ADDRESS subscribed to UUID: notifications`, `notification of UUID to

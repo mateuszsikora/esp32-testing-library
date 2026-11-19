@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 from bumble import crypto, hci
+from bumble.core import UUID
 from bumble.pairing import PairingConfig
 from bumble.smp import AddressResolver
 from conftest import CountingList
@@ -324,20 +325,23 @@ def test_le_data_for_the_host_is_cut_to_its_buffer() -> None:
     )
     controller = central._controller
     assert controller is not None
-    controller.host_acl_length = 27
+    # under an ATT response of 23 bytes and its L2CAP header: each response is cut
+    controller.host_acl_length = 20
     seen = air.run(_first(central), within=seconds(1))
     air.run(_wait(central.connect(seen)), within=seconds(1))
-    packets: list[int] = []
+    packets: list[tuple[int, int]] = []
     original = controller.send_hci_packet
 
     def counting(packet: hci.HCI_Packet) -> None:
         if isinstance(packet, hci.HCI_AclDataPacket):
-            packets.append(packet.data_total_length)
+            packets.append((packet.pb_flag, packet.data_total_length))
         original(packet)
 
     controller.send_hci_packet = counting  # type: ignore[method-assign]
-    air.run(_wait(central.read("FF01")), within=seconds(1))
-    assert packets and max(packets) <= 27
+    read = air.run(_wait(central.read("FF01")), within=seconds(1))
+    assert read.value == bytes(200)
+    assert max(length for _, length in packets) <= 20
+    assert any(flag == 0b01 for flag, _ in packets)  # a continuing fragment
     assert peripheral.connected
 
 
@@ -389,11 +393,12 @@ def test_an_le_only_chip_s_controller_answers_as_the_measured_esp32_s3() -> None
         hci.HCI_LE_Read_Maximum_Data_Length_Command(),
         hci.HCI_LE_Read_Suggested_Default_Data_Length_Command(),
         hci.HCI_LE_Read_Advertising_Physical_Channel_Tx_Power_Command(),
+        hci.HCI_LE_Read_Supported_States_Command(),
         hci.HCI_Read_Local_Supported_Commands_Command(),
     ):
         send(air, guest, command)
     answers = [bytes(e).hex() for e in host.events(hci.HCI_Command_Complete_Event)]
-    assert answers[:8] == [
+    assert answers[:9] == [
         "040e0c0501100009160009e5021600",
         "040e0c05032000ff00000000000000",
         "040e0705022000fb000c",
@@ -402,8 +407,9 @@ def test_an_le_only_chip_s_controller_answers_as_the_measured_esp32_s3() -> None
         "040e0c052f2000fb009042fb009042",
         "040e08052320001b004801",
         "040e050507200009",
+        "040e0c051c2000ffffffffff030000",
     ]
-    assert answers[8] == "040e4405021000" + (
+    assert answers[9] == "040e4405021000" + (
         "2000800000c000000000e40000002822000000000000040000f7ffff7f00000030f0ffffffffff07"
         + "00" * 24
     )
@@ -867,3 +873,230 @@ def test_a_disconnect_is_the_local_host_s_on_its_side_and_the_remote_user_s_on_t
     assert peripheral.disconnections[-1].reason == (
         hci.HCI_ErrorCode.REMOTE_USER_TERMINATED_CONNECTION_ERROR
     )
+
+
+# Fixes of the review of #271.
+
+
+def test_an_advertiser_dropped_for_want_of_credits_is_reported_with_a_credit_back() -> None:
+    air = Air()
+    first, _ = raw(air, ADVERTISER)
+    second, _ = raw(air, "00:00:00:00:5B:0B")
+    guest, host = raw(air, SCANNER, GuestController, chip="esp32s3")
+    send(
+        air,
+        guest,
+        hci.HCI_Command(op_code=SET_ADV_FLOW_CONTROL, parameters=bytes([1, 1, 0, 50, 0])),
+    )
+    scan(air, guest, active=False, duplicates=True)
+    advertise(air, first, interval=0x0020)
+    advertise(air, second, interval=0x0020)
+    air.wait(ms(100))
+    assert [str(r.address) for r in host.reports()] == [f"{ADVERTISER}/P"]
+    send(air, guest, hci.HCI_Command(op_code=ADV_REPORT_FLOW_CONTROL, parameters=bytes([1, 0])))
+    air.wait(ms(40))
+    assert [str(r.address) for r in host.reports()] == [f"{ADVERTISER}/P", "00:00:00:00:5B:0B/P"]
+
+
+def test_a_masked_report_is_not_sent_and_a_filtered_scan_reports_only_the_listed() -> None:
+    air = Air()
+    listed, _ = raw(air, ADVERTISER)
+    other, _ = raw(air, "00:00:00:00:5B:0B")
+    scanner, host = raw(air, SCANNER)
+    advertise(air, listed, interval=0x0020)
+    advertise(air, other, interval=0x0020)
+    send(air, scanner, hci.HCI_LE_Set_Event_Mask_Command(le_event_mask=bytes(8)))
+    scan(air, scanner, active=False)
+    air.wait(ms(50))
+    assert host.reports() == []
+    send(air, scanner, hci.HCI_LE_Set_Scan_Enable_Command(le_scan_enable=0, filter_duplicates=0))
+    send(air, scanner, hci.HCI_LE_Set_Event_Mask_Command(le_event_mask=bytes([0x1F]) + bytes(7)))
+    send(
+        air,
+        scanner,
+        hci.HCI_LE_Add_Device_To_Filter_Accept_List_Command(
+            address_type=0, address=hci.Address(ADVERTISER, hci.Address.PUBLIC_DEVICE_ADDRESS)
+        ),
+    )
+    send(
+        air,
+        scanner,
+        hci.HCI_LE_Set_Scan_Parameters_Command(
+            le_scan_type=0,
+            le_scan_interval=0x10,
+            le_scan_window=0x10,
+            own_address_type=0,
+            scanning_filter_policy=1,
+        ),
+    )
+    send(air, scanner, hci.HCI_LE_Set_Scan_Enable_Command(le_scan_enable=1, filter_duplicates=0))
+    air.wait(ms(50))
+    assert host.reports() and {str(r.address) for r in host.reports()} == {f"{ADVERTISER}/P"}
+
+
+def test_an_initiation_by_the_list_takes_its_rpa_from_the_chosen_advertiser_s_entry() -> None:
+    air = Air()
+    advertiser, _ = raw(air, ADVERTISER)
+    central, _ = raw(air, SCANNER)
+    identity = hci.Address(ADVERTISER, hci.Address.PUBLIC_DEVICE_ADDRESS)
+    send(
+        air,
+        central,
+        hci.HCI_LE_Add_Device_To_Filter_Accept_List_Command(address_type=0, address=identity),
+    )
+    send(
+        air,
+        central,
+        hci.HCI_LE_Add_Device_To_Resolving_List_Command(
+            peer_identity_address_type=0,
+            peer_identity_address=identity,
+            peer_irk=bytes(16),
+            local_irk=bytes(range(16)),
+        ),
+    )
+    advertise(air, advertiser)
+    command = create_connection("00:00:00:00:00:00", policy=1)
+    command.own_address_type = 0x02
+    send(air, central, command)
+    air.wait(ms(150))
+    (connection,) = central.le_connections.values()
+    assert connection.self_address.is_resolvable
+
+
+def test_an_update_of_a_connection_that_lost_contact_never_completes() -> None:
+    air = Air()
+    peripheral, central = connected(air)
+    controller = central._controller
+    assert controller is not None
+    (connection,) = controller.le_connections.values()
+    peripheral.out_of_range()
+    events: list[Any] = []
+    original = controller.send_hci_packet
+
+    def keeping(packet: hci.HCI_Packet) -> None:
+        events.append(packet)
+        original(packet)
+
+    controller.send_hci_packet = keeping  # type: ignore[method-assign]
+    air.call(
+        lambda: controller.on_hci_packet(
+            hci.HCI_LE_Connection_Update_Command(
+                connection_handle=connection.handle,
+                connection_interval_min=0x18,
+                connection_interval_max=0x18,
+                max_latency=0,
+                supervision_timeout=400,
+                min_ce_length=0,
+                max_ce_length=0,
+            )
+        )
+    )
+    air.wait(seconds(1))
+    assert not any(isinstance(e, hci.HCI_LE_Connection_Update_Complete_Event) for e in events)
+    # it fell at the timeout it had, Bumble's 720 ms, not the 4 s asked for
+    assert central.disconnections[-1].reason == 0x08
+
+
+def test_of_two_centrals_at_one_advertising_event_the_second_is_never_established() -> None:
+    air = Air()
+    peripheral = sensor(air)
+    first = BleCentral(air, name="first")
+    second = BleCentral(air, name="second", address="00:00:00:00:5C:02")
+    one = first.connect(peripheral.address)
+    two = second.connect(peripheral.address)
+    air.wait(ms(150))
+    # both hosts were told of a connection; the peripheral took one CONNECT_IND
+    assert one() is not None and two() is not None
+    winner, loser = (first, second) if peripheral.peer == first.address else (second, first)
+    air.wait(ms(300))
+    assert winner.connected and not loser.connected
+    assert loser.disconnections[-1].reason_name == (
+        "CONNECTION_FAILED_TO_BE_ESTABLISHED_ERROR (0x3e)"
+    )
+
+
+def test_a_pending_read_ends_with_ble_error_when_its_link_falls() -> None:
+    air = Air()
+    peripheral, central = connected(air)
+    peripheral.out_of_range()
+    read = central.read("FF01")
+    air.wait(seconds(1))
+    with pytest.raises(BleError, match="the connection ended before the answer came"):
+        read()
+
+
+def test_subscribing_needs_the_property_and_once_is_enough() -> None:
+    air = Air()
+    peripheral, central = connected(air)
+    with pytest.raises(BleError, match="FF03 of 00:00:00:00:5B:02 sends no indications"):
+        air.run(_wait(central.subscribe("FF03", indicate=True)), within=seconds(1))
+    air.run(_wait(central.subscribe("FF01")), within=seconds(1))
+    air.run(_wait(central.subscribe("FF01")), within=seconds(1))
+    air.run(_wait(peripheral.notify("FF01", b"once")), within=seconds(1))
+    assert [n.value for n in central.notifications] == [b"once"]
+    # a characteristic whose descriptor is not there
+    assert central._peer is not None
+    (proxy,) = central._peer.get_characteristics_by_uuid(UUID("FF01"))
+    proxy.descriptors = []
+    with pytest.raises(BleError, match="no Client Characteristic Configuration descriptor"):
+        air.run(_wait(central.subscribe("FF01")), within=seconds(1))
+
+
+def test_a_uuid_is_the_same_in_its_16_bit_and_its_128_bit_forms() -> None:
+    air = Air()
+    with pytest.raises(PeerError, match="characteristic 2A37 is in the database twice"):
+        BlePeripheral(
+            air,
+            name="hr",
+            services=[
+                GattService(
+                    "180D",
+                    [
+                        GattCharacteristic("2A37"),
+                        GattCharacteristic("00002A37-0000-1000-8000-00805F9B34FB"),
+                    ],
+                )
+            ],
+        )
+    BlePeripheral(air, name="hr", services=[GattService("180D", [GattCharacteristic("2A37")])])
+    central = BleCentral(air)
+    seen = central.next_advertisement(service_uuid="0000180D-0000-1000-8000-00805F9B34FB")
+    air.wait(ms(150))
+    found = seen()
+    assert found is not None and found.service_uuids == ("180D",)
+    with pytest.raises(PeerError, match="uuid is 'F-F01'"):
+        GattCharacteristic("F-F01")
+
+
+def test_manufacturer_data_too_long_for_any_ad_structure_is_a_peer_error() -> None:
+    with pytest.raises(PeerError, match=r"the manufacturer data \(257 bytes\) fit neither"):
+        BlePeripheral(Air(), name="m", manufacturer_data=(0x02E5, bytes(253)))
+
+
+def test_a_refused_encryption_with_kept_keys_is_noted_and_pairing_recovers() -> None:
+    air = Air()
+    peripheral, central = connected(air)
+    air.run(_wait(central.pair()), within=seconds(1))
+    air.run(_wait(central.disconnect()), within=seconds(1))
+    peripheral.forget_keys()
+    seen = air.run(_wait(central.next_advertisement(name="sensor")), within=seconds(1))
+    air.run(_wait(central.connect(seen)), within=seconds(1))
+    connection = peripheral._connection
+    assert connection is not None
+    # the peripheral asks for security; the central encrypts with the key the peripheral lost
+    air.call(lambda: peripheral.device.request_pairing(connection))
+    air.wait(ms(100))
+    assert not central.encrypted
+    assert any("encryption with 00:00:00:00:5B:02 failed" in e.text for e in central.events)
+    assert air.run(_wait(central.pair()), within=seconds(1)).succeeded
+
+
+def test_a_peripheral_switched_off_while_connected_does_not_advertise_until_on() -> None:
+    air = Air()
+    peripheral, _ = connected(air)
+    peripheral.switch_off()
+    air.wait(ms(10))
+    assert not peripheral.advertising
+    peripheral.switch_on()
+    air.wait(ms(10))
+    assert peripheral.advertising
