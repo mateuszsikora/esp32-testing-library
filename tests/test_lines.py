@@ -6,6 +6,7 @@ emulator."""
 import re
 
 import pytest
+from conftest import CountingList
 
 from esp32tl import boards
 from esp32tl.boards import LineRoute
@@ -359,3 +360,132 @@ def test_output_history_validates_the_window(
     clock.now = 2 * S
     with pytest.raises(error, match=message):
         lines.output(4).assert_stayed_off(since=since)
+
+
+def test_next_change_waits_for_a_change_after_the_call_even_while_the_level_holds() -> None:
+    lines, _ = lilygo()
+    key = lines.output("modem.pwrkey")
+    lines.driven(S, [(4, 1)], frozenset({4}))
+    # On already: `is_on` holds, and `next_change(on=True)` waits for the next press.
+    assert key.is_on()
+    press = key.next_change(on=True)
+    assert press() is None
+    lines.driven(2 * S, [(4, 0)], frozenset({4}))
+    assert press() is None
+    lines.driven(3 * S, [(4, 1)], frozenset({4}))
+    first = LineEvent(seconds(3), "modem.pwrkey", 4, "firmware", 1)
+    assert press() == first
+    # Non-consuming: asked again it returns the same event, after later presses too.
+    lines.driven(4 * S, [(4, 0)], frozenset({4}))
+    lines.driven(5 * S, [(4, 1)], frozenset({4}))
+    assert press() == first
+    # A second condition, made after the first matched, finds the second press.
+    assert key.next_change(on=True)() is None
+    second = lines.next_change("modem.pwrkey", 1)
+    lines.driven(6 * S, [(4, 0)], frozenset({4}))
+    lines.driven(7 * S, [(4, 1)], frozenset({4}))
+    assert second() == LineEvent(seconds(7), "modem.pwrkey", 4, "firmware", 1)
+
+
+def test_next_change_by_the_firmware_ignores_the_test_s_and_a_model_s_changes() -> None:
+    lines, clock = lilygo()
+    lines.attach("modem", output="modem.ri", watch={}, latency=1_000)
+    ri = lines.output("modem.ri")
+    by_firmware = ri.next_change()
+    by_firmware_on = lines.next_change(33, 1)
+    by_model = ri.next_change(on=True, by="model")
+    by_test = lines.next_change("modem.pwrkey", by="test")
+    by_anyone = lines.next_change("modem.pwrkey", by=None)
+    clock.now = S
+    lines.drive("modem.pwrkey", 1)
+    lines.model_drive("modem", "modem.ri", S, 1)
+    lines.inputs(S)
+    assert [e.by for e in lines.events()] == ["test", "model"]
+    assert by_firmware() is None and by_firmware_on() is None
+    assert by_model() == LineEvent(seconds(1), "modem.ri", 33, "model", 1)
+    assert by_test() == LineEvent(seconds(1), "modem.pwrkey", 4, "test", 1)
+    assert by_anyone() == by_test()
+    lines.driven(2 * S, [(33, 1)], frozenset({33}))
+    assert by_firmware() == by_firmware_on() == LineEvent(seconds(2), "modem.ri", 33, "firmware", 1)
+
+
+def test_next_change_to_a_level_or_to_undriven_skips_the_other_changes() -> None:
+    lines, _ = lilygo()
+    key = lines.output("modem.pwrkey", active=0)
+    off = key.next_change(on=False)
+    undriven = lines.next_change(4, None)
+    lines.driven(S, [(4, 0)], frozenset({4}))  # on, for an active-low line
+    assert off() is None and undriven() is None
+    lines.driven(2 * S, [(4, 0)], frozenset())
+    assert off() is None
+    assert undriven() == LineEvent(seconds(2), "modem.pwrkey", 4, "firmware", None)
+    lines.driven(3 * S, [(4, 1)], frozenset({4}))
+    assert off() == LineEvent(seconds(3), "modem.pwrkey", 4, "firmware", 1)
+    # Any change, `on=None`, counts the change to undriven too.
+    anything = key.next_change()
+    lines.driven(4 * S, [(4, 0)], frozenset())
+    assert anything() == LineEvent(seconds(4), "modem.pwrkey", 4, "firmware", None)
+
+
+def test_next_change_names_the_line_the_level_and_who_changes_it() -> None:
+    lines, _ = lilygo()
+    key = lines.output("modem.pwrkey")
+    low = lines.output("modem.pwrkey", active=0)
+    assert [
+        repr(key.next_change(on=True)),
+        repr(low.next_change(on=True)),
+        repr(key.next_change(on=False, by="test")),
+        repr(key.next_change(by=None)),
+        repr(lines.next_change("modem.ri", 0, by="model")),
+        repr(lines.next_change(33, None)),
+        repr(lines.next_change(33)),
+    ] == [
+        "the next change of modem.pwrkey (GPIO 4) to on (level 1) by the firmware",
+        "the next change of modem.pwrkey (GPIO 4) to on (level 0) by the firmware",
+        "the next change of modem.pwrkey (GPIO 4) to off (level 0) by the test",
+        "the next change of modem.pwrkey (GPIO 4) by the firmware, the test or a model",
+        "the next change of modem.ri (GPIO 33) to level 0 by a model",
+        "the next change of modem.ri (GPIO 33) to undriven by the firmware",
+        "the next change of modem.ri (GPIO 33) by the firmware",
+    ]
+    with pytest.raises(TypeError, match=r"^call the output condition with \(\)"):
+        bool(key.next_change(on=True))
+    with pytest.raises(TypeError, match=r"^call the lines condition with \(\)"):
+        bool(lines.next_change(4))
+
+
+@pytest.mark.parametrize(
+    ("make", "error", "message"),
+    [
+        (lambda lines: lines.next_change(4, 2), ValueError, 'level 2 is not 0, 1, None or "any"'),
+        (lambda lines: lines.next_change(4, "1"), TypeError, "level '1' is not 0, 1, None"),
+        (lambda lines: lines.next_change(4, by="fw"), ValueError, "lines.next_change: by 'fw'"),
+        (lambda lines: lines.next_change(4, by=1), TypeError, "lines.next_change: by 1 is not"),
+        (lambda lines: lines.next_change("ri"), ValueError, "'ri' is no line of the board"),
+        (lambda lines: lines.output(4).next_change(on=1), TypeError, "on 1 is not True, False"),
+        (
+            lambda lines: lines.output(4).next_change(by="board"),
+            ValueError,
+            'output.next_change: by \'board\' is not "firmware", "test", "model" or None',
+        ),
+    ],
+)
+def test_next_change_refuses_a_level_an_origin_or_a_line_that_is_not_one(
+    make: object, error: type[Exception], message: str
+) -> None:
+    lines, _ = lilygo()
+    with pytest.raises(error, match=re.escape(message)):
+        make(lines)  # type: ignore[operator]
+
+
+def test_a_next_change_poll_reads_only_the_events_since_the_last_one() -> None:
+    lines, _ = lilygo()
+    lines._events = CountingList[LineEvent]()
+    press = lines.output("modem.pwrkey").next_change(on=True)
+    n = 10_000
+    for i in range(n):
+        lines.driven(i, [(33, i % 2)], frozenset({33}))
+        assert press() is None
+    assert lines._events.reads == n
+    lines.driven(n, [(4, 1)], frozenset({4}))
+    assert press() is not None and lines._events.reads == n + 1

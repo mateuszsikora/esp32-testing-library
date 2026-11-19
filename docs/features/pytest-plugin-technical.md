@@ -313,7 +313,7 @@ the existing no-latency behavior and board pulls are unchanged.
 | `lines(board)` | fixture, function scope | Returns `board.lines` |
 | `modem(board)` | fixture, `esp32tl/pytest_plugin.py` | The profile's `uart.modem`, a `Modem`; see [modem-user.md](modem-user.md) |
 | `Modem(name, wire, *, clock, directory, now, lines, world=..., pins, asked=..., log=None, files=None, bridging=...)` | class, `esp32tl/interfaces/modem.py`, a `Uart` | Model calls, state properties and command history: [modem-technical.md](modem-technical.md#interfaces). `clock` the argument is the recordings' clock, read as `Uart.recording_clock`; `clock` the method is the modem's own, with `clock_not_set` and `clock_set_by_network`. `bridging` goes to the `Internet` that `network()` makes, which calls it before a bridge ([network](network-technical.md#the-bridge)); it does nothing by default |
-| `Lines(board, lines, now, log=None)` | class, `esp32tl/interfaces/lines.py`, a `BoardLink` `Interface` named `lines` | The `[lines.<role>]` sets `lines` of the profile named `board`, the board's time from `now()`, in nanoseconds, and the `RunLog` it writes to, if any. `drive(line, level)`, `release(line)`, `level(line)` (`int \| None`), `events()` (`list[LineEvent]`); model attachment via `attach(owner, *, output, watch, latency)`, `watch` mapping each line's name to its callback, and `model_drive(owner, line, t, level)`; for the link, `pins`, `inputs(now)`, `driven(t, changes, enabled)`, `quiet_until()` and `latency()` |
+| `Lines(board, lines, now, log=None)` | class, `esp32tl/interfaces/lines.py`, a `BoardLink` `Interface` named `lines` | The `[lines.<role>]` sets `lines` of the profile named `board`, the board's time from `now()`, in nanoseconds, and the `RunLog` it writes to, if any. `drive(line, level)`, `release(line)`, `level(line)` (`int \| None`), `events()` (`list[LineEvent]`), `next_change(line, level="any", *, by="firmware")` (`Condition[LineEvent \| None]`); model attachment via `attach(owner, *, output, watch, latency)`, `watch` mapping each line's name to its callback, and `model_drive(owner, line, t, level)`; for the link, `pins`, `inputs(now)`, `driven(t, changes, enabled)`, `quiet_until()` and `latency()` |
 | `LineEvent(t, name, pin, by, level)` | frozen dataclass, `esp32tl/interfaces/lines.py` | `t` a `Duration`, an instant of the board's time, `name` as `modem.ri`, `by` `"firmware"`, `"test"` or `"model"`, `level` 0, 1 or `None` |
 | `PULLED` | `dict`, `esp32tl/interfaces/lines.py` | `{"up": 1, "down": 0}`: the level a board's pull gives an undriven line |
 | `sd_card(board)` | fixture, function scope | Returns `board.sd_card` |
@@ -339,7 +339,7 @@ the existing no-latency behavior and board pulls are unchanged.
 | `ConsoleLine(at, text, match=None)` | frozen dataclass, `esp32tl/interfaces/console.py` | A console line: `at` a `Duration`, `text` a `str`, `match` an `re.Match[str]`, left out of comparisons; `line[group]` is `match[group]`, a `TypeError` without a match |
 | `ConsoleLines()` | class, `esp32tl/interfaces/console.py` | `feed(t, data)`, `lines`: the console cut into `ConsoleLine`s |
 | `ConsoleInput(name, wire, *, pinless=False, ...)` | class, `esp32tl/interfaces/console.py` | The esp32sim backend's console input on the link, a `Uart`: on `wire`'s RX pin as `uart_rx`, or with `pinless=True` and `wire` `None`, `Interface.pinless_console` true, as `console_rx`: the USB-Serial/JTAG controller's, or UART0's on a chip whose `boards.Chip.uart_pins` is false (the ESP32-P4 and the ESP32-S31). `Uart` takes `wire` `None` for it |
-| `Condition(find, description, service=None)`, `condition(find, description, *, service=None)` | frozen generic dataclass and its constructor, `esp32tl/interfaces/condition.py`, exported as `esp32tl.Condition` and `esp32tl.condition` | A described condition: called, it calls `find`; `repr` is `description`, which `board.wait_until` names it by because an instance has no `__qualname__`; `__bool__` raises `TypeError("call the condition {description!r} with (), or pass it to board.wait_until")`, or `call the {service} condition` with a `service`. `__post_init__` refuses with `TypeError` a `find` that is not callable (`condition: find is {find!r}, not a function of no arguments`), a `description` that is not non-empty `str` (`condition: description is {description!r}, not text naming the event`) and an empty or non-`str` `service` (`condition: service is {service!r}, not text naming it`). The MQTT, HTTP, DHCP and TLS conditions and `OutputLine.is_on` / `is_off` are instances |
+| `Condition(find, description, service=None)`, `condition(find, description, *, service=None)` | frozen generic dataclass and its constructor, `esp32tl/interfaces/condition.py`, exported as `esp32tl.Condition` and `esp32tl.condition` | A described condition: called, it calls `find`; `repr` is `description`, which `board.wait_until` names it by because an instance has no `__qualname__`; `__bool__` raises `TypeError("call the condition {description!r} with (), or pass it to board.wait_until")`, or `call the {service} condition` with a `service`. `__post_init__` refuses with `TypeError` a `find` that is not callable (`condition: find is {find!r}, not a function of no arguments`), a `description` that is not non-empty `str` (`condition: description is {description!r}, not text naming the event`) and an empty or non-`str` `service` (`condition: service is {service!r}, not text naming it`). The MQTT, HTTP, DHCP and TLS conditions, `OutputLine.is_on` / `is_off` / `next_change` and `Lines.next_change` are instances |
 | `LineCondition(lines, pattern)` | class, `esp32tl/interfaces/console.py` | What `console.line` returns: called, the first matching `ConsoleLine` since it was made, or since the last it found, or `None` |
 | `DEFAULT_TIMEOUT` | `int`, `esp32tl/interfaces/console.py` | 30: an expect's `timeout`, in seconds of the board's time |
 | `Gnss(name, wire, *, clock, directory, now, world, asked=..., log=None, files=None)` | class, `esp32tl/interfaces/gnss.py`, a `Uart` | `fix(at, *, hdop=0.9, satellites=8)`, `move(*, heading, speed)`, `stand_still()`, `degrade(*, hdop=None, satellites=None)`, `lose_fix()`, `go_silent()`, `resume()`, `position`, each the `GnssReceiver`'s; `receiver()` the receiver, made by the first call that succeeds |
@@ -624,7 +624,8 @@ among them, so two conditions made by two calls of `is_on` or of a TLS property 
 
 The same module holds `FirstFrom(history, start, wanted)`, the `find` of every "next …" condition
 over an append-only history: `board.next_boot`, MQTT's `next_message`, `next_delivery` and
-`next_subscribe`, HTTP's `next_request`, and `SppPeer.next_write` and `next_written_line`. It is
+`next_subscribe`, HTTP's `next_request`, `SppPeer.next_write` and `next_written_line`, and
+`Lines.next_change` and `OutputLine.next_change`. It is
 not exported from `esp32tl`. `history` is a function of no arguments, called at each poll, so that
 it may bring the history up to date first (`SppPeer._written`) or build it anew (`boots`); `start`
 is the boundary, the length of the history when the condition was made; `wanted` is the filter of
@@ -658,8 +659,8 @@ refusal on the serial backend.
 
 `Lines.output(line, active=1)` in `esp32tl/interfaces/lines.py` resolves and validates the line
 immediately and returns an immutable `OutputLine`. The handle creates
-[`Condition`](#described-conditions) values through `is_on` and `is_off`, with the service
-`output`. Each call reads `Lines.level(pin)` under
+[`Condition`](#described-conditions) values through `is_on` and `is_off`, and `next_change`,
+below, with the service `output`. Each call of `is_on` or `is_off` reads `Lines.level(pin)` under
 its existing lock and compares it to the configured active or inactive level. `None` matches
 neither. The handle's `events()` filters a snapshot of `Lines.events()` by pin, preserving the
 origin and timestamp; it queues no messages and reserves no pins.
@@ -686,6 +687,34 @@ consume it. Input events cannot satisfy or violate a firmware-output assertion.
 
 `tests/test_lines.py` covers current-state diagnostics, both polarities and states, a one-nanosecond
 pulse, unknown/released outputs, starting/end boundaries, input filtering and invalid windows.
+
+`Lines.next_change(line, level="any", *, by="firmware")` resolves the line and checks `level`
+(0, 1, a `bool`, `None` or `"any"`) at the call, then hands it to `Lines._next_change(pin,
+level, by, to, service)`, which `OutputLine.next_change(*, on=None, by="firmware")` calls too,
+with `on` turned into the active level or the other one through the handle's `active`, and
+`on=None` into `"any"`. `_next_change` checks `by` against `ORIGINS` (`ValueError` for other
+text, `TypeError` for what is not text), reads `len(self._events)` under the lock as the
+boundary, and returns a [`Condition`](#described-conditions) whose `find` is
+`FirstFrom(lambda: self._events, start, wanted)`, `wanted` accepting an event of the pin, of the
+origin unless `by` is `None`, and of the level unless it is `"any"`. The history is
+`_events` itself, in the order the events were appended, not `events()`: that sorts a copy by
+time at each call, and `FirstFrom` needs a history whose records up to its old end do not
+change. `_events` only grows, the link's thread appending under the lock and `FirstFrom`
+reading by index without it. The boundary is append order, as HTTP's `next_request`'s: an event
+appended after the call is after it. The service is `output` from the handle and `lines` from
+`Lines`; the description is
+`the next change of {name} (GPIO {pin})[ to on (level 1) | to level 1 | to undriven] by the firmware`,
+or `by the test`, `by a model`, `by the firmware, the test or a model`.
+
+`tests/test_lines.py` checks that a condition made while the level holds waits for the next
+change to it, that it keeps its match and a second one made after it finds the next, that a
+change by the test or a model does not match `by="firmware"` and matches its own `by`, the
+levels and undriven, the descriptions and the refusals of a level, an origin, a line and `bool()`,
+and that a poll after each of 10 000 events reads each once
+(`test_a_next_change_poll_reads_only_the_events_since_the_last_one`).
+`tests/test_modem_recovery.py::test_two_successive_next_presses_of_pwrkey_are_the_recovery_s_two_presses`
+waits for two successive `next_change(on=True)` of PWRKEY on `firmware/modem_recovery` and gets
+the recovery's two presses, the first while `is_on` still holds.
 
 
 ## Shared board and FAT image API

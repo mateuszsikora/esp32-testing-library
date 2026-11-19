@@ -4828,6 +4828,27 @@ their margin depends on the runner; the tests count the records a poll reads wit
 public API grows only with a test that needs it, and `condition(find, description)` with a `find`
 of the test's takes any history meanwhile.
 
+## A line's next change is an on/off condition on the output handle and a pin-level one on `lines`
+
+Status: decided (#279)
+
+`is_on` and `is_off` hold as long as the level does, so a wait on one returns at once while the
+level already holds, and the firmware's next press of a pin needed a condition of the test's over
+`lines.events()`. `OutputLine.next_change(*, on=None, by="firmware")` and
+`Lines.next_change(line, level="any", *, by="firmware")` are "next …" conditions over the line's
+changes, with the semantics of the others: the boundary is the call, polling never moves it, and
+the same `LineEvent` comes back at every poll. The handle speaks in on and off through its
+`active`, as `is_on` and `assert_on` do, so that an active-low output reads the same as an
+active-high one; `lines` has no polarity and speaks in pin levels, with `None` for undriven. `by`
+defaults to the firmware, since a test waits for what the firmware does, and `None` takes any
+origin. The history is `Lines._events` in the order its events were appended, through `FirstFrom`.
+
+**Rejected:** `level=` on `OutputLine`, the signature the issue sketched, because it would say again
+in pin levels what the handle's `active` already says, and a test reading `next_change(level=0)` on
+an active-low output would have to know which of on and off that is. Also rejected: `events()` as
+the history, because it sorts a new copy at every call, and `FirstFrom` needs a history whose
+records up to its old end stay where they are.
+
 ## A real receiver's capture or raw NMEA log is converted to the emulated clock, not modelled
 
 Status: decided (#263)

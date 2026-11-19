@@ -383,8 +383,8 @@ end = board.wait_until(trip_end(broker, "car-1"), within=minutes(3))
   of the description: `condition(find, "the next MQTT message", service="MQTT")` raises
   `TypeError: call the MQTT condition with (), or pass it to board.wait_until`.
 - It is a frozen `esp32tl.Condition`, generic in what `find` returns, for annotating helpers.
-  The conditions of the network's services, of TLS, of `lines.output(...).is_on` and
-  `.is_off`, and `board.next_boot()` are the same type.
+  The conditions of the network's services, of TLS, of `lines.output(...).is_on`, `.is_off`
+  and `.next_change()`, `lines.next_change()`, and `board.next_boot()` are the same type.
 - What it checks is up to `find`: the condition itself keeps nothing and consumes nothing; `find`
   may keep what it likes, as the package's own do. Capture a boundary, as `start` above, when the
   condition makes it, so that a message already received does not satisfy it. A wait on esp32sim
@@ -1061,6 +1061,8 @@ def test_the_firmware_follows_ri_and_drives_pwrkey(board):
   1, or `None` for a line no longer driven. A drive to the level the test drives the line to
   already, or a release of a line the test does not drive, is no change, and sends nothing. A drive
   after the run has ended is still listed, though it reaches no board.
+- `lines.next_change(line, level="any", *, by="firmware")` is a condition for the line's next
+  change after the call ([the next change of a line](#the-next-change-of-a-line)).
 - A line that is not one of the profile's raises `ValueError`:
   `GPIO 5 is no line of the board profile lilygo-t-a7670g-r2; its lines are modem.pwrkey (GPIO 4), modem.ri (GPIO 33)`.
   A level other than 0 or 1 raises `ValueError: lines.drive: level 2 is not 0 or 1`, or
@@ -1175,6 +1177,55 @@ Names are checked when the handle is created, with the same errors as `lines.lev
 An invalid polarity raises `ValueError: lines.output: active 2 is not 0 or 1`, or
 `TypeError: lines.output: active '1' is not 0 or 1` for a non-integer; booleans count as 0/1,
 as in `lines.drive`. Existing `drive`, `release`, `level` and `events` calls remain available.
+
+### The next change of a line
+
+`is_on` holds as long as the level does, so a wait on it returns at once while PWRKEY is still
+held. `next_change` waits for the line's next change instead, as for "the firmware's next press of
+this pin". Shortened from `tests/test_modem_recovery.py`, where `modem_recovery` presses PWRKEY
+twice to bring a hung modem back
+([validation firmware](validation-firmware-user.md#modem_recovery)):
+
+```python
+key = lines.output("modem.pwrkey")
+modem.hang(pwrkey=True)
+first = board.wait_until(key.next_change(on=True), within=seconds(120))
+second = board.wait_until(key.next_change(on=True), within=seconds(30))
+assert second.t - first.t > seconds(10)
+```
+
+- `output.next_change(*, on=None, by="firmware")` is a [described condition](#described-conditions)
+  for the line's first change after the call: with `on=True` a change to its active level, with
+  `on=False` one to the other level, and with `on=None` any change, to undriven too. It returns
+  the `LineEvent` of that change, with its exact `t`, though `board.wait_until` sees it at its
+  next look, within 100 ms of the board's time.
+- `lines.next_change(line, level="any", *, by="firmware")` is the same by the line's name or
+  GPIO number, in pin levels: `level` is 0 or 1 (`True` and `False` count), `None` for a change
+  to undriven, or `"any"` for any change.
+- `by` is who makes the change, as in `LineEvent.by`: `"firmware"`, the default, `"test"` or
+  `"model"`, or `None` for any of them. A change the test or a model makes on the line does not
+  match `by="firmware"`.
+- The boundary is the line's changes when the condition is made: a change before it does not
+  count, however recent, and a level that holds is no change. Polling never moves the boundary,
+  and nothing is consumed: the condition returns the same event every time it is asked, so the
+  second press needs a second `next_change`, made after the first one matched. Make it before
+  what makes the firmware change the line.
+- A timeout names the line, the level and who was to change it:
+  `the next change of modem.pwrkey (GPIO 4) to on (level 1) by the firmware did not happen within 30 s`,
+  followed by the time window; without `on`,
+  `the next change of modem.pwrkey (GPIO 4) by the firmware`, and from `lines`,
+  `the next change of modem.ri (GPIO 33) to level 0 by a model` or
+  `the next change of modem.ri (GPIO 33) to undriven by the firmware`. `by=None` reads
+  `by the firmware, the test or a model`.
+- `bool()` of it raises `TypeError: call the output condition with (), or pass it to board.wait_until`,
+  or `call the lines condition` for one from `lines.next_change`.
+- A line that is not one of the profile's raises `ValueError` as `lines.level` does. Anything else
+  is refused when the condition is made: `ValueError: lines.next_change: level 2 is not 0, 1, None or "any"`,
+  or `TypeError` with the same message for a level that is not an integer;
+  `ValueError: lines.next_change: by 'fw' is not "firmware", "test", "model" or None`, or
+  `TypeError` with the same message for a `by` that is not text, and `output.next_change: …`
+  from the handle; and
+  `TypeError: output.next_change: on 1 is not True, False or None`.
 
 ### A UART's own model
 

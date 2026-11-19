@@ -2304,7 +2304,15 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_spp_peer.py::test_a_next_written_line_poll_reads_only_the_lines_since_the_last_one`,
   `tests/test_net_client.py::test_a_next_data_poll_searches_only_the_bytes_since_the_last_one`,
   `tests/test_ble_peer.py::test_a_next_advertisement_poll_reads_only_the_advertisements_since_the_last_one`,
-  `tests/test_ble_peer.py::test_a_next_write_poll_reads_only_the_writes_since_the_last_one`
+  `tests/test_ble_peer.py::test_a_next_write_poll_reads_only_the_writes_since_the_last_one`,
+  `tests/test_lines.py::test_a_next_change_poll_reads_only_the_events_since_the_last_one`
+- **279.** A line's `next_change` matches only a change made after the call: a level that already
+  holds does not satisfy it, it returns the same `LineEvent` at every poll, and a second
+  `next_change` made after the first one matched returns the next change, a different event. A
+  change by the test or a model does not match `by="firmware"`.
+  `tests/test_lines.py::test_next_change_waits_for_a_change_after_the_call_even_while_the_level_holds`,
+  `tests/test_lines.py::test_next_change_by_the_firmware_ignores_the_test_s_and_a_model_s_changes`,
+  `tests/test_modem_recovery.py::test_two_successive_next_presses_of_pwrkey_are_the_recovery_s_two_presses`
 
 ## The reset reason ESP-IDF reports
 

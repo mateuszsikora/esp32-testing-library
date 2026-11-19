@@ -76,6 +76,25 @@ def test_recovers_a_hung_modem(
     assert modem.restarts[0].at == (key[1][1] if pwrkey else reset[1][1]) + ms(1)
 
 
+def test_two_successive_next_presses_of_pwrkey_are_the_recovery_s_two_presses(
+    board: Esp32Sim, modem: Modem, lines: Lines, console: Console
+) -> None:
+    modem.network()
+    key = lines.output("modem.pwrkey")
+    board.power_on()
+    board.wait_until(console.line("modem_recovery: connected"), within=seconds(60))
+    modem.hang(pwrkey=True)
+    hung_at = board.now
+
+    first = board.wait_until(key.next_change(on=True), within=seconds(120))
+    # PWRKEY is still held for 3 s: `is_on` holds, and only the next press is a change to on.
+    assert key.is_on()
+    second = board.wait_until(key.next_change(on=True), within=seconds(30))
+    presses = [e for e in key.events() if e.by == "firmware" and e.level == 1 and e.t >= hung_at]
+    assert presses[:2] == [first, second]
+    assert first != second and second.t - first.t > seconds(10)
+
+
 @pytest.mark.parametrize("pwrkey", [True, False])
 def test_recovers_a_modem_that_hangs_while_the_firmware_dials(
     board: Esp32Sim, modem: Modem, console: Console, pwrkey: bool
