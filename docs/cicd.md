@@ -495,9 +495,10 @@ contents, pull requests and Actions.
 The PR's `pull_request` runs of **CI** and **Runtime release** start in `action_required`: the
 fork approval policy above counts `github-actions[bot]` as an external contributor, and the
 required checks wait with them. The workflow's last step, **Approve the pull request's workflow
-runs**, waits up to two minutes for the PR's CI run, then approves every run of the PR's head
-commit in `action_required` (`POST /repos/{owner}/{repo}/actions/runs/{run_id}/approve`, with the
-job's `actions: write`). Dispatching `ci.yml` on the branch is no substitute: for v0.2.0 (#272) a
+runs**, waits up to two minutes for the PR's CI run, then approves every `pull_request` run of
+the PR's head commit in `action_required` (`POST /repos/{owner}/{repo}/actions/runs/{run_id}/approve`, with the
+job's `actions: write`). It tries every such run before failing, and logs a line when none
+waits. Dispatching `ci.yml` on the branch is no substitute: for v0.2.0 (#272) a
 dispatched run passed all 30 required checks on the PR's head commit, yet the PR stayed
 `BLOCKED`: the PR's checks list only runs GitHub links to the PR, and the dispatched run's check
 suite links none.
@@ -510,9 +511,11 @@ gh workflow run prepare-release.yml --ref main -f version=0.1.1
 
 The preparation job has a five-minute timeout and is serialized. Existing release branches are
 never force-pushed. If creating the PR fails after the branch push, open it from the existing
-branch; do not rerun preparation expecting it to overwrite that branch. If the approval step
-fails, its error names each run left waiting: approve it with **Approve and run** on the PR, or with
-`gh api -X POST repos/mateuszsikora/esp32-testing-library/actions/runs/RUN_ID/approve`.
+branch; do not rerun preparation expecting it to overwrite that branch. If an approval fails,
+the step's errors name each run it could not approve; if no CI run appeared in two minutes, the
+error names none. Either way, approve the waiting runs with **Approve and run** on the PR, or with
+`gh api -X POST repos/mateuszsikora/esp32-testing-library/actions/runs/RUN_ID/approve`. The PR's
+description says the last step approves its runs, whether or not it managed to.
 
 ## Version-only CI
 

@@ -210,8 +210,8 @@ jobs:
 
   # The documentation contract (docs/guides/documentation.md): the pull request's changes must
   # update the documentation that owns them. Against the pull request's real base branch, with the
-  # full history the merge base needs; a shallow checkout has no merge base. Manual dispatch
-  # on bot-created version branches also runs this required check, against origin/main.
+  # full history the merge base needs; a shallow checkout has no merge base. A manual run
+  # checks the documentation contract too, against origin/main.
   docs:
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04

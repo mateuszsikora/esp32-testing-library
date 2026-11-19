@@ -34,7 +34,7 @@ jobs:
         run: python .github/scripts/release-version.py bump "$VERSION"
       - name: Check the documentation contract before pushing
         run: make docs-check BASE=HEAD
-      - name: Create the version pull request and start its CI
+      - name: Create the version pull request
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
@@ -56,7 +56,7 @@ jobs:
 
           ## Verification
 
-          The Prepare release workflow validated all three versions and approved this pull request's CI and Runtime release runs. CI will validate the diff and package metadata before merge. Merging this exact version-only change starts the native release builds; publishing the resulting draft remains manual.
+          The Prepare release workflow validated all three versions and, in its last step, approves this pull request's CI and Runtime release runs; if that step failed, approve them under Actions. CI will validate the diff and package metadata before merge. Merging this exact version-only change starts the native release builds; publishing the resulting draft remains manual.
           EOF
           gh pr create --base main --head "$branch" --title "build: prepare release $VERSION" \
             --body-file "$RUNNER_TEMP/release-pr.md" --label area:ci
@@ -76,14 +76,20 @@ jobs:
           sleep 5
           gh api "$runs" --jq '.workflow_runs[] | [.id, .name, .conclusion // ""] | @tsv' > "$RUNNER_TEMP/runs.tsv"
           if ! cut -f2 "$RUNNER_TEMP/runs.tsv" | grep -qx CI; then
-            echo "::error::No CI run started for $head in two minutes; approve the pull request's runs under Actions."
+            echo "::error::No CI run started for $head in two minutes; approve the pull request's runs under Actions once they appear."
             exit 1
           fi
+          waiting=0
+          failed=0
           while IFS=$'\t' read -r id name conclusion; do
             [ "$conclusion" = action_required ] || continue
-            if ! gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$id/approve" > /dev/null; then
+            waiting=$((waiting + 1))
+            if gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$id/approve" > /dev/null; then
+              echo "Approved $name run $id"
+            else
               echo "::error::Could not approve $name run $id; approve it under Actions or with: gh api -X POST repos/$GITHUB_REPOSITORY/actions/runs/$id/approve"
-              exit 1
+              failed=1
             fi
-            echo "Approved $name run $id"
           done < "$RUNNER_TEMP/runs.tsv"
+          [ "$waiting" -gt 0 ] || echo "No pull_request run of $head waits for approval."
+          exit "$failed"
