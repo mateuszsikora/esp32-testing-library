@@ -222,6 +222,18 @@ options:
   --version    show program's version number and exit
 ```
 
+That is the layout of Python 3.13 and 3.14. Python 3.11, which CI's Linux test jobs run, keeps the
+help column narrower and puts the help of `recording` on the line after it, and the options' help
+one column to the left:
+
+```
+    replay    run an app with a recording replayed into one of its board's
+              interfaces
+    recording
+              convert what a real device sent into a recording the emulator
+              replays
+```
+
 `esp32tl run -h`, `esp32tl replay -h`, `esp32tl recording -h`, `esp32tl recording retime -h` and
 `esp32tl recording nmea -h` print each command's options. Any other argument is an error from
 argparse, with exit code 2:

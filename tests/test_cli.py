@@ -80,13 +80,17 @@ def finished(process: subprocess.Popen[str]) -> tuple[int, str, str]:
 def test_the_help_names_run_replay_and_recording(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # argparse wraps the help to the terminal's width.
+    # argparse wraps the help to the terminal's width, and Python 3.11 puts the help of a command
+    # as long as `recording` on the line after it: the words, not the spaces, are checked.
     monkeypatch.setenv("COLUMNS", "80")
     assert cli.main([]) == 0
-    out = capsys.readouterr().out
-    assert "run        run an app on the emulator, its console on stdout" in out
-    assert "replay     run an app with a recording replayed into one of its board's" in out
-    assert "recording  convert what a real device sent into a recording the emulator" in out
+    words = " ".join(capsys.readouterr().out.split())
+    assert "runtime prepare the downloaded runtime" in words
+    assert "run run an app on the emulator, its console on stdout" in words
+    assert "replay run an app with a recording replayed into one of its board's interfaces" in words
+    assert (
+        "recording convert what a real device sent into a recording the emulator replays" in words
+    )
 
 
 @pytest.mark.parametrize(
