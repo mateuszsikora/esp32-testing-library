@@ -145,8 +145,10 @@ must do before `board.power_on()`: the backend passes the runner `--bt` with the
 the first `.elf` file in an ESP-IDF build directory, `firmware.elf` in a PlatformIO one
 ([runner](runner-user.md#give-the-guest-a-bluetooth-controller)), and the link carries every H4
 packet the firmware's Bluetooth host sends to the firmware's controller in the harness, on the
-test's clock, and the controller's packets back, 100 µs after the instant each was made. A test
-that wants Bluetooth on and no device nearby calls `board.bluetooth.use()`: the harness's
+test's clock, and the controller's packets back, 100 µs after the instant each was made. The
+controller is the board profile's chip's: BR/EDR on the classic ESP32, LE only on the ESP32-S3,
+the ESP32-C3 and the ESP32-C6 ([the firmware's controller](bluetooth-peer-user.md#the-firmwares-controller)).
+A test that wants Bluetooth on and no device nearby calls `board.bluetooth.use()`: the harness's
 controller, with nothing on the air. Without it the link carries no Bluetooth
 ([below](#a-firmware-that-starts-its-controller-without-boardbluetooth)). `board.power_off()` takes
 the controller off the air, as a device switched off, and `board.power_on()` puts it back; a reset

@@ -22,7 +22,7 @@ from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from contextvars import Context
 from typing import Any, Protocol, TypeVar, TypeVarTuple
 
-from bumble import controller, core, hci, lmp
+from bumble import controller, core, hci, ll, lmp
 from bumble.link import LocalLink
 
 from esp32tl.backends.clock import nanoseconds, seconds
@@ -125,7 +125,12 @@ class Link(LocalLink):
     device that has left, and between two devices on a link that lost contact, until both ends
     have let it go. What is refused vanishes without a word, as on the air, also what is sent to
     an address no device has. Bumble's own link raises for that address, and delivers to any
-    controller it holds. Whether a device can be reached is decided here and nowhere else."""
+    controller it holds. Whether a device can be reached is decided here and nowhere else.
+
+    Devices are named by their public addresses here. An advertising event reaches every device on
+    the air, whatever links were lost; LE data and control PDUs reach the device the connection is
+    with, from the connection's own address, where Bumble's link names the sender's random
+    address whatever address the connection has."""
 
     def __init__(self) -> None:
         # Bumble's LocalLink leaves its constructor unannotated.
@@ -166,8 +171,52 @@ class Link(LocalLink):
         transport: core.PhysicalTransport,
         data: bytes,
     ) -> None:
+        if transport == core.PhysicalTransport.LE:
+            connection = sender_controller.le_connections.get(destination_address)
+            receiver = self._le_peer(sender_controller, destination_address)
+            if (
+                connection is not None
+                and receiver is not None
+                and self.reaches(sender_controller.public_address, receiver.public_address)
+            ):
+                source = connection.self_address
+                asyncio.get_running_loop().call_soon(
+                    receiver.on_link_acl_data, source, transport, data
+                )
+            return
         if self.reaches(sender_controller.public_address, destination_address):
             super().send_acl_data(sender_controller, destination_address, transport, data)
+
+    def _le_peer(
+        self, sender: controller.Controller, address: hci.Address
+    ) -> controller.Controller | None:
+        """The controller `sender`'s LE connection to `address` is with."""
+        peers = getattr(sender, "_le_peers", {})
+        return peers.get(address) or self.find_le_controller(address)
+
+    def send_advertising_pdu(
+        self, sender_controller: controller.Controller, packet: ll.AdvertisingPdu
+    ) -> None:
+        if not self.present(sender_controller.public_address):
+            return
+        loop = asyncio.get_running_loop()
+        for receiver in self.controllers:
+            if receiver is not sender_controller and self.present(receiver.public_address):
+                heard = getattr(receiver, "_heard_on_link", None)
+                if heard is not None:
+                    loop.call_soon(heard, sender_controller, packet)
+                else:
+                    loop.call_soon(receiver.on_ll_advertising_pdu, packet)
+
+    def send_ll_control_pdu(
+        self, sender_address: hci.Address, receiver_address: hci.Address, packet: ll.ControlPdu
+    ) -> None:
+        sender = self.find_le_controller(sender_address)
+        if sender is None:
+            return
+        receiver = self._le_peer(sender, receiver_address)
+        if receiver is not None and self.reaches(sender.public_address, receiver.public_address):
+            asyncio.get_running_loop().call_soon(receiver.on_ll_control_pdu, sender_address, packet)
 
     def send_lmp_packet(
         self,
@@ -199,6 +248,10 @@ class Air:
         self._loop.set_exception_handler(self._failed)
         self._link = Link()
         self._parties: list[Party] = []
+        # The LE devices made on the air, in order, whose events the board's report lists, and
+        # where those events go as they happen: the run log, on an air the board made.
+        self.le_devices: list[Any] = []
+        self.log: Callable[[int, str], None] | None = None
         self._next_timer: int | None = None
         self._error: BaseException | None = None
         # asyncio's description of where `_error` was raised; empty for one given to `fail`.
@@ -215,6 +268,11 @@ class Air:
         with self._lock:
             self._parties.append(party)
             self._settle()
+
+    def note(self, text: str) -> None:
+        """`text` happened on the air at its current instant: into the run log, if it has one."""
+        if self.log is not None:
+            self.log(self._loop.now, text)
 
     def call(self, function: Callable[[], T]) -> T:
         """`function`, called inside the loop at the current instant, and everything it sets

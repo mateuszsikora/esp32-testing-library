@@ -64,8 +64,10 @@ without starting anything:
    station becomes a
    `Wifi(now=lambda: hold.now, world=lambda: self._utc, asked=self._asked, log=self.log)`
    (`esp32tl/interfaces/wifi.py`), on every profile, and the chip's Bluetooth a
-   `Bluetooth(asked=self._asked, log=self.log, directory=self.directory, files=self._files)`
-   (`esp32tl/interfaces/bluetooth.py`), which shares the routes' files for its tap, with no air
+   `Bluetooth(asked=self._asked, log=self.log, directory=self.directory, files=self._files,
+   chip=profile.chip)` (`esp32tl/interfaces/bluetooth.py`), which shares the routes' files for its
+   tap and makes the firmware's controller of the profile's chip, LE only on the S3, the C3 and the
+   C6 ([bluetooth-peer-technical.md](bluetooth-peer-technical.md#bluetooth-le)), with no air
    until the test asks for it ([bluetooth-peer-technical.md](bluetooth-peer-technical.md#data-flow),
    item 12).
 5. **The lines.** One `Lines(profile.name, profile.lines, now, log=self.log)`

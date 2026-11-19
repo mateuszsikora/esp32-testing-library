@@ -447,8 +447,12 @@ def test_chip_images_build_their_projects_for_the_chip(
         for image, project in projects.items()
     ]
     entries.append(("hello_world_psram", "esp32s3", hello))
-    gatt = f"{tmp_path}/idf/examples/bluetooth/bluedroid/ble/gatt_server"
-    entries += [("gatt_server", "esp32s3", gatt), ("gatt_server", "esp32c3", gatt)]
+    ble = f"{tmp_path}/idf/examples/bluetooth/bluedroid/ble"
+    entries += [
+        (image, chip, f"{ble}/{image}")
+        for chip in ("esp32s3", "esp32c3")
+        for image in ("gatt_server", "gatt_client", "gatt_security_server")
+    ]
     entries += [("hello_world_8mb", chip, hello) for chip in ("esp32s3", "esp32c3", "esp32c6")]
     usb = str(ROOT / "firmware" / "console_repl_usb")
     entries += [("console_repl_usb", chip, usb) for chip in ("esp32s3", "esp32c3", "esp32c6")]

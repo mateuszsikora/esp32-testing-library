@@ -4865,3 +4865,97 @@ that two runs send the same bytes. A model of a receiver's noise is a guess wher
 the device's own output. A converted capture covers a speed of a few tenths of a knot at rest and
 the epochs of a cold start without a fix. If a model ever does it, the converted recordings are
 what to compare it with.
+
+## Bluetooth LE peers on Bumble's LE link layer, with esp32tl's fixes
+
+Status: decided (#234)
+
+The LE devices beside the board, `BlePeripheral` and `BleCentral`, are Bumble `Device`s with LE on
+and BR/EDR off, on the same `LocalLink` and the same kind of controller as the Classic peers. Their
+GATT server and client, their Security Manager (LE Secure Connections, Just Works, passkey entry and
+numeric comparison, bonding with identity resolution) and their advertising and scanning commands
+are Bumble's, unchanged. What Bumble 0.0.236's controller and link get wrong for a firmware's
+Bluedroid is fixed in `esp32tl/bluetooth/link_layer.py`, a `LinkLayer` between Bumble's controller
+and esp32tl's `Controller`, and in `Link`: the advertising interval in units of 0.625 ms, which
+Bumble reads as milliseconds; the legacy advertising types beside `ADV_IND`; the scan response, which
+Bumble replaces with the advertising data; the initiator's parameters in the peripheral's
+`LE_Connection_Complete`; `LE_Create_Connection_Cancel`, which Bumble answers and does nothing for;
+the filter accept list and the resolving list, which it does not keep; the resolvable private
+address a controller makes for own address type `0x02`, which Bluedroid's local privacy asks for,
+where Bumble advertises from an all-zero random address; `LE_Enhanced_Connection_Complete`, without
+which Bluedroid's SMP pairs with an address the central never saw, and the DHKey check fails; LE
+data sent from the connection's address, where Bumble's link sends from the controller's random
+address whatever the connection's; LE link supervision, which Bumble does not have; `LE_Rand` from
+the controller's own generator; `LE_Set_Data_Length`, which Bumble lists and has no handler for. With
+them, ESP-IDF's `gatt_server`, `gatt_client` and `gatt_security_server`, unmodified, ran on the
+ESP32-S3 and the ESP32-C3 with `bt.unknown_commands() == []` on 2026-11-19.
+
+The central's operations over a connection return a `Condition` for `board.wait_until`, as
+`HttpClient` returns an exchange whose `response` is one: on `bt.air` only the board's link moves
+the time, so a call cannot wait itself. A security request from the peer is answered as a phone
+answers it, by encrypting with the keys kept for the peer, or pairing without. A pairing is a bond
+when both sides asked for one and it gave a long term key, of LE Secure Connections or of legacy
+pairing; without a bond the device keeps no key, though Bumble 0.0.236 stores them whatever was
+asked. The "next …" conditions read only the records appended since their last poll, as the
+others since #262 do.
+
+**Rejected:** a link layer of esp32tl's own, below Bumble's hosts, with connection events and their
+timing, because nothing the issue's tests ask for depends on the timing, Bumble's handlers answer the
+rest of what Bluedroid sends, and the Classic link carries data at the instant it is sent too. Also
+rejected: asking Bumble upstream for the fixes first, because each was found by running Bluedroid
+against it here, and esp32tl pins an exact Bumble; they can go upstream once settled. Also
+rejected: blocking calls on the central that let the board run until they are done, because a peer
+would then hold the board, which the air does not know of, and a test could not start two things at
+one instant. Also rejected: Bumble's own `Advertisement` for the central's `advertisements`, because the one
+its accumulator makes of an advertising event and its scan response keeps the scan response's bytes
+alone in `data_bytes`, and the two merged in `data`: a test that asks what went where cannot tell.
+
+## An LE-only chip's controller reports LE alone and takes Espressif's report flow control
+
+Status: decided (#234)
+
+On the ESP32-S3, the ESP32-C3 and the ESP32-C6 (`LE_CHIPS`), the guest's controller reports what
+an ESP32-S3 (QFN56, revision v0.2) reported on 2026-11-19 to `tools/hci_probe`, an ESP-IDF v5.3.6
+image that asks the chip's own controller through VHCI, with Bluedroid configured as the BLE 4.2
+examples are and never started: page 0 alone, `LE Supported (Controller)` and `BR/EDR Not
+Supported`; version 5.0 and Espressif's company identifier; LE features `0xFF`; an LE buffer of 251
+bytes and 12 packets; its list sizes, data lengths, advertising power and supported commands; 5
+command packets; and `Command_Complete` with `UNKNOWN_HCI_COMMAND` for every command it does not
+know, `Inquiry` among them. The classic ESP32's is unchanged: BR/EDR, pages 0 to 2, no LE. The
+interface learns the chip from the board profile's `chip`. The probe asked in Bluedroid's order
+where it matters: a first run, with the controller built for BLE 5.0 as a controller-only image
+builds it (`BLE_50:1`), got `UNKNOWN_HCI_COMMAND` for `0xFD09` and LE features `0x080001F9FF`, and
+the unmodified `gatt_client` on the same board logged no error for `0xFD09`; the controller's mode
+follows the host's configuration at build time (`BT_CTRL_50_FEATURE_SUPPORT`,
+`components/bt/include/esp32c3/include/esp_bt.h`), so the values are those of a BLE 4.2 build,
+which all the BLE validation images are. The C3's controller is built from the same sources and the
+C6's is not; neither was measured, and both take the S3's values until they are (`TODO(owner)`).
+
+It also takes Espressif's vendor commands `0xFD09` and `0xFD0A`, the flow control of advertising
+reports Bluedroid turns on for an LE controller, and keeps to the credits: Bluedroid asserts in
+`hci_adv_credits_consumed` on a report it has no credit for, and sends `0xFD0A` without waiting for
+an event, so the controller answers it with none. Past the lost threshold, the next credit given
+back first brings the vendor LE Meta event `0xF0` with the number of reports dropped, as the S3
+sent it (104, when 2 credits came back after 2 reports and a threshold of 3).
+
+**Rejected:** leaving the vendor commands to the unknown-command answer, because `0xFD0A`'s
+`Command_Complete` reaches a host that waits for none (`filter_incoming_event command complete event
+with no matching command`), the list of unknown commands a test asserts empty would never be, and a
+scan longer than the credits would stop the firmware. Also rejected: reporting the LE features of the
+S3's controller built for BLE 5.0, with extended advertising, because the harness's link does not
+carry extended advertising, and the validation images run it built for BLE 4.2. Also rejected:
+keeping Bumble's answers to the commands the S3 does not list, `Read_Buffer_Size` and `Inquiry`
+among them, because a host that sends one would then work here and not on the chip.
+
+## Extended advertising, LE Audio, the coded PHY and several connections wait
+
+Status: postponed (#234)
+
+Left out of the LE link layer and the peers: extended and periodic advertising and scanning, the
+coded PHY, isochronous channels and LE Audio, directed advertising, more than one connection on a
+`BleCentral`, the connection's events and their timing, the resolution of a peer's private address
+in the firmware's controller (Bluedroid resolves it itself), and out of band pairing. Bluedroid's
+examples on the S3 and the C3 are built with `CONFIG_BT_BLE_42_FEATURES_SUPPORTED` and use none of
+them. Each is for a firmware that needs it; a firmware built with
+`CONFIG_BT_BLE_50_FEATURES_SUPPORTED` uses extended advertising, and the controller's LE features
+say it has none.

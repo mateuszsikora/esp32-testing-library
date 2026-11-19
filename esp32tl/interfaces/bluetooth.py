@@ -4,10 +4,12 @@ board's clock. The `bt` fixture is it.
 On the `esp32sim` backend the firmware's host, ESP-IDF's Bluedroid, talks to its controller through
 esp32sim's VHCI, which the runner's `--bt` forwards on the link: every H4 packet the host sends
 reaches `receive` at its time on the board's clock, and what the guest's controller sends its host
-goes out `LATENCY_NS` after the instant it made it. The controller is a `GuestController` on an
+goes out `LATENCY_NS` after the instant it made it. The controller is a `GuestController` of the
+board profile's chip, BR/EDR on the classic ESP32 and LE only on the S3, the C3 and the C6, on an
 `Air` whose time is the board's: the link moves it from turn to turn, and the test reaches it, to
-put an `SppPeer` or a `BluetoothDevice` on it or to switch one off, while the board holds the link
-in a turn, at the board's current instant.
+put an `SppPeer`, a `BluetoothDevice`, a `BlePeripheral` or a `BleCentral` on it or to switch one
+off, while the board holds the link in a turn, at the board's current instant. The LE devices'
+events go into the run log as they happen, and into the report.
 
 `tap(path)` records the HCI between the firmware's host and its controller, every packet both ways
 at the time it crossed the link, for a btsnoop file the backend writes at the end of the run.
@@ -76,8 +78,10 @@ class Bluetooth(Interface):
         latency: int = LATENCY_NS,
         directory: Path | None = None,
         files: dict[Path, tuple[str, str]] | None = None,
+        chip: str = "esp32",
     ) -> None:
         super().__init__(NAME, None)
+        self.chip = chip
         self.asked = asked
         self.log = log
         self.directory = Path.cwd() if directory is None else directory
@@ -111,10 +115,13 @@ class Bluetooth(Interface):
         with self._lock:
             if self._air is None:
                 air = Air(board_clock=True)
-                controller = air.call(lambda: GuestController("esp32", air._link, self.address))
+                controller = air.call(
+                    lambda: GuestController(self.chip, air._link, self.address, chip=self.chip)
+                )
                 controller.host = self
                 self._air, self._controller = air, controller
                 if self.log is not None:
+                    air.log = self.log.test
                     self.log.test(0, f"bluetooth: the guest's controller at {self.address}")
             return self._air
 
@@ -318,6 +325,18 @@ class Bluetooth(Interface):
             lines += [f"    {board_time(p.t.ns)}  {_pairing(p)}" for p in pairings]
         devices = [f"{n} ({a}{'' if on else ', off the air'})" for n, a, on in self.devices()]
         lines.append("  devices: " + (", ".join(devices) or "none but the guest's"))
+        controller = self._controller
+        if controller is not None and controller.dropped_reports:
+            lines.append(
+                f"  advertising reports dropped for want of the host's credits:"
+                f" {controller.dropped_reports}"
+            )
+        for device in self._air.le_devices:
+            lines.append(
+                f"  {device.name} ({device.address}), LE {device.role}:"
+                f" {counted(len(device.events), 'event')}"
+            )
+            lines += [f"    {board_time(e.at.ns)}  {e.text}" for e in device.events]
         return lines
 
     def properties(self) -> dict[str, object] | None:
@@ -347,6 +366,16 @@ class Bluetooth(Interface):
                 for p in self.pairings()
             ],
             "devices": [{"name": n, "address": a, "present": on} for n, a, on in self.devices()],
+            "dropped_reports": 0 if self._controller is None else self._controller.dropped_reports,
+            "le_devices": [
+                {
+                    "name": device.name,
+                    "address": device.address,
+                    "role": device.role,
+                    "events": [{"t_ns": e.at.ns, "text": e.text} for e in device.events],
+                }
+                for device in self._air.le_devices
+            ],
         }
 
 

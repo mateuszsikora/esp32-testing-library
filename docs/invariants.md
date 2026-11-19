@@ -2268,7 +2268,9 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_net_http.py::test_a_next_request_poll_reads_only_the_requests_since_the_last_one`,
   `tests/test_spp_peer.py::test_a_next_write_poll_reads_only_the_events_since_the_last_one`,
   `tests/test_spp_peer.py::test_a_next_written_line_poll_reads_only_the_lines_since_the_last_one`,
-  `tests/test_net_client.py::test_a_next_data_poll_searches_only_the_bytes_since_the_last_one`
+  `tests/test_net_client.py::test_a_next_data_poll_searches_only_the_bytes_since_the_last_one`,
+  `tests/test_ble_peer.py::test_a_next_advertisement_poll_reads_only_the_advertisements_since_the_last_one`,
+  `tests/test_ble_peer.py::test_a_next_write_poll_reads_only_the_writes_since_the_last_one`
 
 ## The reset reason ESP-IDF reports
 
@@ -2296,3 +2298,37 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `runner/src/chip/tests.rs::the_c6_keeps_its_reset_hint`,
   `runner/src/chip/tests.rs::the_p4_keeps_its_reset_hint`,
   `runner/src/chip/tests.rs::the_s31_keeps_its_reset_hint`
+
+## Bluetooth LE
+
+- **268.** The firmware's controller is its chip's: on the ESP32-S3, the ESP32-C3 and the
+  ESP32-C6 it reports page 0 alone, `LE Supported (Controller)` and `BR/EDR Not Supported`, an LE
+  ACL buffer of 251 bytes and no extended advertising; on the classic ESP32 it keeps BR/EDR and no
+  LE.
+  On an LE-only chip it answers what the ESP32-S3 answered `tools/hci_probe`, the same bytes, and
+  answers a command the S3's supported commands do not name with `Command_Complete` and
+  `UNKNOWN_HCI_COMMAND`.
+  `tests/test_ble_peer.py::test_an_le_only_chip_s_controller_reports_le_and_no_br_edr`,
+  `tests/test_ble_peer.py::test_the_classic_esp32_s_controller_keeps_br_edr_and_no_le`,
+  `tests/test_ble_peer.py::test_an_le_only_chip_s_controller_answers_as_the_measured_esp32_s3`,
+  `tests/test_ble_peer.py::test_an_le_only_chip_s_controller_answers_what_it_does_not_know_with_command_complete`
+- **269.** With Espressif's flow control of advertising reports on (`0xFD09`), the guest's
+  controller sends its host no more `LE Advertising Report` events than the credits it has, and
+  counts the rest in `dropped_reports`; a credit given back (`0xFD0A`) gets no command acknowledgment, and neither
+  command is an unknown one. Once the reports dropped reach the lost threshold, the next credit given
+  back first brings the discard event (LE Meta `0xF0`) with their number, which takes a credit.
+  `tests/test_ble_peer.py::test_espressif_s_flow_control_sends_no_more_reports_than_the_credits`,
+  `tests/test_ble_peer.py::test_past_the_lost_threshold_a_credit_given_back_first_tells_how_many_were_dropped`
+- **270.** An LE connection one of whose devices left the air falls on both ends with
+  `CONNECTION_TIMEOUT` (`0x08`) at the supervision timeout it was made or last updated with, counted
+  from the instant it left.
+  An update of the connection asked for once it lost contact does not change that timeout.
+  `tests/test_ble_peer.py::test_out_of_range_both_ends_fall_at_the_supervision_timeout_and_reconnect_in_range`,
+  `tests/test_ble_peer.py::test_an_update_of_a_connection_that_lost_contact_never_completes`,
+  `tests/test_ble.py::TestBleOnESP32S3::test_a_central_out_of_range_falls_at_its_timeout_and_reconnects`,
+  `tests/test_ble.py::TestBleOnESP32C3::test_a_central_out_of_range_falls_at_its_timeout_and_reconnects`
+- **271.** A `BleCentral` that bonded with `gatt_security_server` encrypts its next connection to
+  it with the kept keys after a reset of the firmware, at the firmware's new resolvable private
+  address, without pairing again.
+  `tests/test_ble.py::TestBleOnESP32S3::test_just_works_pairing_bonds_across_a_firmware_reset`,
+  `tests/test_ble.py::TestBleOnESP32C3::test_just_works_pairing_bonds_across_a_firmware_reset`
