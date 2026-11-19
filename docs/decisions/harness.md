@@ -2539,13 +2539,15 @@ Status: decided (#30)
 `modem.network()` selects the AT model and its PPP peer before power-on; `broker` calls it as a
 fixture. Existing AT-only tests retain their immediate `+++` escape and unanswered data phase.
 Network data mode instead requires a second of idle time before and after `+++`, preserving
-binary PPP bytes. Power, registration and functionality loss reset PPP and queued replies; a fresh
+binary PPP bytes. Power and registration loss reset PPP and queued replies; a fresh
 dial negotiates again. They reset the TCP sessions too, until #244 left the device's half-open
 ([a lost link](#a-lost-link-leaves-the-devices-connections-half-open-until-their-keepalive)). The
 broker retains its test-side history and retained messages, while a connection's end emits its
-Will once. Registration, functionality and power loss emit
+Will once. Registration and power loss emit
 no unsolicited `NO CARRIER`; [`drop_call`](#a-dropped-call-says-no-carrier-and-offers-a-terminate-request-only-if-asked)
-does.
+does. Functionality loss was on both lists until #276, which found that the model reads `AT+CFUN=`
+only in command mode, with the call already ended
+([an escape is a mode change](#an-escape-is-a-mode-change-not-a-modem-command)).
 
 **Rejected:** enabling PPP for every AT-model call, because existing firmware tests deliberately
 dial and escape without a PPP stack; and recognizing every binary `+++` as an escape, because
@@ -4959,3 +4961,26 @@ examples on the S3 and the C3 are built with `CONFIG_BT_BLE_42_FEATURES_SUPPORTE
 them. Each is for a firmware that needs it; a firmware built with
 `CONFIG_BT_BLE_50_FEATURES_SUPPORTED` uses extended advertising, and the controller's LE features
 say it has none.
+
+## An escape is a mode change, not a modem command
+
+Status: decided (#276)
+
+`modem.mode_changes` records each dial the modem answered and each return to command mode as a
+`ModeChange(at, mode, cause)`, so that a test counts a firmware's PPP attempts by its dials.
+Inferring them from `commands` meant grouping unanswered `AT`s by the gaps between them: ESP-IDF's
+`esp_modem` sync step sends `AT` up to three times, and in data mode those are PPP payload. A dial
+refused with `NO CARRIER` is an entry into command mode, cause `"no carrier"`, so every answered
+dial has one entry with its result. An escape is recorded only once it takes effect, as an entry
+of cause `"escape"`.
+
+**Rejected:** recording `+++` in `commands` as well. `commands` holds AT command lines, each stamped
+at the chunk with its terminator and answered 1 ms later; an escape has no terminator, with a
+network its `OK` is due a second after its last plus, and one that does not take effect is PPP
+payload, not a command. A `ModemCommand` for it would be a line the firmware never sent, and its
+`at` would not be the time the mode changed.
+
+**Rejected:** a `"cfun"` cause. The model reads `AT+CFUN=` only in command mode: `+++` ends the
+call and there is no online command mode, so functionality never ends a call, and the cause could
+never be recorded. `AT+CFUN=0` and `=4` no longer call `_end_data`, which in command mode only
+stopped an `Internet` already stopped.

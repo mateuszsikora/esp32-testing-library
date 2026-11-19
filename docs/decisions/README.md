@@ -355,6 +355,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Bluetooth LE peers on Bumble's LE link layer, with esp32tl's fixes](harness.md#bluetooth-le-peers-on-bumbles-le-link-layer-with-esp32tls-fixes) | `harness.md` | decided (#234) |
 | [An LE-only chip's controller reports LE alone and takes Espressif's report flow control](harness.md#an-le-only-chips-controller-reports-le-alone-and-takes-espressifs-report-flow-control) | `harness.md` | decided (#234) |
 | [Extended advertising, LE Audio, the coded PHY and several connections wait](harness.md#extended-advertising-le-audio-the-coded-phy-and-several-connections-wait) | `harness.md` | postponed (#234) |
+| [An escape is a mode change, not a modem command](harness.md#an-escape-is-a-mode-change-not-a-modem-command) | `harness.md` | decided (#276) |
 
 ## The runner crate and esp32sim
 

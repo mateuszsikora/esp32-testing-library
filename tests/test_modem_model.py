@@ -20,7 +20,14 @@ from esp32tl.link.protocol import GpioIn, GpioOut, RunnerHello, Sync, UartCfg, U
 from esp32tl.net import Internet
 from esp32tl.net.ntp import NTP_EPOCH
 from esp32tl.report import RunLog
-from esp32tl.sources.model.modem import LATENCY_NS, MAX_COMMAND, Modem, ModemRestart
+from esp32tl.sources.model.modem import (
+    LATENCY_NS,
+    MAX_COMMAND,
+    ModeCause,
+    ModeChange,
+    Modem,
+    ModemRestart,
+)
 from esp32tl.units import NS_PER_S, Duration, hours, minutes, ms, seconds
 
 LILYGO = boards.profile("lilygo-t-a7670g-r2")
@@ -1310,3 +1317,141 @@ def test_the_modems_interface_has_the_name_the_link_reports_its_errors_with(
 ) -> None:
     modem, _, _ = route(tmp_path, [0])
     assert modem.name == "uart.modem"
+
+
+def test_each_dial_is_a_mode_change_stamped_as_its_command_with_its_result() -> None:
+    model = Modem(lambda: 0)
+    model.lose_registration()
+    assert reply(model, "ATD*99#", 5) == b"\r\nNO CARRIER\r\n"
+    model.register()
+    assert reply(model, 'AT+CGDATA="PPP",1', 7) == b"\r\nCONNECT\r\n"
+    assert model.mode_changes == (
+        ModeChange(Duration(5), "command", "no carrier"),
+        ModeChange(Duration(7), "data", "dial"),
+    )
+    assert [c.at for c in model.commands] == [Duration(5), Duration(7)]
+    # A hung modem answers no dial, so the dial has no result.
+    model = Modem(lambda: 0)
+    model.hang()
+    assert reply(model, "ATD*99#", 9) == b"" and model.mode_changes == ()
+
+
+def test_an_escape_is_a_mode_change_only_once_it_takes_effect(tmp_path: Path) -> None:
+    # Without a network, at the third plus; never in `commands`.
+    model = Modem(lambda: 0)
+    model.receive(0, b"ATD*99#\r\n~PPP~++")
+    assert [c.cause for c in model.mode_changes] == ["dial"]
+    model.receive(40, b"+AT\r\n")
+    assert model.mode_changes == (
+        ModeChange(Duration(0), "data", "dial"),
+        ModeChange(Duration(40), "command", "escape"),
+    )
+    assert [c.text for c in model.commands] == ["ATD*99#", "AT"]
+    # With one, a +++ within the guard time is PPP payload and no mode change; one guarded by a
+    # second of silence on each side is one, at the instant its OK is sent.
+    modem, _, _ = route(tmp_path, [0])
+    modem.network()
+    model = modem.modem_model()
+    reply(model, "ATD*99#")
+    model.receive(ms(500).ns, b"+++")
+    model.receive(ms(600).ns, b"~")
+    assert model.data_mode and [c.cause for c in model.mode_changes] == ["dial"]
+    model.receive(seconds(2).ns, b"+++")
+    assert [c.cause for c in model.mode_changes] == ["dial"]
+    assert list(model.poll(seconds(3).ns)) == [(seconds(3).ns, b"\r\nOK\r\n")]
+    assert model.mode_changes == (
+        ModeChange(Duration(0), "data", "dial"),
+        ModeChange(seconds(3), "command", "escape"),
+    )
+    assert [c.text for c in model.commands] == ["ATD*99#"]
+
+
+@pytest.mark.parametrize(
+    ("end", "cause"),
+    [
+        ("drop_call", "drop"),
+        ("hang", "hang"),
+        ("lose_registration", "registration"),
+        ("lose_power", "restart"),
+        ("power_off", "restart"),
+        ("power_on", "restart"),
+    ],
+)
+def test_the_test_s_calls_that_end_data_mode_say_why(
+    tmp_path: Path, end: str, cause: ModeCause
+) -> None:
+    now = [seconds(1).ns]
+    modem, model, _ = dialled(tmp_path, now)
+    now[0] = seconds(4).ns
+    getattr(modem, end)()
+    assert model.mode_changes == (
+        ModeChange(seconds(1), "data", "dial"),
+        ModeChange(seconds(4), "command", cause),
+    )
+    # Each change is one: ending what has already ended is none.
+    modem.lose_registration()
+    assert len(model.mode_changes) == 2
+
+
+def test_a_pwrkey_restart_ends_data_mode_at_the_restart_s_instant() -> None:
+    model = lilygo()
+    reply(model, "ATD*99#", seconds(1).ns)
+    pulse(model.driven, seconds(2), ms(3000))
+    assert model.restarts == (ModemRestart(seconds(5) + ms(1), "pwrkey"),)
+    assert model.mode_changes == (
+        ModeChange(seconds(1), "data", "dial"),
+        ModeChange(seconds(5) + ms(1), "command", "restart"),
+    )
+    # The start that follows is in command mode, as the modem was: no change.
+    pulse(model.driven, seconds(10), ms(100))
+    assert model.powered and len(model.mode_changes) == 2
+
+
+def test_a_reset_restart_and_a_loss_in_command_mode() -> None:
+    model = lilygo()
+    reply(model, "ATD*99#", seconds(1).ns)
+    pulse(model.reset_driven, seconds(2), ms(2600))
+    assert model.mode_changes[1:] == (ModeChange(seconds(4) + ms(601), "command", "restart"),)
+    # In command mode, functionality and a loss add no entry.
+    assert reply(model, "AT+CFUN=0", seconds(5).ns) == b"\r\nOK\r\n"
+    model.hang()
+    model.lose_power()
+    assert len(model.mode_changes) == 2
+
+
+def test_the_next_mode_change_is_a_condition_from_this_call(tmp_path: Path) -> None:
+    now = [seconds(1).ns]
+    modem, model, _ = dialled(tmp_path, now)
+    any_change = modem.next_mode_change()
+    into_data = modem.next_mode_change("data")
+    assert repr(any_change) == "the modem's next mode change"
+    assert repr(into_data) == "the modem's next change to data mode"
+    assert any_change() is None and into_data() is None
+    with pytest.raises(TypeError, match="call the condition"):
+        bool(any_change)
+    modem.drop_call()
+    dropped = ModeChange(seconds(1), "command", "drop")
+    assert any_change() == dropped and into_data() is None
+    model.lose_registration()
+    reply(model, "ATD*99#", seconds(2).ns)
+    assert into_data() is None
+    model.register()
+    reply(model, "ATD*99#", seconds(3).ns)
+    dial = ModeChange(seconds(3), "data", "dial")
+    assert into_data() == dial and any_change() == dropped
+    assert modem.next_mode_change("command")() is None
+    assert modem.mode_changes == model.mode_changes
+
+
+@pytest.mark.parametrize("mode", ["Data", "escape", 1])
+def test_next_mode_change_refuses_what_is_no_mode(tmp_path: Path, mode: object) -> None:
+    modem, _, _ = dialled(tmp_path, [0])
+    with pytest.raises(ValueError, match=r"^modem.next_mode_change: mode is .*, not 'command'"):
+        modem.next_mode_change(mode)  # type: ignore[arg-type]
+
+
+def test_mode_changes_need_the_modem_model(tmp_path: Path) -> None:
+    modem, _, _ = route(tmp_path, [0])
+    with pytest.raises(SourceError, match="has no modem model"):
+        modem.next_mode_change()
+    assert modem.source is None

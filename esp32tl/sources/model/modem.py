@@ -56,6 +56,24 @@ class ModemRestart:
     cause: RestartCause
 
 
+Mode = Literal["command", "data"]
+ModeCause = Literal["dial", "escape", "no carrier", "drop", "hang", "registration", "restart"]
+
+
+@dataclass(frozen=True)
+class ModeChange:
+    """The modem went into data or back to command mode, at the board's time, and why.
+
+    Every dial is one: `"dial"` into data mode, stamped as its `ATD` or `AT+CGDATA=` command, or
+    `"no carrier"`, a dial refused while unregistered, which stays in command mode. Data mode ends
+    by an `"escape"` that takes effect, `"drop"` (`drop_call`), `"hang"`, `"registration"`
+    (`lose_registration`) or `"restart"`: any end of a run, whose `ModemRestart` says which."""
+
+    at: Duration
+    mode: Mode
+    cause: ModeCause
+
+
 class Modem:
     """An initially powered, registered modem with -73 dBm signal and echo off.
 
@@ -114,6 +132,7 @@ class Modem:
         # What the test's own call sends, for the next poll.
         self._queued: list[Output] = []
         self._commands: list[ModemCommand] = []
+        self._mode_changes: list[ModeChange] = []
         self._data_received: list[tuple[Duration, bytes]] = []
 
     def connect_power(self, power: Callable[[int, bool], None]) -> None:
@@ -127,6 +146,12 @@ class Modem:
         """Every completed AT command and reply, as a snapshot."""
         with self._lock:
             return list(self._commands)
+
+    @property
+    def mode_changes(self) -> tuple[ModeChange, ...]:
+        """Each dial the modem answered, and each return to command mode, oldest first."""
+        with self._lock:
+            return tuple(self._mode_changes)
 
     @property
     def data_received(self) -> list[tuple[Duration, bytes]]:
@@ -207,7 +232,7 @@ class Modem:
             self.hung = True
             self._pwrkey_works = pwrkey
             self._queued.clear()
-            self._end_data()
+            self._end_data("hang")
 
     def drop_call(self, *, terminate: bool = False) -> None:
         """End the data call and stay registered: NO CARRIER, then command mode. With `terminate`,
@@ -224,14 +249,14 @@ class Modem:
                 if not self.data.ppp.lcp_open:
                     raise SourceError("modem.drop_call: terminate needs LCP open: it is not yet")
                 self._queued += self.data.terminate(t)
-            self._end_data(t)
+            self._end_data("drop", t)
             self._queued.append((t + LATENCY_NS, b"\r\nNO CARRIER\r\n"))
 
     def lose_registration(self) -> None:
         """Remove coverage and end data mode silently; queries report status 0."""
         with self._lock:
             self._coverage = self.registered = False
-            self._end_data()
+            self._end_data("registration")
 
     def register(self) -> None:
         """Restore coverage; register when powered with functionality 1."""
@@ -282,7 +307,7 @@ class Modem:
         self._queued.clear()
         self.registered = powered and self._coverage
         self._function = 1
-        self._end_data(t)
+        self._end_data("restart", t)
         self._echo = False
         self._registration = dict.fromkeys(self._registration, 0)
         self._format = 0
@@ -369,8 +394,7 @@ class Modem:
                         self._pluses.append(byte)
                         if len(self._pluses) == 3:
                             flush()
-                            self._pluses.clear()
-                            self.data_mode = False
+                            self._end_data("escape", t)
                             outputs.append((t + LATENCY_NS, b"\r\nOK\r\n"))
                     else:
                         payload.extend(self._pluses)
@@ -432,8 +456,6 @@ class Modem:
             if value in ("0", "1", "4"):
                 self._function = int(value)
                 self.registered = value == "1" and self._coverage
-                if not self.registered:
-                    self._end_data(t)
             else:
                 terminal = "ERROR"
         elif upper == "AT+COPS?":
@@ -451,6 +473,11 @@ class Modem:
         elif re.fullmatch(r"ATDT?\*99[0-9*#]*#", upper) or upper.startswith("AT+CGDATA="):
             self.data_mode = self.registered
             terminal = "CONNECT" if self.registered else "NO CARRIER"
+            self._mode_changes.append(
+                ModeChange(Duration(t), "data", "dial")
+                if self.registered
+                else ModeChange(Duration(t), "command", "no carrier")
+            )
             if self.data_mode and isinstance(self.data, Internet):
                 self._last_data = t
                 self.data.start(t + LATENCY_NS)
@@ -490,7 +517,7 @@ class Modem:
         with self._lock:
             queued, self._queued = self._queued, []
             if self._escape_at is not None and now >= self._escape_at:
-                self._end_data(now)
+                self._end_data("escape", now)
                 return [*queued, (now, b"\r\nOK\r\n")]
             polled = self.data.poll(now) if self.data is not None and self._polled() else ()
             return [*queued, *polled]
@@ -507,7 +534,10 @@ class Modem:
             latency = self.data.latency() if self.data_mode and self.data is not None else None
             return LATENCY_NS if latency is None else min(LATENCY_NS, latency)
 
-    def _end_data(self, at: int | None = None) -> None:
+    def _end_data(self, cause: ModeCause, at: int | None = None) -> None:
+        if self.data_mode:
+            t = self._now() if at is None else at
+            self._mode_changes.append(ModeChange(Duration(t), "command", cause))
         self.data_mode = False
         self._pluses.clear()
         self._escape_at = None

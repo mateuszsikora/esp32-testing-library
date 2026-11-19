@@ -56,6 +56,8 @@ board power-on instead starts it off, for firmware that boots it with PWRKEY.
 | `hang(pwrkey=True)` | The modem stops answering ([below](#a-hung-modem-and-reset)); `pwrkey=False`: PWRKEY does nothing either |
 | `powered`, `registered`, `data_mode`, `hung` | Current model state; reading does not select a model |
 | `restarts` | Each time a run of the modem ended, as `ModemRestart(at, cause)`, oldest first ([below](#a-hung-modem-and-reset)) |
+| `mode_changes` | Each dial and each return to command mode, as `ModeChange(at, mode, cause)`, oldest first ([below](#mode-changes-and-dials)) |
+| `next_mode_change(mode=None)` | A [described condition](pytest-plugin-user.md#described-conditions) for the next of them, or the next into `mode`, `"command"` or `"data"` |
 | `commands` | Every complete AT command while powered, as `ModemCommand(at, text, response, fallback)`; `at` is a `Duration` |
 
 Registration changes affect the next query; there are no unsolicited registration notifications.
@@ -96,7 +98,7 @@ produce no reply.
 | `AT+CCLK?` | `+CCLK: "yy/MM/dd,hh:mm:ss±zz"`, then `OK` ([below](#clock-and-operator)) |
 | `AT+CGMM`, `AT+CGMR`, `AT+CGSN`, `AT+CIMI` | Fixed model identity, then `OK` |
 | `ATD*99#`, `ATD*99***1#`, `ATD*99##`, `ATDT*99#`, `AT+CGDATA=...` | `CONNECT` and data mode when registered; otherwise `NO CARRIER` |
-| `+++` in data mode | Return to command mode with `OK`; may be split across UART chunks |
+| `+++` in data mode | Return to command mode with `OK`; may be split across UART chunks. A [mode change](#mode-changes-and-dials), not an entry of `commands` |
 | Other `AT` commands, `AT+CCLK=...` among them | `OK`, marked `fallback=True` in history and `(fallback OK)` in the report |
 
 The dial recognizer accepts `ATD` or `ATDT`, followed by `*99`, an optional suffix of digits,
@@ -261,6 +263,58 @@ and shown by `firmware/modem_recovery` on that pin:
   dropped before that leaves `+++` with no answer, so `\n` and `AT` follow 5 s later; one dropped
   later has `NO CARRIER` answer `+++`, and `AT` goes out alone. Either way every command is answered
   and nothing restarts the modem.
+
+## Mode changes and dials
+
+```python
+from esp32tl.units import seconds
+
+change = board.wait_until(modem.next_mode_change("data"), within=seconds(60))
+assert change.cause == "dial"
+modem.drop_call()
+dials = [c for c in modem.mode_changes if c.cause in ("dial", "no carrier")]
+```
+
+`mode_changes` holds one `ModeChange(at, mode, cause)` for each dial the modem answered and each
+return to command mode, oldest first. `at` is a `Duration` on the board's clock, `mode` is
+`"command"` or `"data"`, and `cause` says why:
+
+| `cause` | `mode` | What happened | `at` |
+|---|---|---|---|
+| `"dial"` | `"data"` | A dial ([above](#at-dialogue)) answered `CONNECT` | The dial command's, as in `commands` |
+| `"no carrier"` | `"command"` | A dial answered `NO CARRIER`, while unregistered: the modem stays in command mode | The dial command's |
+| `"escape"` | `"command"` | `+++` took effect | Without a network, the UART chunk with its third plus; with `modem.network()`, the instant its `OK` is sent, a second after it |
+| `"drop"` | `"command"` | `drop_call()` | The test's instant |
+| `"hang"` | `"command"` | `hang()` in data mode | The test's instant |
+| `"registration"` | `"command"` | `lose_registration()` in data mode | The test's instant |
+| `"restart"` | `"command"` | A run of the modem ended in data mode; after the board's first instant, `restarts` says what ended it, at the same instant | The restart's |
+
+So a test counts the firmware's PPP attempts by counting the dials, each with its result. Doing it
+from `commands` is fragile: ESP-IDF's `esp_modem` sync step sends `AT` up to three times before it
+gives up, and while the modem is in data mode those `AT`s are PPP payload, not commands.
+
+- Each entry but `"no carrier"` is a change: a hang, a lost registration or a restart in command mode adds none, and a
+  modem starts in command mode, so starting it adds none either.
+- A dial on a hung modem gets no answer and adds none; it stays in `commands` as `(no answer)`.
+- An escape that does not take effect adds none: with `modem.network()`, pluses within the second
+  of silence on either side are PPP payload. `+++` in command mode is ignored and adds none.
+- `+++` is never in `commands`, which holds AT command lines: an escape has no terminator, and with
+  a network its `OK` is due a second after its last plus. Its entry here is its record.
+- `AT+CFUN=0` and `=4` add none: the model reads AT commands only in command mode, since `+++` ends
+  the call and there is no online command mode, so functionality never ends a call.
+
+`next_mode_change(mode=None)` is a [described condition](pytest-plugin-user.md#described-conditions)
+for the first entry after the call, or the first into `mode`: an entry into the other mode does not
+satisfy it, and a later one into `mode` still can. Arm it before what changes the mode. A dial
+refused with `NO CARRIER` is an entry into command mode, so `next_mode_change("command")` armed in
+command mode is satisfied by a refused dial as well as by the end of a call; to wait for the end of
+a call, wait for the dial first, with `next_mode_change("data")`, then arm it. The boundary
+is `mode_changes` at the call; the condition consumes nothing and returns the same entry each time
+it is asked. Its description, which a timed-out wait names, is `the modem's next mode change` or
+`the modem's next change to data mode`. A `mode` that is none of `"command"`, `"data"` and `None`
+raises `ValueError: modem.next_mode_change: mode is 'Data', not 'command', 'data' or None`; with no
+model selected, as for the properties, `SourceError: uart.modem has no modem model: select it
+before board.power_on()`.
 
 ## PWRKEY and reporting
 

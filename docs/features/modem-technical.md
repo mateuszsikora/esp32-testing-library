@@ -41,6 +41,18 @@ route. Both check the route's source by type, so a model of the test's on `uart.
 data-mode payloads are available as a snapshot through `modem_model().data_received`, the route's
 `ModemModel`; it was `model()` until `Uart.model(source)` took that name.
 
+`_mode_changes` holds every `ModeChange` under the same lock, and `mode_changes` returns it as a
+tuple. `_command` appends a dial's entry, `("data", "dial")` or `("command", "no carrier")`, stamped
+`t`, the same stamp as the dial's `ModemCommand`; a hung modem returns before it. Every end of data
+mode goes through `_end_data(cause, at=None)`, which appends `("command", cause)` only when
+`data_mode` was set, stamped `at`, or `now()` when the caller gives none (`hang`,
+`lose_registration`). Its callers are the escape, at the chunk's `t` in `receive` without a
+network and at `poll`'s `now` with one, `drop_call` (`"drop"`), `hang`, `lose_registration`
+(`"registration"`) and `_set_power` (`"restart"`, at the instant it also stamps a `ModemRestart`
+with, after the board's first instant; before it, `_set_power` stamps none). `AT+CFUN=0` and `=4`
+called it too; the parser reads them only in command mode, where `data_mode` is already off and an
+`Internet` already stopped by what ended the call, so they no longer do. A `+++` is never a `ModemCommand`: [the decision](../decisions/harness.md#an-escape-is-a-mode-change-not-a-modem-command).
+
 ## Schema
 
 The model reads PWRKEY's `active`, `on_ms` and `off_ms` fields and RESET's `active` and `pulse_ms`,
@@ -50,6 +62,8 @@ modem guide documents [PWRKEY's](modem-user.md#pwrkey-and-reporting) and
 No protocol or recording-format version changes: UART bytes and GPIO input use version 1.
 
 `ModemRestart` is frozen: `at: Duration`, `cause`: `"reset"`, `"pwrkey"`, `"supply"` or `"test"`.
+`ModeChange` is frozen: `at: Duration`, `mode`: `"command"` or `"data"` (`Mode`), `cause`: `"dial"`,
+`"escape"`, `"no carrier"`, `"drop"`, `"hang"`, `"registration"` or `"restart"` (`ModeCause`).
 `ModemCommand` is frozen: `at: Duration`, `text: str`, `response: bytes`, `fallback: bool`. The JSON
 report converts time to `t_ns` and the reply to `response` text, replacing non-ASCII bytes in
 JSON. The `ModemCommand.response` and tap retain the original bytes. The modem identity replies
@@ -96,10 +110,10 @@ to that source (latency remains at most 1 ms). With no peer, payload is retained
 An `Internet` is reached by `arrive`, `poll` and `quiet_until` in command mode and with the modem
 off too (`_polled`): its broker's keepalive ends the connections a lost call left half-open, and
 nothing else would run that deadline; out of data mode its `poll` has nothing to send.
-A network dial starts PPP after CONNECT; power, registration and functionality loss reset it,
+A network dial starts PPP after CONNECT; power and registration loss reset it,
 clear queued replies and lose the test's TCP connections, leaving the device's half-open. Only
 `drop_call` emits an unsolicited `NO CARRIER`:
-registration, functionality and power loss stay silent. Network data mode guards `+++` with one second of silence before and after it;
+registration and power loss stay silent. Network data mode guards `+++` with one second of silence before and after it;
 `poll` completes the escape and `quiet_until` exposes its deadline. A broker deadline at the
 escape's instant runs first, in `arrive`: a PUBACK due then is `"emitted"`, though ending data mode
 drops its bytes before they reach the firmware, and a keepalive due then closes the connection as an
@@ -112,6 +126,11 @@ expiry. Other data sources retain the immediate escape recognizer. See
 to `_queued`, which `poll` returns ahead of anything else; the link polls in the same turn, right
 after the hold returns, so `quiet_until` has no bound to give for it. `hang` and `_set_power` empty
 `_queued`.
+
+`Modem.next_mode_change(mode)` (the interface) reads `modem_model()` once, at the call, and returns
+a `Condition` whose `find` is `FirstFrom(lambda: model.mode_changes, len(model.mode_changes),
+wanted)`, as `board.next_boot` is built ([the decision](../decisions/harness.md#history-conditions-scan-from-where-their-last-poll-ended)).
+`mode_changes` is copied at each poll, as `boots` is; it holds at most two entries per dial.
 
 ## Failure modes
 
@@ -128,6 +147,7 @@ after the hold returns, so `quiet_until` has no bound to give for it. `hang` and
 - `modem.drop_call: the modem is not in data mode`, `modem.drop_call: terminate needs
   modem.network(): no PPP`, `modem.drop_call: terminate needs LCP open: it is not yet` (`SourceError`), `modem.drop_call: terminate is 1, not True or False`
   (`TypeError`).
+- `modem.next_mode_change: mode is 'Data', not 'command', 'data' or None` (`ValueError`).
 - `modem.hang: the modem is off`, `modem.hang: the modem is hung already` (`SourceError`), `modem.hang: pwrkey is 1, not True or False`
   (`TypeError`).
 - `uart.modem has its source already: one per test`: replay and model are mutually exclusive; a
@@ -146,6 +166,9 @@ after the hold returns, so `quiet_until` has no bound to give for it. `hang` and
 answer timestamps, the clock's time, zone and refusals, the operator's formats and refusals, a
 hung modem, RESET's threshold and polarity, `restarts`, a dropped call on both paths, escape and data handoff, signal mapping, registration, power loss, profile
 pulse timing, RI ownership, taps and unbounded command history, and a real `BoardLink` exchange.
+It checks `mode_changes` for a dial with either result, an escape with and without a network and
+one within the guard time, `drop_call`, `hang`, `lose_registration`, the test's power calls and a
+PWRKEY and a RESET restart, and `next_mode_change`'s boundary, filter, description and refusals.
 `test_a_broker_deadline_at_the_escapes_instant_runs_before_it` opens PPP and an MQTT connection
 through the model's network, then puts a delayed PUBACK and a keepalive expiry each at the escape's
 instant: `arrive` runs the deadline, and `poll` returns the escape's `OK` alone.
