@@ -8,7 +8,7 @@ from typing import Literal
 
 from esp32tl.boards import LineRoute
 from esp32tl.interfaces import SourceError
-from esp32tl.interfaces.condition import Condition
+from esp32tl.interfaces.condition import Condition, FirstFrom
 from esp32tl.link.boardlink import Interface
 from esp32tl.link.protocol import GpioIn, Input, Release
 from esp32tl.report import RunLog
@@ -16,6 +16,10 @@ from esp32tl.units import Duration
 
 # The level a board's pull gives a line that neither end drives.
 PULLED = {"up": 1, "down": 0}
+
+# Who changes a line: the firmware, the test or a model.
+Origin = Literal["firmware", "test", "model"]
+ORIGINS = ("firmware", "test", "model")
 
 
 @dataclass(frozen=True)
@@ -27,7 +31,7 @@ class LineEvent:
     t: Duration
     name: str
     pin: int
-    by: Literal["firmware", "test", "model"]
+    by: Origin
     level: int | None
 
 
@@ -58,6 +62,26 @@ class OutputLine:
             lambda: self._lines.level(self.pin) == level,
             f"{self.name} is {state} (GPIO {self.pin}, level {level})",
             "output",
+        )
+
+    def next_change(
+        self, *, on: bool | None = None, by: Origin | None = "firmware"
+    ) -> Condition[LineEvent | None]:
+        """A non-consuming condition for this line's first change after this call.
+
+        `on=True` waits for a change to the active level, `on=False` for one to the other level,
+        and `on=None`, the default, for any change, to undriven too. `by` is who makes it, the
+        firmware by default, or `None` for any of firmware, test and model. The boundary is the
+        line's changes there are now; the condition returns the same `LineEvent` each time it is
+        asked, so a second press needs a second `next_change` after the first one matched."""
+        if on is not None and not isinstance(on, bool):
+            raise TypeError(f"output.next_change: on {on!r} is not True, False or None")
+        if on is None:
+            return self._lines._next_change(self.pin, "any", by, "", "output")
+        level = self.active if on else 1 - self.active
+        state = "on" if on else "off"
+        return self._lines._next_change(
+            self.pin, level, by, f" to {state} (level {level})", "output"
         )
 
     def events(self) -> list[LineEvent]:
@@ -225,6 +249,60 @@ class Lines(Interface):
         """Every change on the lines so far, by either end, in the order of the board's time."""
         with self._lock:
             return sorted(self._events, key=lambda event: event.t.ns)
+
+    def next_change(
+        self,
+        line: int | str,
+        level: int | Literal["any"] | None = "any",
+        *,
+        by: Origin | None = "firmware",
+    ) -> Condition[LineEvent | None]:
+        """A non-consuming condition for `line`'s first change after this call.
+
+        `level` is the pin level the change is to, 0 or 1, `None` for a change to undriven, or
+        `"any"`, the default, for any change. `by` is who makes it, the firmware by default, or
+        `None` for any of firmware, test and model. The boundary is the changes there are now; the
+        condition returns the same `LineEvent` each time it is asked."""
+        pin = self._pin(line)
+        if isinstance(level, bool):
+            level = int(level)
+        if level != "any" and level is not None:
+            if not isinstance(level, int):
+                raise TypeError(f'lines.next_change: level {level!r} is not 0, 1, None or "any"')
+            if level not in (0, 1):
+                raise ValueError(f'lines.next_change: level {level!r} is not 0, 1, None or "any"')
+        to = "" if level == "any" else " to undriven" if level is None else f" to level {level}"
+        return self._next_change(pin, level, by, to, "lines")
+
+    def _next_change(
+        self,
+        pin: int,
+        level: int | Literal["any"] | None,
+        by: Origin | None,
+        to: str,
+        service: str,
+    ) -> Condition[LineEvent | None]:
+        """The `next_change` of `pin` to `level` by `by`, named with `to`: a `FirstFrom` over the
+        events in the order they were appended, from where they end now. `service` names the
+        caller, `lines` or `output`, in the refusal of `bool()` and of `by`."""
+        if by is not None and by not in ORIGINS:
+            refused = f'{service}.next_change: by {by!r} is not "firmware", "test", "model" or None'
+            raise (ValueError if isinstance(by, str) else TypeError)(refused)
+
+        def wanted(event: LineEvent) -> bool:
+            return (
+                event.pin == pin
+                and (by is None or event.by == by)
+                and (level == "any" or event.level == level)
+            )
+
+        with self._lock:
+            start = len(self._events)
+        who = {None: "by the firmware, the test or a model", "model": "by a model"}.get(
+            by, f"by the {by}"
+        )
+        description = f"the next change of {self._names[pin]} (GPIO {pin}){to} {who}"
+        return Condition(FirstFrom(lambda: self._events, start, wanted), description, service)
 
     def _pin(self, line: int | str) -> int:
         if isinstance(line, str) and line in self._lines:
