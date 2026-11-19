@@ -153,6 +153,10 @@ impl Guest for esp32c6::Machine {
     fn usb_console_input(&mut self, data: &[u8]) {
         SocBus::serial_input(&mut self.bus, data);
     }
+    fn bt_controller_inits(&self) -> u64 {
+        // the stub of `--no-bt` is the only one the runner puts in
+        self.stub_hits
+    }
     fn uptime(&mut self) -> crate::session::Uptime {
         super::systimer_uptime(&self.bus.periph.systimer, self.cycles(), SYSTIMER_TICK)
     }

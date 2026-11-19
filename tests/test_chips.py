@@ -20,6 +20,8 @@ from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.wifi import Wifi
 from esp32tl.units import Duration, ms, seconds
 
+FIRMWARE = Path(__file__).parent.parent / "firmware"
+
 # The chip, its devkit profile, and what ESP-IDF's hello_world says the chip is.
 CHIPS = [
     ("esp32s3", "esp32-s3-devkitc", "esp32s3 chip with 2 CPU core(s), WiFi/BLE"),
@@ -163,6 +165,48 @@ def on_chip(chip: str, profile: str, banner: str) -> type:
                 assert board.app.app_image is not None
                 built = board.app.app_image.read_bytes()
                 assert board.flash().partition("factory")[: len(built)] == built
+
+            def test_without_bt_the_controller_s_start_ends_the_run_naming_board_bluetooth(
+                self, pytester: pytest.Pytester
+            ) -> None:
+                # the runner's stub at esp_bt_controller_init (--no-bt) returns through this
+                # chip's own core: the S3's LX7, the C3's RISC-V
+                build = FIRMWARE / "gatt_server" / f"build-{chip}"
+                if not (build / "esp32tl-built").is_file():
+                    pytest.fail(
+                        f"{build} holds no finished build: run make firmware", pytrace=False
+                    )
+                pytester.makepyfile(
+                    test_no_bt=f"""
+                    import pytest
+
+                    from esp32tl.units import seconds
+
+                    @pytest.mark.board_profile({profile!r})
+                    @pytest.mark.app_path({str(build.parent)!r}, build_dir={build.name!r})
+                    def test_without_bluetooth(board, console):
+                        board.power_on()
+                        try:
+                            board.wait(seconds(5))
+                        finally:
+                            print("boots:", len(board.boots))
+                    """
+                )
+                result = pytester.runpytest_subprocess("-p", "no:cacheprovider")
+                result.assert_outcomes(failed=1)
+                result.stdout.fnmatch_lines(
+                    [
+                        "*RunEnded: the run ended at 0.* s while the test waited until 5 s: the"
+                        " firmware started its Bluetooth controller (esp_bt_controller_init) by"
+                        " 0.* s, and the test gave the board no Bluetooth: look at"
+                        " board.bluetooth*",
+                        "boots: 1",
+                    ]
+                )
+                assert (
+                    "GATTS_DEMO: app_main initialize controller failed: ESP_ERR_NOT_SUPPORTED"
+                    in result.stdout.str()
+                )
 
     Tests.__name__ = Tests.__qualname__ = f"TestOn{chip.upper()}"
     return Tests

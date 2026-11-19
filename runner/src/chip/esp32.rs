@@ -332,6 +332,10 @@ impl Guest for esp32::Machine {
             Bus::tick(&mut self.bus, cpu as u32);
         }
     }
+    fn bt_controller_inits(&self) -> u64 {
+        // the stub of `--no-bt` is the only one the runner puts in
+        self.stub_hits
+    }
     fn uptime(&mut self) -> crate::session::Uptime {
         use crate::session::Uptime;
         use esp_periph::Device;

@@ -20,14 +20,16 @@ profile, `uart.gnss` a `Gnss`, which says nothing until the test gives it a sour
 `Lines`, which puts the board's pulls on them from power-on and what the test drives at the instant
 it does, and the chip's Wi-Fi station as one `Wifi`, the simulated network behind the access point
 that `wifi.access_point(...)` puts on the runner's air, and the chip's Bluetooth as one `Bluetooth`,
-whose controller is on the air of the test's devices once the test asks for it with `bt`: the
-runner then has `--bt` and the application's ELF. The backend also owns the end of the run
-(§9), before the dut is torn down: `stop` at the turn the test left the run at, `SIGTERM` for a
-runner that is not there, the link read to end of file, the runner waited for, `SIGKILL` only as a
-last resort. Then it writes the recordings of the routes the test tapped. The runner also gets the
-read end of a pipe whose write end only this process holds (`--parent-fd`): a pytest that dies
-without its teardown, `SIGKILL` among the ways, closes it, and the runner ends the run at once. Its
-log forwarder, `LogForwarder`, watches its parent's pid for the same end.
+whose controller is on the air of the test's devices once the test asks for it with `bt`: the runner
+then has `--bt` and the application's ELF. Until it does, the runner has `--no-bt` and the ELF
+instead, so that a firmware which starts its controller ends the run with a reason that names
+`board.bluetooth`, rather than crash or hang in a controller esp32sim does not model. The backend
+also owns the end of the run (§9), before the dut is torn down: `stop` at the turn the test left the
+run at, `SIGTERM` for a runner that is not there, the link read to end of file, the runner waited
+for, `SIGKILL` only as a last resort. Then it writes the recordings of the routes the test tapped.
+The runner also gets the read end of a pipe whose write end only this process holds (`--parent-fd`):
+a pytest that dies without its teardown, `SIGKILL` among the ways, closes it, and the runner ends
+the run at once. Its log forwarder, `LogForwarder`, watches its parent's pid for the same end.
 
 The runner starts once, at the first `power_on()`, and runs to teardown. `reset()` pulses the
 chip's EN pin and `power_off()` switches the board's supply off, until the next `power_on()`; they
@@ -172,6 +174,22 @@ CHIP_GAPS: dict[str, dict[str, str]] = {
         "bluetooth": "esp32sim models no Bluetooth on the ESP32-S31",
     },
 }
+
+
+# The runner's `stats` `end` when the firmware called `esp_bt_controller_init` under `--no-bt`
+# (protocol 5.9 and §9).
+NO_BT_END = "bt_controller"
+
+
+def no_bluetooth(at: int) -> str:
+    """Why a run under `--no-bt` ended at `at`, the end of the slice the firmware started its
+    Bluetooth controller in: the test gave the board none, and what to do about it."""
+    return (
+        f"the firmware started its Bluetooth controller (esp_bt_controller_init) by {seconds(at)},"
+        " and the test gave the board no Bluetooth: look at board.bluetooth (or take the bt"
+        " fixture) before board.power_on(); board.bluetooth.use() gives the firmware the"
+        " harness's controller with no device on the air"
+    )
 
 
 class BackendError(Exception):
@@ -327,7 +345,9 @@ def runner_command(
     at the supplied offsets, in order. A `wifi` with an access point puts it, and the networks
     around, on the runner's air, with the network behind it on the link. A `bluetooth` the test uses
     makes the runner forward the guest's HCI on the link (`--bt`), with the symbols of the
-    application's ELF, `app.elf`. A `realtime` run is paced to wall time, for a real device at the
+    application's ELF, `app.elf`; one it does not use gives the runner the ELF as `--no-bt`, on a
+    chip esp32sim models Bluetooth on, so that the firmware's call to `esp_bt_controller_init`
+    ends the run. A `realtime` run is paced to wall time, for a real device at the
     far end of a route. `flash_out` is the file the runner writes the whole flash to when the link
     asks, and at the end of the run. `console` is the board profile's: `usb-serial-jtag` makes the
     chip's USB-Serial/JTAG controller the console, on stdout and on the link, in place of UART0
@@ -360,6 +380,13 @@ def runner_command(
         command += wifi.runner_args()
     if bluetooth is not None and bluetooth.used:
         command += ["--bt", str(app.elf)]
+    elif (
+        bluetooth is not None
+        and app.elf is not None
+        and app.elf.is_file()
+        and "bluetooth" not in CHIP_GAPS.get(app.chip, {})
+    ):
+        command += ["--no-bt", str(app.elf)]
     if realtime:
         command.append("--realtime")
     if flash_out is not None:
@@ -1261,11 +1288,21 @@ class Esp32Sim(Board):
             log.write(f"\nesp32tl: the runner exited with code {code}\n")
         # The harness's reason first: when it ended the run, the runner exited 0.
         reason = f"the link failed: {error}; " if error is not None else ""
+        if (why := self._runner_reason()) is not None:
+            reason += f"{why}; "
         # Where the run ended, from the runner's stats when it sent them.
         at = self.link.stats.t if self.link.stats is not None else None
         self._hold.end(
             f"{reason}the runner exited with code {code}; its last output:\n{output}", at
         )
+
+    def _runner_reason(self) -> str | None:
+        """What the runner's `stats` say the test must change, when they say it: a firmware
+        that started its Bluetooth controller under `--no-bt`."""
+        stats = self.link.stats
+        if stats is not None and stats.end == NO_BT_END:
+            return no_bluetooth(stats.t)
+        return None
 
     def close(self) -> None:
         """Ends the run, then lets go of what the test gave the board. What could not be let go
@@ -1371,6 +1408,8 @@ class Esp32Sim(Board):
                 f"the runner did not exit within {EXIT_SECONDS} s of SIGTERM, and was killed"
             )
         elif self.process.returncode != 0:
+            if (why := self._runner_reason()) is not None:
+                problems.append(why)
             problems.append(f"the runner exited with code {self.process.returncode}")
         if self.link.error is not None:
             problems.append(f"the link failed: {self.link.error}")

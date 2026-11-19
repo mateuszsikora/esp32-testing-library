@@ -138,7 +138,9 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
    `--wifi ssid=<ssid>,chan=<channel>[,psk=<password>][,bssid=<bssid>]` and one
    `--wifi-nearby ssid=<ssid>,chan=<channel>,rssi=<dBm>,secure=<0|1>[,bssid=<bssid>]` per network
    around. With a `bluetooth` the test used (`Bluetooth.used`), `bluetooth=` adds
-   `--bt <app.elf>` after that. With `console="usb-serial-jtag"`, the profile's `console`,
+   `--bt <app.elf>` after that; with one it did not use, `--no-bt <app.elf>`, when `app.elf` is a
+   file and `CHIP_GAPS` has no `bluetooth` for the build's chip (all but `esp32p4` and
+   `esp32s31`), and nothing otherwise. With `console="usb-serial-jtag"`, the profile's `console`,
    `--console-port usb` comes right after `--console both --peer-timeout 0`, before `--board`; a
    profile whose console is UART0 adds nothing. Without `held`, as the [`esp32tl` command](cli-user.md) calls
    it, the `--console` and `--peer-timeout` pairs are left out, and so is the card; the command
@@ -198,7 +200,9 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
    `\nesp32tl: the runner exited with code {code}\n`; the forwarder sends them on after everything
    the runner wrote. Last, it ends the clock with
    `the runner exited with code {code}; its last output:\n{output}`, prefixed with
-   `the link failed: {error}; ` when the link has an error: a waiting test gets `RunEnded` with
+   `the link failed: {error}; ` when the link has an error, then with `_runner_reason()` and `; `
+   when the runner's `stats` say `end: bt_controller` (`NO_BT_END`), which is
+   `no_bluetooth(stats.t)`: a waiting test gets `RunEnded` with
    that reason, and with `stats.t`, where the runner says the run ended, when it sent its stats.
    Because the clock ends only once the link has been read to its end, the reason holds the
    link's final error, and a test's last look at the console sees everything the guest printed
@@ -550,7 +554,7 @@ repository makes.
 | `route_wire(profile, interface)` | The `Wire` of that route, or the same `BackendError`; `Esp32Sim` makes its `Uart`s and its `Gnss` on it |
 | `RUNNER_FLASH_MB` | `(1, 2, 4, 8, 16)`: the flash sizes, in MB, the runner's `--flash-mb` takes |
 | `runner_flash_mb(profile, app)` | The flash the runner gives the chip, in MB: `profile.flash_mb`, else the largest size the build's image headers give, else `None`; `BackendError` for a `flash_mb` outside `RUNNER_FLASH_MB`, a header that gives more than 16, whatever the profile, or a header that gives more than `flash_mb`. The constructor and the [`esp32tl` command](cli-user.md) call it before anything starts |
-| `runner_command(runner, rom, app, max_seconds, link, *, held=False, flash_mb=None, psram_mb=None, sd_card=None, extra_flash=(), wifi=None, bluetooth=None, realtime=False, flash_out=None, console="uart0", parent_fd=None)` | The runner's argument list; with `flash_mb`, `--flash-mb` of that size; with `psram_mb`, `--psram-mb` of that size; with an `SdCard` holding a card, the runner's card on its pins; with a `Wifi` holding an access point, `--wifi` and `--wifi-nearby`; with a `Bluetooth` the test used, `--bt` and the application's ELF; with `realtime`, `--realtime`; with `flash_out`, `--flash-out`; with `console="usb-serial-jtag"`, `--console-port usb`; with `parent_fd`, `--parent-fd`, last |
+| `runner_command(runner, rom, app, max_seconds, link, *, held=False, flash_mb=None, psram_mb=None, sd_card=None, extra_flash=(), wifi=None, bluetooth=None, realtime=False, flash_out=None, console="uart0", parent_fd=None)` | The runner's argument list; with `flash_mb`, `--flash-mb` of that size; with `psram_mb`, `--psram-mb` of that size; with an `SdCard` holding a card, the runner's card on its pins; with a `Wifi` holding an access point, `--wifi` and `--wifi-nearby`; with a `Bluetooth` the test used, `--bt` and the application's ELF; with one it did not use, `--no-bt` and the ELF, on a chip esp32sim models Bluetooth on and for a build whose ELF is a file; with `realtime`, `--realtime`; with `flash_out`, `--flash-out`; with `console="usb-serial-jtag"`, `--console-port usb`; with `parent_fd`, `--parent-fd`, last |
 | `Esp32Sim.wifi` | The chip's `Wifi`, on the link from construction |
 | `Esp32Sim.bluetooth` | The chip's `Bluetooth`, on the link from construction; the first look asks `_asked` for `Request("bluetooth", source="model")`, which refuses after power-on, then checks `app.elf`, then calls `Bluetooth.use()`, which asks again |
 | `RunnerPopen(msg_queue, cmd, meta, pass_fds=())` | `DuplicateStdoutPopen`, given `pass_fds` for the runner's `--parent-fd`, with `LogForwarder` as its forwarder, whose `close` waits up to `EXIT_SECONDS` for it to be ready, sends it `SIGTERM` and waits up to `EXIT_SECONDS` for it to end, and that closes its log when the start fails |
@@ -576,6 +580,8 @@ repository makes.
 | `WAKE_LATENCY_NS` | `1_000_000`, 1 emulated millisecond: how soon after the chip's reset `wait_for_wake` takes a turn | `Esp32Sim.wait_for_wake` |
 | `LAST_OUTPUT_BYTES` | `2048` | `last_output` |
 | `LOG_POLL_SECONDS` | `0.02`, wall seconds: how long `LogForwarder` sleeps when the runner's log has nothing new, and so how long after `SIGTERM` it may still take | `LogForwarder` |
+| `NO_BT_END` | `"bt_controller"`: the runner's `stats` `end` when the firmware called `esp_bt_controller_init` under `--no-bt` (protocol §9) | `Esp32Sim._runner_reason` |
+| `no_bluetooth(at)` | The reason a run under `--no-bt` ended at `at` ns, which names `board.bluetooth`, the `bt` fixture and `board.bluetooth.use()` | `Esp32Sim._runner_reason` |
 | `EXIT_SECONDS` | `5`, wall seconds: for the runner's exit after `stop` at teardown, for its `hello`, then for its exit after `SIGTERM`, for each join of the link thread, and for the log's forwarder to be ready and to end | `close`, `_mark_end_of_run`, `_close_link`, `RunnerPopen.close` |
 | `SUN_PATH_MAX` | `104`, the longest Unix socket path on macOS with its NUL; Linux takes 108 | `listen` |
 
@@ -613,6 +619,7 @@ the first problem shows; the socket and the start come at `power_on()`, in the t
 | `cannot listen on {path}: {error.strerror}` | `listen`, from `Esp32Sim.power_on` | The socket cannot be bound |
 | `cannot start {command[0]}: {error.strerror}` | `Esp32Sim.power_on` | `OSError` from the start, for example `Exec format error` |
 | `the runner exited with code {code}; its output is in {self.dut.logfile}` | `Esp32Sim.close` | Exit code not 0; error at teardown, unless the call already failed on `RunEnded` |
+| `the firmware started its Bluetooth controller (esp_bt_controller_init) by {time}, and the test gave the board no Bluetooth: look at board.bluetooth (or take the bt fixture) before board.power_on(); board.bluetooth.use() gives the firmware the harness's controller with no device on the air` | `no_bluetooth`, through `Esp32Sim._runner_reason`, in `RunEnded` and before `the runner exited with code 5` at teardown | The runner's `stats` say `end: bt_controller`: under `--no-bt` the firmware called `esp_bt_controller_init`; `{time}` is `stats.t` |
 | `the runner did not exit within {EXIT_SECONDS} s of SIGTERM, and was killed; its output is in {self.dut.logfile}` | `Esp32Sim.close` | No exit within `EXIT_SECONDS` of the signal |
 | `the link failed: {link.error}; its output is in {self.dut.logfile}` | `Esp32Sim.close` | `BoardLink` found the run wrong; after an exit-code problem when there is one |
 | `the tap of {interface} cannot be written: {error}; its output is in {self.dut.logfile}` | `Esp32Sim.close` | An `OSError` from writing the tap's recording, or a `RecordingError` from making it; first, before any other problem |
@@ -635,7 +642,7 @@ In the test body:
 | `{description} did not happen within {within}: waited from {start} to {end} of the board's time` | `NeverHappened` | `wait_until`'s deadline, and `wait_for_wake`'s, with `a wake from deep sleep` |
 | `board.wait_for_wake: boot {number} at {at} is {reason} (reset cause {cause}), not a wake from deep sleep (DEEPSLEEP_RESET)` | `AssertionError` | The chip booted again through another reset: `esp_restart()`, a watchdog |
 | `the board is off: board.wait_for_wake() waits for a board that is on` | `BoardOff` | `wait_for_wake` after `power_off()` |
-| `the run ended {when} while the test waited {what}: {reason}` | `RunEnded` | The run ended during, or before, a wait. `{when}` is `at {time}` from the runner's `stats`, `after the turn at {time}` without them, the last held turn being only a bound, or `before its first turn`. `{what}` is `until {time}` for `wait`, `for {description}` for `wait_until`, `for a wake from deep sleep` for `wait_for_wake`; `{reason}` is `[the link failed: {error}; ]the runner exited with code {code}; its last output:` and the tail |
+| `the run ended {when} while the test waited {what}: {reason}` | `RunEnded` | The run ended during, or before, a wait. `{when}` is `at {time}` from the runner's `stats`, `after the turn at {time}` without them, the last held turn being only a bound, or `before its first turn`. `{what}` is `until {time}` for `wait`, `for {description}` for `wait_until`, `for a wake from deep sleep` for `wait_for_wake`; `{reason}` is `[the link failed: {error}; ][{no_bluetooth}; ]the runner exited with code {code}; its last output:` and the tail |
 
 Times in these messages are `seconds(ns)`: seconds without trailing zeros, `1.5 s`, `0 s`.
 Anything else `IdfApp` raises for an ESP-IDF build, a `flasher_args.json` that is not JSON or has
@@ -711,8 +718,19 @@ proving serial-only validation does not reach the simulator.
   `test_runner_command_gives_the_chip_the_profile_s_psram`: `--psram-mb 4` for `psram_mb=4`, and
   no `--psram-mb` without it. `test_runner_command_puts_the_tests_access_point_on_the_air`: no
   `--wifi` without an access point, then `--wifi` and `--wifi-nearby` as `Wifi.runner_args()`
-  gives them. `test_runner_command_forwards_the_guests_hci_once_the_test_uses_bluetooth`: no `--bt`
-  for a `Bluetooth` the test has not used, then `--bt` and the fake build's `app.elf`.
+  gives them. `test_runner_command_forwards_the_guests_hci_once_the_test_uses_bluetooth`: `--no-bt`
+  and the fake build's `app.elf` for a `Bluetooth` the test has not used, then `--bt` and the same
+  ELF, without `--no-bt`.
+  `test_runner_command_gives_no_bluetooth_where_esp32sim_has_none_or_the_build_no_elf`: no
+  `--no-bt` for builds of `esp32p4` and `esp32s31`, nor for one without its ELF.
+  `test_a_run_the_firmware_s_bluetooth_controller_ended_says_what_to_do`: the text of
+  `no_bluetooth`. In `tests/test_bt_spp_initiator.py`,
+  `test_a_test_that_gives_the_board_no_bluetooth_fails_naming_board_bluetooth` runs the issue's
+  test of `bt_spp_initiator` without `board.bluetooth`: it fails with `RunEnded` naming
+  `board.bluetooth` and code 5, after one boot. In `tests/test_chips.py`,
+  `test_without_bt_the_controller_s_start_ends_the_run_naming_board_bluetooth` does the same with
+  `gatt_server` on the ESP32-S3 and the ESP32-C3, where the stub returns through the LX7's and the
+  RISC-V core's own `return_from_stub`.
 `tests/test_flash_size.py` covers the flash size:
 `test_the_runner_gets_the_profile_s_flash_else_the_header_s` the size `runner_flash_mb` returns and
 the `--flash-mb` before `--psram-mb`, `test_without_a_size_the_command_has_no_flash_mb` the pair

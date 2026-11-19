@@ -22,11 +22,17 @@
 //!   with its fields, with it the end line does;
 //! - 3: a protocol error by the peer;
 //! - 4: the peer is gone, or never answered the connection; with `--parent-fd`, also the process
-//!   that started the runner (see [`parent`]).
+//!   that started the runner (see [`parent`]);
+//! - 5: under `--no-bt`, the guest started its Bluetooth controller.
 //!
 //! With `--bt ELF` the guest's Bluetooth controller is the peer's: esp32sim's VHCI hooks, over the
 //! symbols of `ELF`, hand the guest's H4 packets to the [`hci::Forwarder`], and the run loop sends
 //! them to the peer as `hci_tx` and gives the guest the peer's `hci_rx` (protocol 5.22).
+//!
+//! With `--no-bt ELF` the guest has no Bluetooth controller: a stub at ELF's
+//! `esp_bt_controller_init` returns `ESP_ERR_NOT_SUPPORTED` in place of ESP-IDF's controller,
+//! which esp32sim does not model, and the run loop ends the run at the end of the slice the guest
+//! called it in, with `stats` `end: bt_controller` and exit code 5 (protocol §9).
 //!
 //! With `--flash-out PATH` the end of the run writes the whole flash to `PATH` (protocol 5.21),
 //! unless the connection failed, the process panicked or a signal killed it.
@@ -253,6 +259,7 @@ fn run_with_board<T: Target>(
             realtime: opts.realtime,
             flash_out: opts.flash_out.as_deref(),
             hci,
+            no_bt: opts.no_bt.is_some(),
         },
     );
     let (end, stats) = session.run();
@@ -281,6 +288,9 @@ fn run_with_board<T: Target>(
             format!("protocol error by the peer at {board}: {detail}")
         }
         session::End::PeerGone(detail) => format!("the peer at {board} is gone: {detail}"),
+        session::End::BtController => format!(
+            "the guest called {BT_CONTROLLER_INIT}, and the run has no --bt: it has no Bluetooth controller"
+        ),
     };
     eprintln!(
         "esp32tl-runner: end: {cause} at {:.6} s ({:.1} s wall, {} resets, {} turns)",
@@ -427,6 +437,9 @@ fn setup<T: Target>(
     if let (Some(path), Some(hci)) = (&opts.bt, hci) {
         bluetooth(&mut m, path, hci)?;
     }
+    if let Some(path) = &opts.no_bt {
+        no_bluetooth(&mut m, path)?;
+    }
 
     m.after_reset();
     let machine = m.machine();
@@ -450,6 +463,41 @@ fn bluetooth<T: Target>(m: &mut T, path: &Path, hci: hci::Shared) -> Result<(), 
         "esp32tl-runner: Bluetooth controller on the socket, VHCI hooks from {}",
         path.display()
     );
+    Ok(())
+}
+
+/// ESP-IDF's entry to its Bluetooth controller, on every chip esp32sim's VHCI hooks take: the
+/// call that starts the controller, as `esp_bt_controller_init` (`components/bt/controller/*/bt.c`).
+const BT_CONTROLLER_INIT: &str = "esp_bt_controller_init";
+/// `ESP_ERR_NOT_SUPPORTED`, what the stub at it returns (`components/esp_common/include/esp_err.h`).
+const ESP_ERR_NOT_SUPPORTED: u32 = 0x106;
+
+/// `--no-bt`: a stub at the application's `esp_bt_controller_init`, which returns
+/// `ESP_ERR_NOT_SUPPORTED` at once. Without esp32sim's VHCI hooks the guest's own controller
+/// would run against Bluetooth hardware esp32sim does not model, and crash; the run loop ends the
+/// run at the end of the slice the guest called it in (`Guest::bt_controller_inits`). An ELF
+/// without the symbol has no controller to start, and gets no stub.
+fn no_bluetooth<T: Target>(m: &mut T, path: &Path) -> Result<(), String> {
+    let elf = esp_soc::elf::parse(&read(path)?)
+        .map_err(|e| format!("--no-bt {}: {e}", path.display()))?;
+    match elf.by_name.get(BT_CONTROLLER_INIT) {
+        Some(&at) => {
+            // `Guest::bt_controller_inits` counts every stub's hits as calls to this one
+            assert!(
+                m.machine().stubs.is_empty(),
+                "--no-bt's stub must be the run's only one"
+            );
+            m.machine().stubs.insert(at, ESP_ERR_NOT_SUPPORTED);
+            eprintln!(
+                "esp32tl-runner: no Bluetooth controller: the guest's call to {BT_CONTROLLER_INIT} ({at:#x}, from {}) ends the run",
+                path.display()
+            );
+        }
+        None => eprintln!(
+            "esp32tl-runner: --no-bt: {} has no {BT_CONTROLLER_INIT}, nothing to stop",
+            path.display()
+        ),
+    }
     Ok(())
 }
 

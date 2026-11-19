@@ -4706,3 +4706,48 @@ path is gone; one that comes back with another address loses the connections on 
 **Rejected:** a bounded lifetime for an orphaned connection that never saw a CONNECT, because the
 network does not know what its service waits for, and the new stack's SYN on the same port is
 the event that shows the old connection gone.
+
+## A firmware that starts its Bluetooth controller without board.bluetooth ends the run
+
+Status: decided (#259)
+
+The backend gives the runner a Bluetooth controller, `--bt` with the application's ELF, only once
+the test looks at `board.bluetooth` or takes the `bt` fixture. Without `--bt` esp32sim installs no
+VHCI hooks, so a firmware that calls `esp_bt_controller_init` runs ESP-IDF's own controller against
+Bluetooth hardware esp32sim does not model. `bt_spp_initiator` on the classic ESP32 panicked there
+(`StoreProhibited`, `EXCVADDR: 0x0000019c`) and boot-looped, 129 boots in 15 s; `gatt_server` on
+the ESP32-S3 and the ESP32-C3 stopped after `BLE_INIT: Bluetooth MAC: …` and printed nothing more,
+the run spending about 2.4 wall seconds for each emulated one (M2 Pro). Either way a test of the
+console, Wi-Fi or the SD card passed, and nothing said why the firmware did not run.
+
+Now the backend passes `--no-bt` with the same ELF whenever the test has not looked at
+`board.bluetooth`, on every chip esp32sim models Bluetooth on, for a build whose ELF is a file (one
+without it gets neither flag, and the call runs as before). The runner puts an esp32sim stub at
+`esp_bt_controller_init`, the entry of ESP-IDF's controller on the classic ESP32, the S3, the C3 and
+the C6 alike, which returns `ESP_ERR_NOT_SUPPORTED`, and ends the run at the end of the slice the
+call came in, at most one emulated millisecond later, with `end: bt_controller` and exit code 5.
+The test fails with `the firmware started its Bluetooth controller (esp_bt_controller_init) by
+0.117 s, and the test gave the board no Bluetooth: look at board.bluetooth (or take the bt fixture)
+before board.power_on(); board.bluetooth.use() gives the firmware the harness's controller with no
+device on the air`. A firmware that links the controller and never starts it runs on. The run's
+cost stays where the test chose it: a test without Bluetooth gets no controller and none of the
+turns its 100 µs `latency` brings. One stub is one bucket of esp32sim's 64-bit bloom
+of hooked PCs, each of whose addresses ends a block: on `bt_spp_initiator`'s boot loop, a stub at
+an address the guest never runs took the median of six free runs of 15 emulated s from 13.95 to
+14.85 wall seconds (M2 Pro). A firmware that starts its controller pays that until the call, about
+0.1 s; one that links the controller and never starts it pays it for the whole run.
+
+**Rejected:** giving every such firmware the harness's controller, `--bt` whenever the ELF has
+`esp_bt_controller_init`, with `board.bluetooth` only adding devices, because every test of the
+firmware would then pay for a controller it did not ask for: esp32sim's thirteen VHCI hooks in place
+of one stub, the controller task's VHCI polls, a tick apart while nothing waits, and the
+interface's 100 µs `latency`, which puts a turn of the harness 100 µs after every event the runner
+sends (protocol §7). A firmware that never calls the controller would pay
+it as well, and a test of that firmware's console would depend on the build's ELF. Also rejected:
+only documenting that `board.bluetooth.use()` is needed, because the run that boot-loops or hangs
+passes in silence, which is what the issue was. Also rejected: letting the stub answer and the
+firmware run on without a controller, which an ESP-IDF example takes as a failed init
+(`app_main initialize controller failed: ESP_ERR_NOT_SUPPORTED`) and returns from `app_main`: the
+test would pass on a firmware doing something other than in production. Also rejected: an exact
+time for the call, from an esp32sim observer, because one that stops at a PC asks for every
+instruction and runs the guest single-stepped; the slice's end bounds the call to a millisecond.
