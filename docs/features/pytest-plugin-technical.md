@@ -622,8 +622,33 @@ GPIO output conditions build their conditions with it; `LineCondition` stays a c
 since it keeps a cursor that moves after a match. A `Condition` compares by its fields, `find`
 among them, so two conditions made by two calls of `is_on` or of a TLS property are not equal.
 
+The same module holds `FirstFrom(history, start, wanted)`, the `find` of every "next …" condition
+over an append-only history: `board.next_boot`, MQTT's `next_message`, `next_delivery` and
+`next_subscribe`, HTTP's `next_request`, and `SppPeer.next_write` and `next_written_line`. It is
+not exported from `esp32tl`. `history` is a function of no arguments, called at each poll, so that
+it may bring the history up to date first (`SppPeer._written`) or build it anew (`boots`); `start`
+is the boundary, the length of the history when the condition was made; `wanted` is the filter of
+one record. It keeps `_scanned`, the index the next poll starts at, and `_found`, the index of the
+match once there is one. A poll reads `history()[i]` for `i` from `_scanned` to the end, by index
+and without a slice, and stops at the first record `wanted` accepts; with none it moves `_scanned`
+to the end. Records are only appended, so one it refused stays refused, and a poll reads the records
+appended since the last one: a wait of N polls over N records reads N, not N × (N + 1) / 2. What a
+poll costs besides is what `history()` costs: nothing for a list kept as it grows, but the whole
+history for one built anew, as `Esp32Sim.boots` is, every boot with its `uptime_zero`. Once it
+has a match it asks `wanted` nothing more and returns `history()[_found]` at every poll, read again
+rather than kept, so a `Boot` whose `uptime_zero` came after the match is returned with it. The
+boundary never moves and nothing is consumed, unlike `LineCondition`, whose cursor moves past each
+match, so that the condition asked again finds the next line. Why, and what was not done:
+[the decision](../decisions/harness.md#history-conditions-scan-from-where-their-last-poll-ended).
+
 `tests/test_condition.py` checks the call, the `repr`, the refusal of `bool()` before and after a
-match, `service`, the frozen fields and the argument checks. `tests/test_board_api.py::
+match, `service`, the frozen fields and the argument checks, and of `FirstFrom` that a poll after
+each of 10 000 records reads each record once, never one before `start`, and after the match only
+the match, read again from a history built anew
+(`test_first_from_reads_each_record_once_and_keeps_its_match`,
+`test_first_from_reads_the_match_from_the_history_at_each_poll`), and that `next_boot` reads only
+the boots since the last poll (`test_next_boot_reads_only_the_boots_since_the_last_poll`), all
+through `CountingList` of `tests/conftest.py`. `tests/test_board_api.py::
 test_a_described_condition_names_its_timeout_and_refuses_bool` checks the `NeverHappened`
 message and the run report through `board.wait_until` on esp32sim, and
 `tests/test_serial_backend.py::test_console_reset_clock_tap_and_autoflash` the message and the
@@ -675,8 +700,11 @@ with `POWERON_RESET = 1` and `DEEPSLEEP_RESET = 5`, and so is `UptimeZero(earlie
 `Duration`s. `uptime_zero` is a `field(compare=False)`, so that a boot read before its zero came and
 one read after are equal, and `next_boot()` keeps returning the same boot. `next_boot(cause=None)`
 is concrete, on `boots` alone: it checks `cause` (an `int`, not a `bool`, or `None`), takes
-`len(self.boots)` as its boundary, and returns a `Condition` whose `find` gives the first of
-`boots[start:]` with that cause, or any, and `None` before; its description is `the next boot`, or
+`len(self.boots)` as its boundary, and returns a `Condition` whose `find`, a
+[`FirstFrom`](#described-conditions) over `boots`, gives the first boot from that index with that
+cause, or any, and `None` before. Each poll looks only at the boots since the last one, but on
+esp32sim reading `boots` builds them all, so a poll costs as many as there have been; boots are few
+beside messages or writes. Its description is `the next boot`, or
 `the next boot ({reset_reason(cause)})`. A backend whose `boots` raises or skips, before `power_on`
 on esp32sim and always on serial, does so at the `next_boot()` call. Interface properties reuse each
 backend's existing UART/line/slot objects; `console` is a `cached_property` wrapping that backend's

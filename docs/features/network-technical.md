@@ -216,6 +216,16 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   object has no `__qualname__`; `__bool__` raises
   `TypeError("call the <service> condition with (), or pass it to board.wait_until")`, `service`
   being `MQTT`, `HTTP`, `DHCP` or `TLS`.
+- How a "next …" condition scans: MQTT's `next_message`, `next_delivery` and `next_subscribe`, and
+  HTTP's `next_request`, take as their `find` a `FirstFrom` of `esp32tl/interfaces/condition.py`
+  ([described conditions](pytest-plugin-technical.md#described-conditions)) over their history,
+  `messages`, `deliveries`, `subscribe_requests` or `requests`. A poll reads, by index and without
+  copying the list, only the records appended since the last poll ended; a record it refused is
+  not read again, since the histories are only appended to. Once one matches, every later poll
+  returns that record and reads nothing else. So a wait of N polls over N records reads N of them,
+  not N × (N + 1) / 2, which `tests/test_net_mqtt.py` and `tests/test_net_http.py` count on 10 000.
+  `next_connection`, `next_connection_attempt` and `next_lease` read one entry at their index, and
+  the TLS conditions compare a count, so each of their polls costs the same at any length.
 - `dhcp.py`: a server for one device (RFC 2131, options of RFC 2132).
   `Dhcp(now, log, *, local="10.64.0.1", device="10.64.0.2", dns="10.64.0.1", mask="255.255.255.0")`,
   `LEASE_SECONDS = 86400`. `on_message` reads a BOOTREQUEST of at least 240 bytes with Ethernet
@@ -249,7 +259,8 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   the test's headers and the body (not for `HEAD`; `serve` refuses one for 204 and 304), then
   closes; later data on the connection is
   ignored. `next_request(path, method=...)` captures the length of `requests` at construction and
-  returns a `Condition` scanning from that index for an exact `path` and `method` match, named
+  returns a `Condition` whose `FirstFrom` scans from that index for an exact `path` and `method`
+  match, `_wants(path, method)`, each poll from where the last one ended, named
   `the next HTTP request`, then ` for '<path>'` and ` with method '<method>'` for the filters
   given. `find_request` scans from index zero with the same filters.
   Both refuse a `path` holding `?` with `ValueError`, through `_refuse_query`: `_path` strips the
@@ -340,15 +351,18 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   `subscribe_requests`, and `next_delivery` captures `deliveries`, filtering as `next_message`
   does. `next_subscribe(filter)` skips UNSUBSCRIBE entries and, with a filter, keeps the first
   entry whose `topic_filters` hold that string exactly. Matching uses append order,
-  not timestamps, and polling does not change the captured offset. `find_message` scans
+  not timestamps, and polling does not change the captured offset; each poll reads only the
+  records since the last one, through `FirstFrom`, its filter `_wants(topic, payload)` or, for
+  messages, `_wants_message(topic, payload, will)`. `find_message` scans
   from index zero with the same topic/payload filters; `find_connection` reads the first CONNECT.
   `mark()` returns a `Mark` holding the broker and `len(messages)` at the call;
   `find_messages(topic, payload, since=, client=, will=)` walks `messages` from that index (zero for
   `None`) through `_messages`, keeps `message.client == client` when a client is given, and
-  returns a new list. `_messages` is `_matching`, the generator `_first` takes its first record
-  from, keeping `message.will is will` when `will` is not `None`. `next_message` and
-  `find_message` take their first record from `_messages` too, so the three filter Wills alike,
-  and `_will_check` refuses any other `will` than `True`, `False` or `None` with `TypeError`
+  returns a new list. `_messages` reads `messages` by index from that start and keeps what
+  `_wants_message` keeps: `_wants`, the topic filter and the payload `_first` filters deliveries
+  by, and `message.will is will` when `will` is not `None`. `find_message` takes its first record
+  from `_messages` and `next_message` filters with `_wants_message`, so the three filter Wills
+  alike, and `_will_check` refuses any other `will` than `True`, `False` or `None` with `TypeError`
   before anything is read. `_Session._connect` builds the session's Will as a `Message` with
   `will=True`; `on_close` routes a copy restamped with the time of the loss, so the flag reaches
   `messages` and `retained`, and nothing else sets it. A `since` that is not
@@ -545,9 +559,14 @@ for the kind. `write` hands the bytes on; `on_sent` records `in`, at the time th
 while it may still come, and raises `ConnectionEnded` once `_end` (or, for `closed` and
 `next_data`, `closed_at`) rules it out, its message built from `_how`. `next_data` validates its
 arguments at the call and captures `start`, `len(received)` unless given; each poll searches the
-`bytearray` from `start` in place (`find(until, start)`, or its length) and copies only what it
-returns, so it consumes nothing, a repeated poll returns the same bytes, and a long stream is not
-copied at every turn.
+`bytearray` in place (`find(until, searched)`, or its length) and copies only what it returns, so it
+consumes nothing, a repeated poll returns the same bytes, and a long stream is not copied at every
+turn. `searched` starts at `start`; a poll that does not find `until` moves it to
+`len(until) - 1` bytes before the end, where an `until` split across two arrivals begins, and one
+that finds it to the match. So a poll searches only the bytes since the last one, not all since
+`start`, as
+`tests/test_net_client.py::test_a_next_data_poll_searches_only_the_bytes_since_the_last_one`
+counts over 10 000 chunks.
 
 ## Lifecycle and observability
 
@@ -660,7 +679,10 @@ empty-ID rejection precedence, malformed CONNECT exclusion and propagation of po
 both out of `on_data` and as a link failure in a `BoardLink` turn. A test through `Internet`
 covers its traced plain and TLS listeners and keeps the policy and both histories across reset.
 MQTT temporal tests send CONNECT and PUBLISH in one callback, check the `next_*` methods,
-history filtering, equal timestamps, repeated polls and boolean protection.
+history filtering, equal timestamps, repeated polls and boolean protection. `tests/test_net_mqtt.py`
+counts, through `CountingList` of `tests/conftest.py`, the records `next_message`, `next_delivery`
+and `next_subscribe` read in a wait of a poll after each of 10 000 records: each once, then only the
+match.
 `tests/test_clock.py::test_mqtt_immediate_response_is_visible_after_waiting_for_connection`
 delivers both events in one runner slice, waits for CONNECT, then retrieves the pre-armed
 publication without advancing time; a newly created condition times out with its MQTT name.
@@ -749,7 +771,8 @@ connection so that a SYN from the same port opens a new one.
 `tests/test_net_http.py` drives `HttpServer` connections without TCP: serving and keeping a
 request, a body by `Content-Length`, bytes, `HEAD` and absolute form, 404 and `next_request`'s
 filters, `find_request`, `next_request` with append order at equal timestamps and non-consuming
-polls, each condition's name and its refusal of `bool()`, a filter holding a query refused while
+polls, a poll after each of 10 000 requests reading each once, each condition's name and its
+refusal of `bool()`, a filter holding a query refused while
 the query stays in `target`, `serve` refusing a path with a query, the refused requests, unseen by
 the conditions and queries, what `serve` refuses, the path of each form of target
 (`/proxy/http://example.com/fw.bin` among them), and `204` and `304` ending with their head.

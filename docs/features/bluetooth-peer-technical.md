@@ -968,15 +968,23 @@ so neither the report nor the `esp32sim_link` JSON schema changes.
 `SppPeer.is_open` and `is_closed` create `Condition[bool]` objects from
 `esp32tl/interfaces/condition.py`. Their callbacks read `channel_open` on each poll; descriptions
 include `name` and `address`, the public address without Bumble's `/P` suffix, as
-`00:00:00:00:5B:01`. `next_write(data)` captures `len(events)` and scans that suffix for the first
-`ChannelEvent` with direction `"out"` and, when supplied, `data in event.data`. It returns the
-original record, with its `Duration` timestamp. No condition changes the list, moves a cursor, or
-clears its boundary at channel closure. All three use service `"SPP"` for the shared boolean
-refusal. The write filter is checked when the condition is created and must be bytes or `None`.
+`00:00:00:00:5B:01`. `next_write(data)` captures `len(events)` and scans from that index for the
+first `ChannelEvent` with direction `"out"` and, when supplied, `data in event.data`. It returns the
+original record, with its `Duration` timestamp. Its `find` is a `FirstFrom` of
+`esp32tl/interfaces/condition.py` ([described
+conditions](pytest-plugin-technical.md#described-conditions)): a poll reads `events` by index,
+without copying it, only from where the last poll ended, since an event it refused stays refused in
+a list that is only appended to, and once it has matched it reads only the match. A wait of N polls
+over N writes reads N events, not N × (N + 1) / 2. No condition changes the list or clears its
+boundary at channel closure, and polling never moves the boundary. All three use service `"SPP"`
+for the shared boolean refusal. The write filter is checked when the condition is created and must
+be bytes or `None`.
 
 `tests/test_spp_peer.py` covers state changes and described clock timeouts, boolean refusal,
 non-consuming repeated reads, equal-time append boundaries, filtering and chunk boundaries,
-and a pending write condition spanning an RFCOMM close and reopen. No emulator is needed.
+a pending write condition spanning an RFCOMM close and reopen, and, through `CountingList` of
+`tests/conftest.py`, that a poll after each of 10 000 writes reads each event once
+(`test_a_next_write_poll_reads_only_the_events_since_the_last_one`). No emulator is needed.
 The API choice and deferred transition events are recorded in
 [the decision](../decisions/harness.md#spp-conditions-describe-channel-state-and-the-next-device-write).
 
@@ -1006,9 +1014,11 @@ too. `_Lines.lines` only grows: a line once appended is never changed or removed
 
 `written_lines` returns a copy of the list. `next_written_line(data, separator)` checks `data`
 (bytes or `None`, else `TypeError`), captures `len(lines)` after an update, and on each poll updates
-and scans the suffix for the first line with `complete` and, when `data` is given,
-`data in line.data`. It returns the stored `WrittenLine`. Its description, as those of
-`is_open`, `is_closed` and `next_write`, names the peer by `address`, without Bumble's `/P`
+and scans from that index for the first line with `complete` and, when `data` is given,
+`data in line.data`, through a `FirstFrom` over `_written(separator, …)` as `next_write`'s over
+`events`: the update reads only the events since the last one, and the scan only the lines since
+the last poll, then only the match. It returns the stored `WrittenLine`. Its description, as those
+of `is_open`, `is_closed` and `next_write`, names the peer by `address`, without Bumble's `/P`
 suffix; the service is `"SPP"`, as for the other channel conditions. Lines are cut
 when they are read, in the test's thread, as `next_write` reads `events`; the peer's receive path
 does no framing.
@@ -1017,6 +1027,8 @@ does no framing.
 a close kept apart from the next opening (and cut again at a second close), separators of one, two
 and three bytes across chunks, after a line of 1000 bytes without one, the line boundary at one
 timestamp with a filter and a non-default separator, a pending condition across a close and reopen,
-and the refusals of a non-bytes `data`, a non-bytes separator and an empty one. The choice of
+a poll after each of 10 000 lines reading each line once
+(`test_a_next_written_line_poll_reads_only_the_lines_since_the_last_one`), and the refusals of a
+non-bytes `data`, a non-bytes separator and an empty one. The choice of
 separator and names is recorded in
 [the decision](../decisions/harness.md#the-devices-spp-writes-are-read-as-lines-at-a-separator-the-test-chooses).

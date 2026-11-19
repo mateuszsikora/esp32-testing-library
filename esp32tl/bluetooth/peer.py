@@ -31,7 +31,7 @@ from bumble.transport.common import AsyncPipeSink
 from esp32tl.backends.clock import seconds
 from esp32tl.bluetooth.air import Air
 from esp32tl.bluetooth.controller import RSSI, SIX_DIGITS, Controller, Pairing, UnderWay
-from esp32tl.interfaces.condition import Condition
+from esp32tl.interfaces.condition import Condition, FirstFrom
 from esp32tl.interfaces.uart import Source, Supplied
 from esp32tl.link.boardlink import Direction, Output
 from esp32tl.sources.model import InNanoseconds, Model, in_nanoseconds
@@ -546,18 +546,11 @@ class SppPeer(BluetoothDevice):
         """
         if data is not None and not isinstance(data, bytes):
             raise TypeError(f"SppPeer.next_write: data is {data!r}, not bytes or None")
-        start = len(self.events)
-
-        def find() -> ChannelEvent | None:
-            return next(
-                (
-                    event
-                    for event in self.events[start:]
-                    if event.direction == "out" and (data is None or data in event.data)
-                ),
-                None,
-            )
-
+        find = FirstFrom(
+            lambda: self.events,
+            len(self.events),
+            lambda event: event.direction == "out" and (data is None or data in event.data),
+        )
         description = f"the next write to {self.name}'s SPP channel ({self.address})"
         if data is not None:
             description += f" containing {data!r}"
@@ -583,19 +576,11 @@ class SppPeer(BluetoothDevice):
         matches. Nothing is consumed: asked again, the condition finds the same line."""
         if data is not None and not isinstance(data, bytes):
             raise TypeError(f"SppPeer.next_written_line: data is {data!r}, not bytes or None")
-        start = len(self._written(separator, "next_written_line"))
-
-        def find() -> WrittenLine | None:
-            lines = self._written(separator, "next_written_line")
-            return next(
-                (
-                    line
-                    for line in lines[start:]
-                    if line.complete and (data is None or data in line.data)
-                ),
-                None,
-            )
-
+        find = FirstFrom(
+            lambda: self._written(separator, "next_written_line"),
+            len(self._written(separator, "next_written_line")),
+            lambda line: line.complete and (data is None or data in line.data),
+        )
         description = (
             f"the next line ending in {separator!r} written to {self.name}'s SPP channel"
             f" ({self.address})"

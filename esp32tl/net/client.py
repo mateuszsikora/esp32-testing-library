@@ -227,15 +227,21 @@ class TcpConnection:
         else:
             wanted = ""
         after = f" after byte {start}" if start else ""
+        # Where the next search for `until` begins: after a miss, `len(until) - 1` bytes before the
+        # end, where an `until` split across two arrivals would begin; after a match, the match.
+        searched = start
 
         def find() -> bytes | None:
             # Searched where it lies, and copied only for a match: a long stream is not copied at
             # every poll.
+            nonlocal searched
             received = self._received
             if until is not None:
-                at = received.find(until, start)
+                at = received.find(until, searched)
                 if at >= 0:
+                    searched = at
                     return bytes(received[start : at + len(until)])
+                searched = max(searched, len(received) - len(until) + 1)
             elif size is not None:
                 if len(received) - start >= size:
                     return bytes(received[start : start + size])

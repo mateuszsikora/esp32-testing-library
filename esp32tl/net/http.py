@@ -6,7 +6,7 @@ time, for the test to look at.
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from esp32tl.interfaces.condition import Condition
+from esp32tl.interfaces.condition import Condition, FirstFrom
 from esp32tl.units import Duration
 
 # The statuses whose response ends with its head (RFC 9112 6.3): no body, and no Content-Length.
@@ -123,22 +123,15 @@ class HttpServer:
             + (f" for {path!r}" if path is not None else "")
             + (f" with method {method!r}" if method is not None else "")
         )
-        return Condition(lambda: self._find_request(path, method, start), description, "HTTP")
+        find = FirstFrom(lambda: self.requests, start, _wants(path, method))
+        return Condition(find, description, "HTTP")
 
     def find_request(
         self, path: str | None = None, *, method: str | None = None
     ) -> HttpRequest | None:
         """Return the first match among the requests recorded so far, or None; consume nothing."""
         _refuse_query(path, "find_request")
-        return self._find_request(path, method, 0)
-
-    def _find_request(self, path: str | None, method: str | None, start: int) -> HttpRequest | None:
-        for request in self.requests[start:]:
-            if (path is None or request.path == path) and (
-                method is None or request.method == method
-            ):
-                return request
-        return None
+        return next(filter(_wants(path, method), self.requests), None)
 
     def accept(
         self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
@@ -236,6 +229,13 @@ class _Exchange:
 
     def on_close(self) -> None:
         self._done = True
+
+
+def _wants(path: str | None, method: str | None) -> Callable[[HttpRequest], bool]:
+    """Whether a request is for `path` and with `method`, each when given."""
+    return lambda request: (
+        (path is None or request.path == path) and (method is None or request.method == method)
+    )
 
 
 def _refuse_query(path: str | None, what: str) -> None:

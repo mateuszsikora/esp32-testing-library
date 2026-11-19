@@ -566,8 +566,10 @@ with ` containing b'AT'` when filtered.
 The boundary is append order, even for writes at the same timestamp or in one run slice.
 It survives channel closure and reopening. Peer answers (`"in"`) never match. Polling
 consumes nothing: repeated calls return the same first matching event and independent
-conditions can see the same event. Treat `peer.events` as history; do not clear or reorder it
-while conditions are outstanding.
+conditions can see the same event. Each poll looks only at the events since the last one, so a
+long wait on a busy channel costs no more per poll than a short one. Treat `peer.events` as
+history; do not clear, reorder or change it while conditions are outstanding: a poll does not
+look again at an event it has seen.
 
 These conditions belong to `SppPeer`; `BluetoothDevice` has no SPP channel. There are no
 `next_open()` or `next_close()` events: a state condition does not detect a close and reopen

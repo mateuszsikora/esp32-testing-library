@@ -11,7 +11,7 @@ from typing import TypeVar, cast
 from esp32tl.boards import BoardProfile
 from esp32tl.flash import FlashSnapshot, Namespaces
 from esp32tl.interfaces.bluetooth import Bluetooth
-from esp32tl.interfaces.condition import Condition
+from esp32tl.interfaces.condition import Condition, FirstFrom
 from esp32tl.interfaces.console import Clocked, Console
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
@@ -188,14 +188,9 @@ class Board(ABC):
                 f"board.next_boot: cause is {cause!r}, not a reset cause as a number, such as"
                 " POWERON_RESET"
             )
-        start = len(self.boots)
-
-        def find() -> Boot | None:
-            return next(
-                (boot for boot in self.boots[start:] if cause is None or boot.cause == cause),
-                None,
-            )
-
+        find = FirstFrom(
+            lambda: self.boots, len(self.boots), lambda boot: cause is None or boot.cause == cause
+        )
         description = "the next boot" if cause is None else f"the next boot ({reset_reason(cause)})"
         return Condition(find, description)
 

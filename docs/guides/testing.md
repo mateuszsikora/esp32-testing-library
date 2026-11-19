@@ -104,6 +104,14 @@ Anything but `1 <= K <= N` is a usage error:
 `--shard must be K/N with 1 <= K <= N, not '<value>'`. The option exists only where
 `tests/conftest.py` is loaded: a bare `pytest`, or one given a path under `tests/`.
 
+`tests/conftest.py` also holds `CountingList`, a `list` that counts in `reads` the records read out
+of it: one for an index, as many as a slice holds, and all of them for an iteration. A test puts one
+in place of a history (`broker.messages = CountingList[Message]()`) before anything is appended, and
+imports it with `from conftest import CountingList`. The tests of what a "next …" condition's poll
+costs count with it, rather than time it: a count is the same on every runner, and a scan from the
+boundary at every poll reads 50 M records where one from the last poll reads 10 000
+([invariant 266](../invariants.md#history-conditions)).
+
 ### `requires_docker` and `requires_mtools`
 
 A test that needs a container carries `@pytest.mark.requires_docker`. When at least one collected

@@ -349,6 +349,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The package root exports every name a test uses](harness.md#the-package-root-exports-every-name-a-test-uses) | `harness.md` | decided (#247) |
 | [A lost link leaves the device's connections half-open until their keepalive](harness.md#a-lost-link-leaves-the-devices-connections-half-open-until-their-keepalive) | `harness.md` | decided (#244) |
 | [A firmware that starts its Bluetooth controller without board.bluetooth ends the run](harness.md#a-firmware-that-starts-its-bluetooth-controller-without-boardbluetooth-ends-the-run) | `harness.md` | decided (#259) |
+| [History conditions scan from where their last poll ended](harness.md#history-conditions-scan-from-where-their-last-poll-ended) | `harness.md` | decided (#262) |
 
 ## The runner crate and esp32sim
 

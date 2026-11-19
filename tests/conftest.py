@@ -6,14 +6,21 @@ runners have none (plan M0). Tests that make or read a FAT image carry `requires
 skipped the same way where mtools is not installed.
 
 `--shard=K/N` runs only the tests of shard K of N, which is how CI splits the suite into short jobs.
+
+`CountingList` is a history that counts the records read out of it, for the tests of what a
+condition's poll costs.
 """
 
 import functools
 import hashlib
 import shutil
 import subprocess
+from collections.abc import Iterator
+from typing import SupportsIndex, TypeVar, overload
 
 import pytest
+
+T = TypeVar("T")
 
 pytest_plugins = ["pytester"]
 
@@ -26,6 +33,29 @@ FOUR_SHARD_ASSIGNMENTS = {
         "test_with_no_peer_the_inquiry_runs_its_length_and_opens_nothing[esp32sim-nobody]"
     ): 3,
 }
+
+
+class CountingList(list[T]):
+    """A list that counts in `reads` the records read out of it: one for an index, as many as a
+    slice holds for a slice, and all of them for an iteration, whether or not it runs to the end.
+    Put in place of a history before anything is appended, it shows what a condition's poll
+    looks at: `from conftest import CountingList`."""
+
+    reads = 0
+
+    @overload
+    def __getitem__(self, key: SupportsIndex) -> T: ...
+
+    @overload
+    def __getitem__(self, key: slice) -> list[T]: ...
+
+    def __getitem__(self, key: SupportsIndex | slice) -> T | list[T]:
+        self.reads += len(range(*key.indices(len(self)))) if isinstance(key, slice) else 1
+        return super().__getitem__(key)
+
+    def __iter__(self) -> Iterator[T]:
+        self.reads += len(self)
+        return super().__iter__()
 
 
 @functools.cache

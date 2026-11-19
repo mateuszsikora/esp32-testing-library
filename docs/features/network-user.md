@@ -185,6 +185,9 @@ the broker wrote, as every delivery is.
 
 Polling any MQTT event condition does **not** consume a match or move its boundary. Repeated
 calls and waits return the same first match; construct a new `next_*` condition for a new wait.
+A `next_*` condition looks, at each poll, only at what was recorded since its last poll, and once it
+has its match at nothing else, so a long wait on a busy broker costs no more per poll than a short
+one: an hour of the board's time with a message a second is 3 600 messages looked at, once each.
 `subscribed` instead reads current state each time: unsubscribe or connection closure can make
 a previously true condition false.
 
