@@ -445,9 +445,10 @@ each emulated one. A peer that does not watch for either sees nothing wrong.
 `--no-bt ELF` gives the peer a reason instead. The runner puts an esp32sim stub at the address of
 `esp_bt_controller_init` in the application's ELF, ESP-IDF's entry to its controller on every chip
 the runner gives Bluetooth to; the stub returns `ESP_ERR_NOT_SUPPORTED` (`0x106`) at once, without
-running the function. When the slice the call came in ends, at the next whole emulated millisecond,
-the runner ends the run: `stats` with `end: bt_controller`
-([protocol, section 9](../protocol.md#9-ending-a-run)), then
+running the function. When the slice the call came in ends, at the next whole emulated millisecond
+or sooner ([protocol, 6.1](../protocol.md#61-how-the-runner-meets-the-block-point)), the runner ends
+the run: `stats` with `end: bt_controller` ([protocol, section 9](../protocol.md#9-ending-a-run)),
+then
 
 ```text
 esp32tl-runner: end: the guest called esp_bt_controller_init, and the run has no --bt: it has no Bluetooth controller at 0.117000 s (0.1 s wall, 0 resets, 1 turns)

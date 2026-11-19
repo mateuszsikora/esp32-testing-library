@@ -35,16 +35,19 @@ the same object, asked for at setup. Below, `bt` is short for either. Any look a
 `board.bluetooth.use()` is the call to make for a test that wants Bluetooth on and no device
 nearby, which gives the firmware the harness's controller with nothing on the air.
 
-**A firmware that starts its controller needs it.** A test that never looks at `board.bluetooth`,
-of the console, of Wi-Fi or of the SD card on such a firmware, gives the board no Bluetooth
-controller. Its first call to `esp_bt_controller_init` then ends the run, and the test fails with
-`the firmware started its Bluetooth controller (esp_bt_controller_init) by 0.117 s, and the test
-gave the board no Bluetooth: look at board.bluetooth (or take the bt fixture) before
-board.power_on(); board.bluetooth.use() gives the firmware the harness's controller with no device
-on the air`, rather than leave the firmware to crash in a controller esp32sim does not model and
-boot-loop while the test passes ([esp32sim
-backend](esp32sim-backend-user.md#a-firmware-that-starts-its-controller-without-boardbluetooth)).
-A firmware that links the controller and never starts it is not refused.
+**A firmware that starts its controller needs it.** A test that never looks at `board.bluetooth`, of
+the console, of Wi-Fi or of the SD card on such a firmware, gives the board no Bluetooth controller.
+On a chip esp32sim models Bluetooth on (all but the ESP32-P4 and the ESP32-S31), and for a build
+with the application's ELF, which the runner's `--no-bt` reads the function's address from, its
+first call to `esp_bt_controller_init` then ends the run, and the test fails with `the firmware
+started its Bluetooth controller (esp_bt_controller_init) by 0.117 s, and the test gave the board no
+Bluetooth: look at board.bluetooth (or take the bt fixture) before board.power_on();
+board.bluetooth.use() gives the firmware the harness's controller with no device on the air`, rather
+than leave the firmware to crash or hang in a controller esp32sim does not model while the
+test passes ([esp32sim
+backend](esp32sim-backend-user.md#a-firmware-that-starts-its-controller-without-boardbluetooth)). A
+firmware that links the controller and never starts it is not refused. Without the ELF the backend
+passes no `--no-bt`, and the call runs ESP-IDF's controller as before.
 
 From the first look on:
 

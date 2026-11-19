@@ -4721,10 +4721,11 @@ the run spending about 2.4 wall seconds for each emulated one (M2 Pro). Either w
 console, Wi-Fi or the SD card passed, and nothing said why the firmware did not run.
 
 Now the backend passes `--no-bt` with the same ELF whenever the test has not looked at
-`board.bluetooth`, on every chip esp32sim models Bluetooth on. The runner puts an esp32sim stub at
-`esp_bt_controller_init`, the entry of ESP-IDF's controller on the classic ESP32, the S3, the C3
-and the C6 alike, which returns `ESP_ERR_NOT_SUPPORTED`, and ends the run at the end of the slice
-the call came in, at most one emulated millisecond later, with `end: bt_controller` and exit code 5.
+`board.bluetooth`, on every chip esp32sim models Bluetooth on, for a build whose ELF is a file (one
+without it gets neither flag, and the call runs as before). The runner puts an esp32sim stub at
+`esp_bt_controller_init`, the entry of ESP-IDF's controller on the classic ESP32, the S3, the C3 and
+the C6 alike, which returns `ESP_ERR_NOT_SUPPORTED`, and ends the run at the end of the slice the
+call came in, at most one emulated millisecond later, with `end: bt_controller` and exit code 5.
 The test fails with `the firmware started its Bluetooth controller (esp_bt_controller_init) by
 0.117 s, and the test gave the board no Bluetooth: look at board.bluetooth (or take the bt fixture)
 before board.power_on(); board.bluetooth.use() gives the firmware the harness's controller with no
