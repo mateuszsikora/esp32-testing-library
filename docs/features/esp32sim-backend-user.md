@@ -122,9 +122,9 @@ An empty slot gives the runner no card. The bytes the card and the firmware exch
 the link; the card going in and coming out does: `sd_card.remove()` and `sd_card.insert(image)`
 with the board on go to the runner in the next turn, and the runner acknowledges each
 ([pytest plugin](pytest-plugin-user.md#taking-the-card-out-and-putting-one-in)). The slot
-is on the link for the card's fault rules too: what the test gives with `sd_card.fail` and
-`sd_card.delay` goes to the runner at the board's current instant, and what each rule did comes back
-([pytest plugin](pytest-plugin-user.md#making-the-card-fail-or-slow-down)).
+is on the link for the card's fault rules too: what the test gives with `sd_card.fail`,
+`sd_card.delay` and `sd_card.observe` goes to the runner at the board's current instant, and what
+each rule did comes back ([pytest plugin](pytest-plugin-user.md#making-the-card-fail-or-slow-down)).
 
 The chip's Wi-Fi station is on the link once the test gives it an access point
 (`wifi.access_point(...)`, [pytest plugin](pytest-plugin-user.md#the-wifi-fixture)): the backend

@@ -1,6 +1,7 @@
-"""The SD card's fault rules without the emulator: what `sd_card.fail`, `sd_card.delay` and the
-clears send on the link, and when; what they refuse; and what the runner's `sd_op` makes of
-them. `examples/sd_data_logger/tests/test_logger.py` runs them against a firmware."""
+"""The SD card's fault rules without the emulator: what `sd_card.fail`, `sd_card.delay`,
+`sd_card.observe` and the clears send on the link, and when; what they refuse; and what the
+runner's `sd_op` makes of them. `examples/sd_data_logger/tests/test_logger.py` runs them against
+a firmware."""
 
 import re
 from pathlib import Path
@@ -159,6 +160,54 @@ def test_what_a_rule_did_reaches_the_rule_and_the_slot(card: SdCard) -> None:
     assert str(delayed.hits[0]) == "erase of blocks 64 to 127 delayed 0.25 s, written"
 
 
+def test_a_rule_that_observes_goes_out_without_a_delay_and_says_what_it_met(
+    card: SdCard, clock: Clock
+) -> None:
+    clock.now = 2 * MS
+    writes = card.observe("write")
+    erases = card.observe("erase", count=1, blocks=range(64, 128))
+    failing = card.fail("write", count=1)
+    link = started(card)
+    assert link.receive(Sync(2 * MS)) == [
+        SdFault(2 * MS, 1, "write", "observe"),
+        SdFault(2 * MS, 2, "erase", "observe", None, 1, (64, 127)),
+        SdFault(2 * MS, 3, "write", "error", None, 1),
+        Wait(0, None, None),
+    ]
+    assert (writes.action, writes.delay, writes.op) == ("observe", None, "write")
+    # one write met by both rules: each gets its own hit, in the order the test gave them
+    link.receive(SdOp(3 * MS, 1, "write", (541, 541), "observe", None, False))
+    link.receive(SdOp(3 * MS, 3, "write", (541, 541), "error", None, False))
+    link.receive(SdOp(4 * MS, 1, "write", (541, 541), "observe", None, True))
+    link.receive(SdOp(5 * MS, 2, "erase", (100, 120), "observe", None, True))
+    assert [hit.written for hit in writes.hits] == [False, True]
+    assert writes.active and not erases.active and not failing.active
+    assert card.faulted == (writes.hits[0], failing.hits[0], writes.hits[1], erases.hits[0])
+    assert card.report() == [
+        "  fault 1: sd_card.observe('write') at 0.002 s; 2 operations",
+        "    0.003 s  write of block 541 observed, not written",
+        "    0.004 s  write of block 541 observed, written",
+        "  fault 2: sd_card.observe('erase', count=1, blocks=range(64, 128)) at 0.002 s;"
+        " 1 operation",
+        "    0.005 s  erase of blocks 100 to 120 observed, written",
+        "  fault 3: sd_card.fail('write', count=1) at 0.002 s; 1 operation",
+        "    0.003 s  write of block 541 failed, not written",
+    ]
+    assert card.properties()[1]["operations"] == [
+        {
+            "t_ns": 5 * MS,
+            "op": "erase",
+            "blocks": [100, 120],
+            "action": "observe",
+            "delay_ns": None,
+            "written": True,
+        }
+    ]
+    steps = [line for line in card.log.lines() if " test " in line]  # type: ignore[union-attr]
+    assert steps[-3] == "  0.002000000 s  test  sd_card.observe('write')"
+    assert link.error is None
+
+
 @pytest.mark.parametrize(
     ("give", "error", "message"),
     [
@@ -173,6 +222,17 @@ def test_what_a_rule_did_reaches_the_rule_and_the_slot(card: SdCard) -> None:
             "sd_card.delay: op 'trim' is not 'read', 'write' or 'erase'",
         ),
         (lambda c: c.delay("read", 5), TypeError, "sd_card.delay: by is 5, not a Duration"),
+        (
+            lambda c: c.observe("trim"),
+            ValueError,
+            "sd_card.observe: op 'trim' is not 'read', 'write' or 'erase'",
+        ),
+        (lambda c: c.observe("write", count=0), ValueError, "sd_card.observe: a count of 0"),
+        (
+            lambda c: c.observe("erase", blocks=2048),
+            ValueError,
+            "sd_card.observe: blocks range(2048, 2049), and the card has blocks 0 to 2047",
+        ),
         (
             lambda c: c.delay("read", Duration(0)),
             ValueError,
@@ -241,6 +301,8 @@ def test_a_run_that_has_ended_takes_no_rule(tmp_path: Path) -> None:
         slot.fail("read")
     with pytest.raises(RunEnded, match=r"sd_card\.delay: the run has ended"):
         slot.delay("read", ms(1))
+    with pytest.raises(RunEnded, match=r"sd_card\.observe: the run has ended"):
+        slot.observe("read")
     assert slot.faults == (fault,)
     # clearing asks for nothing the run would still have to do
     fault.clear()
@@ -316,6 +378,43 @@ def test_only_the_card_sends_sd_fault_and_sd_op_needs_a_card(card: SdCard) -> No
 
     with pytest.raises(ValueError, match="one SD card slot, not sd_card, sd_card"):
         BoardLink("esp32-devkitc", [card, card])
+
+
+@pytest.mark.parametrize(
+    ("op", "error"),
+    [
+        (
+            SdOp(MS, 1, "write", (9, 9), "observe", None, True),
+            "sd_card: the runner says rule 1 met a write as observe; the test gave it as"
+            " sd_card.fail('write')",
+        ),
+        (
+            SdOp(MS, 2, "read", (9, 9), "delay", 2 * MS, False),
+            "sd_card: the runner says rule 2 met a read as delay; the test gave it as"
+            " sd_card.delay('read', seconds(0.001))",
+        ),
+        (
+            SdOp(MS, 3, "read", (9, 9), "observe", None, False),
+            "sd_card: the runner says rule 3 met a read as observe; the test gave it as"
+            " sd_card.observe('write')",
+        ),
+        (
+            SdOp(MS, 4, "write", (9, 9), "observe", None, True),
+            "sd_card: the runner says rule 4 met a write as observe; the test gave no rule 4",
+        ),
+    ],
+)
+def test_an_sd_op_that_is_not_what_its_rule_does_fails_the_link(
+    card: SdCard, op: SdOp, error: str
+) -> None:
+    card.fail("write")
+    card.delay("read", ms(1))
+    card.observe("write")
+    link = started(card)
+    link.receive(Sync(0))
+    link.receive(op)
+    assert link.error == error
+    assert card.faulted == ()
 
 
 def test_the_steps_go_in_the_run_log(card: SdCard, clock: Clock) -> None:

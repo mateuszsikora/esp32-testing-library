@@ -187,10 +187,13 @@ of them, at the board's time it started:
     3.0681844 s  write of block 541 failed, not written
   fault 2: sd_card.delay('read', seconds(0.1)) at 3.5 s, cleared at 5 s; 1 operation
     4.067868737 s  read of block 541 delayed 0.1 s, not written
+  fault 3: sd_card.observe('write', count=1) at 3.5 s; 1 operation
+    4.1015294 s  write of block 541 observed, written
 ```
 
-`sd_card.fail`, `sd_card.delay`, `clear()` and `sd_card.clear_faults()` are among the test's steps
-too ([pytest plugin](pytest-plugin-user.md#making-the-card-fail-or-slow-down)).
+A rule that observes says `observed` where the others say `failed` or `delayed`.
+`sd_card.fail`, `sd_card.delay`, `sd_card.observe`, `clear()` and `sd_card.clear_faults()` are among
+the test's steps too ([pytest plugin](pytest-plugin-user.md#making-the-card-fail-or-slow-down)).
 
 A test that passed gets the `routes:` lines and the slot's, without the run; `pytest -rA` shows
 them.

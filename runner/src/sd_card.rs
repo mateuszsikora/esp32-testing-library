@@ -16,7 +16,8 @@
 //! The peer's fault rules (`sd_fault`, protocol 5.20) change that for the block operations they
 //! apply to: a read answers an error token, a write the data response "write error" and leaves the
 //! image as it was, and a delay holds a read's data block back, or keeps the card busy after a
-//! write or an erase, for that long on the bus's clock. The board tells the card the bus cycle at
+//! write or an erase, for that long on the bus's clock. A rule that observes changes nothing: it
+//! only reports the operations it meets. The board tells the card the bus cycle at
 //! every tick (`advance`), so a transaction sees the time it happens at, and a firmware that polls
 //! sees time pass between its transactions.
 use crate::protocol::cycles;
@@ -90,8 +91,10 @@ pub struct Stats {
     pub blocks_written: u64,
     /// Reads and writes of the image that failed.
     pub errors: u64,
-    /// Block operations a fault rule applied to.
+    /// Block operations a rule that fails or delays applied to.
     pub faults: u64,
+    /// Block operations one or more rules that observe met.
+    pub observed: u64,
 }
 
 /// The block operations a fault rule applies to (`sd_fault`'s `op`).
@@ -124,6 +127,8 @@ pub enum Action {
     /// So many nanoseconds more: before a read's data block, or busy after a write's data
     /// response or an erase's R1.
     Delay(u64),
+    /// Nothing: the operation goes on as without the rule, which only reports it.
+    Observe,
 }
 
 /// A rule of the peer's (`sd_fault`).
@@ -150,8 +155,25 @@ pub struct Faulted {
     /// The first and last block of the operation.
     pub blocks: (u64, u64),
     pub action: Action,
-    /// Whether the card wrote the image: a delayed write or erase it carried out.
+    /// Whether the card wrote the image: a write or erase it carried out, delayed or observed.
     pub written: bool,
+}
+
+/// The rules an operation met (`SdCard::meet`): every rule that observes it, and the one that
+/// fails or delays it, if any, each with its id and action, in the order the peer gave them.
+#[derive(Debug)]
+struct Met {
+    rules: Vec<(u64, Action)>,
+}
+
+impl Met {
+    /// What the operation does: the action of the rule that fails or delays it, if one does.
+    fn action(&self) -> Option<Action> {
+        self.rules
+            .iter()
+            .map(|&(_, action)| action)
+            .find(|&action| action != Action::Observe)
+    }
 }
 
 /// What the card does with the bytes that come in.
@@ -193,7 +215,8 @@ pub struct SdCard {
     out: VecDeque<u8>,
     /// The bus cycle, as the board last said it (`advance`).
     now: u64,
-    /// The peer's rules, in the order it gave them; the last one first applies.
+    /// The peer's rules, in the order it gave them: of those that fail or delay, the last one
+    /// applies; every one that observes reports.
     faults: Vec<Fault>,
     /// What the rules did, for the run loop (`take_faulted`).
     faulted: Vec<Faulted>,
@@ -275,9 +298,10 @@ impl SdCard {
         self.now = cycle;
     }
 
-    /// Adds a rule, before the others: of the rules an operation matches, the one given last
-    /// applies. The operations that start from now on may meet it; one already under way keeps
-    /// what it met when it started.
+    /// Adds a rule, before the others: of the rules that fail or delay an operation matches, the
+    /// one given last applies, and every rule that observes it matches reports it. The operations
+    /// that start from now on may meet it; one already under way keeps what it met when it
+    /// started.
     pub fn install(&mut self, fault: Fault) {
         self.faults.push(fault);
     }
@@ -296,41 +320,58 @@ impl SdCard {
         std::mem::take(&mut self.faulted)
     }
 
-    /// The rule given last for `op` on a block from `lo` to `hi`, which counts the operation;
-    /// its id and action.
-    fn fault(&mut self, op: Op, lo: u64, hi: u64) -> Option<(u64, Action)> {
-        let i = self.faults.iter().rposition(|f| {
+    /// The rules an operation `op` on the blocks from `lo` to `hi` meets, each of which counts
+    /// it: every rule that observes it, and the rule given last of those that fail or delay it.
+    fn meet(&mut self, op: Op, lo: u64, hi: u64) -> Met {
+        let matches = |f: &Fault| {
             f.op == op
                 && f.blocks
                     .is_none_or(|(first, last)| first <= hi && lo <= last)
-        })?;
-        let rule = &mut self.faults[i];
-        let hit = (rule.id, rule.action);
-        if let Some(left) = &mut rule.count {
-            *left -= 1;
-            if *left == 0 {
-                self.faults.remove(i);
+        };
+        let acting = self
+            .faults
+            .iter()
+            .rposition(|f| f.action != Action::Observe && matches(f));
+        let met: Vec<usize> = (0..self.faults.len())
+            .filter(|&i| {
+                let f = &self.faults[i];
+                Some(i) == acting || (f.action == Action::Observe && matches(f))
+            })
+            .collect();
+        let rules = met
+            .iter()
+            .map(|&i| (self.faults[i].id, self.faults[i].action))
+            .collect();
+        // from the last, so that the indices before it stay where they are
+        for &i in met.iter().rev() {
+            if let Some(left) = &mut self.faults[i].count {
+                *left -= 1;
+                if *left == 0 {
+                    self.faults.remove(i);
+                }
             }
         }
-        self.stats.faults += 1;
-        Some(hit)
+        if acting.is_some() {
+            self.stats.faults += 1;
+        }
+        if met.len() > usize::from(acting.is_some()) {
+            self.stats.observed += 1;
+        }
+        Met { rules }
     }
 
-    fn report(
-        &mut self,
-        (fault, action): (u64, Action),
-        op: Op,
-        blocks: (u64, u64),
-        written: bool,
-    ) {
-        self.faulted.push(Faulted {
-            cycle: self.now,
-            fault,
-            op,
-            blocks,
-            action,
-            written,
-        });
+    /// One `sd_op` for each rule the operation met, in the order the peer gave them.
+    fn report(&mut self, met: Met, op: Op, blocks: (u64, u64), written: bool) {
+        for (fault, action) in met.rules {
+            self.faulted.push(Faulted {
+                cycle: self.now,
+                fault,
+                op,
+                blocks,
+                action,
+                written,
+            });
+        }
     }
 
     /// One SPI transaction on the chip's routes `pins`: `tx` out on MOSI, `rx_len` bytes back
@@ -413,8 +454,8 @@ impl SdCard {
         } else if lba >= self.blocks {
             DATA_WRITE_ERROR
         } else {
-            let fault = self.fault(Op::Write, lba, lba);
-            let response = if matches!(fault, Some((_, Action::Error))) {
+            let met = self.meet(Op::Write, lba, lba);
+            let response = if met.action() == Some(Action::Error) {
                 DATA_WRITE_ERROR
             } else if let Err(e) = self.store.write(lba, data.try_into().unwrap()) {
                 self.stats.errors += 1;
@@ -425,12 +466,10 @@ impl SdCard {
                 self.written += 1;
                 DATA_ACCEPTED
             };
-            if let Some(hit) = fault {
-                if let (Action::Delay(ns), DATA_ACCEPTED) = (hit.1, response) {
-                    self.busy_until = Some(self.now + cycles(ns));
-                }
-                self.report(hit, Op::Write, (lba, lba), response == DATA_ACCEPTED);
+            if let (Some(Action::Delay(ns)), DATA_ACCEPTED) = (met.action(), response) {
+                self.busy_until = Some(self.now + cycles(ns));
             }
+            self.report(met, Op::Write, (lba, lba), response == DATA_ACCEPTED);
             response
         };
         self.out.push_back(response);
@@ -471,17 +510,16 @@ impl SdCard {
     /// The read of the block at `lba`, as a rule has it: an error token, the block later, or the
     /// block now.
     fn start_read(&mut self, lba: u64) {
-        match self.fault(Op::Read, lba, lba) {
-            Some(hit @ (_, Action::Error)) => {
-                self.report(hit, Op::Read, (lba, lba), false);
+        let met = self.meet(Op::Read, lba, lba);
+        let action = met.action();
+        self.report(met, Op::Read, (lba, lba), false);
+        match action {
+            Some(Action::Error) => {
                 self.out.extend([0xff, ERROR_ECC]);
                 self.phase = Phase::Command;
             }
-            Some(hit @ (_, Action::Delay(ns))) => {
-                self.report(hit, Op::Read, (lba, lba), false);
-                self.access = Some((self.now + cycles(ns), lba));
-            }
-            None => self.read_block(lba),
+            Some(Action::Delay(ns)) => self.access = Some((self.now + cycles(ns), lba)),
+            Some(Action::Observe) | None => self.read_block(lba),
         }
     }
 
@@ -709,7 +747,7 @@ impl SdCard {
                     self.r1(PARAMETER);
                     return;
                 }
-                let fault = self.fault(Op::Erase, lo, hi);
+                let met = self.meet(Op::Erase, lo, hi);
                 let erased = match self.store.erase(lo, hi) {
                     Ok(()) => true,
                     Err(e) => {
@@ -718,13 +756,11 @@ impl SdCard {
                         false
                     }
                 };
-                if let Some(hit) = fault {
-                    if let (Action::Delay(ns), true) = (hit.1, erased) {
-                        // R1b: busy after the R1
-                        self.busy_until = Some(self.now + cycles(ns));
-                    }
-                    self.report(hit, Op::Erase, (lo, hi), erased);
+                if let (Some(Action::Delay(ns)), true) = (met.action(), erased) {
+                    // R1b: busy after the R1
+                    self.busy_until = Some(self.now + cycles(ns));
                 }
+                self.report(met, Op::Erase, (lo, hi), erased);
                 self.r1(0);
             }
             _ => self.r1(ILLEGAL),
@@ -854,6 +890,7 @@ impl Slot {
         self.retired.blocks_written += s.blocks_written;
         self.retired.errors += s.errors;
         self.retired.faults += s.faults;
+        self.retired.observed += s.observed;
         true
     }
 
@@ -878,6 +915,7 @@ impl Slot {
             s.blocks_written += card.stats.blocks_written;
             s.errors += card.stats.errors;
             s.faults += card.stats.faults;
+            s.observed += card.stats.observed;
         }
         s
     }

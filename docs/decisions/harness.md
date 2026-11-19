@@ -1478,9 +1478,9 @@ because a 32 GiB card takes 8 MiB; a key without the application, because a new 
 the card differently; and a function-scoped fixture, because the limit and the directory are the
 session's, though the operations do work on the running test's board.
 
-## The test makes the SD card fail or slow down with sd_card.fail and sd_card.delay
+## The test makes the SD card fail, slow down or only be watched with sd_card.fail, sd_card.delay and sd_card.observe
 
-Status: decided (#107)
+Status: decided (#107), observe added (#260)
 
 `sd_card.fail(op, *, count=None, blocks=None)` and `sd_card.delay(op, by, *, count=None,
 blocks=None)` give the runner's card a rule from the board's current instant on, before power-on
@@ -1493,11 +1493,25 @@ image. A rule needs a card in the slot when it is given, and stays through a cha
 `insert` skips there. The slot is on the link as the interface whose rules go out as `sd_fault`
 and `sd_clear` and whose `sd_op`s come back.
 
+`sd_card.observe(op, *, count=None, blocks=None)` (#260), `op` `read`, `write` or `erase`, is a
+rule of the same kind whose action, `observe`, changes nothing: the firmware sees the card, its
+answers and their timing as without it, and its `hits` are the operations it met. It goes on the
+link as an `sd_fault` with `action: "observe"` and no `delay`, and comes back as `sd_op` with the
+same action. An operation meets every rule that observes it beside the one rule that fails or
+delays it, the one given last of those: each rule gets a hit of its own and counts it, in the order
+the test gave them. So a rule that observes never takes an operation away from one that acts on it,
+which would change what the firmware sees, and the report and the run log say `observed`.
+
 **Rejected:** a callback the harness runs on each block operation, because the card answers within
 the transaction, and a callback a turn away could not; one `fault(op, action, ...)` with the
 action as a string, because two methods say what they do and check their own arguments; a count
 of 1 by default, because `fail("write")` reads as every write; and block offsets in bytes,
-because the card and its driver count in blocks.
+because the card and its driver count in blocks. For watching (#260): `delay(op, Duration(1))`
+and its hits, which the test used before, because it keeps the card busy 1 ns longer and reads as
+a delay; the names `watch` and `record`, because `observe` is the action on the wire and in the
+report as well; letting a rule that observes take part in "the one given last applies", because
+then one given after a `fail` would stop the failure; and giving an operation's hit to the first
+rule alone, because each rule's `hits` and `count` would then depend on the others.
 
 ## Inserting and removing the SD card while the firmware runs is postponed
 

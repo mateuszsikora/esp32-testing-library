@@ -172,6 +172,19 @@ fn parses_the_peer_messages() {
         })
     );
     assert_eq!(
+        parse(r#"{"type":"sd_fault","t":2,"id":5,"op":"erase","action":"observe","delay":null}"#),
+        Ok(Incoming::SdFault {
+            t: 2,
+            fault: Fault {
+                id: 5,
+                op: Op::Erase,
+                action: Action::Observe,
+                blocks: None,
+                count: None,
+            }
+        })
+    );
+    assert_eq!(
         parse(r#"{"type":"sd_clear","t":4,"ids":[1,2]}"#),
         Ok(Incoming::SdClear {
             t: 4,
@@ -263,7 +276,11 @@ fn refuses_an_sd_fault_that_cannot_be() {
         ),
         (
             r#""op":"read","action":"drop""#,
-            "\"action\" \"drop\" is not error or delay",
+            "\"action\" \"drop\" is not error, delay or observe",
+        ),
+        (
+            r#""op":"write","action":"observe","delay":5"#,
+            "an observe takes no \"delay\"",
         ),
         (
             r#""op":"erase","action":"error""#,
@@ -328,6 +345,14 @@ fn writes_sd_op() {
     assert_eq!(
         sd_op(6, &f),
         r#"{"type":"sd_op","t":6,"fault":2,"op":"erase","blocks":[8,15],"action":"delay","delay":1000,"written":true}"#
+    );
+    f.op = Op::Read;
+    f.blocks = (9, 9);
+    f.action = Action::Observe;
+    f.written = false;
+    assert_eq!(
+        sd_op(7, &f),
+        r#"{"type":"sd_op","t":7,"fault":2,"op":"read","blocks":[9,9],"action":"observe","delay":null,"written":false}"#
     );
 }
 

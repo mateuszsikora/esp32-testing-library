@@ -18,12 +18,12 @@ Who implements what: the runner side in #11 (M1: UART, `reset`, `uart_cfg`, `war
 issue of its own, opened when an example needs an analog pin. Wall time under `--realtime`, for a
 real device at the far end of a route (section 12), came with #28. #105 adds `power` and
 `chip_reset`, the board's supply and the chip's EN pin, on both sides, #107 the SD card's fault
-rules, `sd_fault`, `sd_clear` and `sd_op`, #131 `flash_dump` and `flash_dump_ack`, a read of the
-flash in a turn, #34 `hci_tx` and `hci_rx`, the guest's Bluetooth HCI with `--bt`, and #245
-`uptime`, where each boot's `esp_timer` counts zero on the socket's clock (5.24).
-`console_rx` and `stats.console_rx_lost` are the console on the chip's USB-Serial/JTAG controller,
-with `--console-port usb`, and since #233 on UART0 of the ESP32-P4 and the ESP32-S31, whose UARTs
-have no pins in esp32sim (5.23).
+rules, `sd_fault`, `sd_clear` and `sd_op` (#260 the `observe` action), #131 `flash_dump` and
+`flash_dump_ack`, a read of the flash in a turn, #34 `hci_tx` and `hci_rx`, the guest's Bluetooth
+HCI with `--bt`, and #245 `uptime`, where each boot's `esp_timer` counts zero on the socket's clock
+(5.24). `console_rx` and `stats.console_rx_lost` are the console on the chip's USB-Serial/JTAG
+controller, with `--console-port usb`, and since #233 on UART0 of the ESP32-P4 and the ESP32-S31,
+whose UARTs have no pins in esp32sim (5.23).
 
 ## 1. Transport
 
@@ -849,15 +849,19 @@ held, and, when the peer changed the card, how many went in and came out.
 {"type": "sd_fault", "t": 2500000000, "id": 1, "op": "write", "action": "error", "count": 1}
 {"type": "sd_fault", "t": 3000000000, "id": 2, "op": "read", "action": "delay",
  "delay": 50000000, "blocks": [64, 127]}
+{"type": "sd_fault", "t": 3000000000, "id": 3, "op": "write", "action": "observe"}
 {"type": "sd_clear", "t": 4000000000, "ids": [2]}
 {"type": "sd_op", "t": 3067868737, "fault": 2, "op": "read", "blocks": [100, 100],
  "action": "delay", "delay": 50000000, "written": false}
+{"type": "sd_op", "t": 3101529437, "fault": 3, "op": "write", "blocks": [541, 541],
+ "action": "observe", "delay": null, "written": true}
 ```
 
-With `--sd-spi`, the peer can make the SD card in the slot fail or slow down at block level, after
-the firmware has initialised it or from power-on, and learns what each of its rules did. The card
-answers SPI in the runner, within each transaction ([runner-technical.md](features/runner-technical.md#the-sd-card)):
-the rules are the peer's, the card applies them.
+With `--sd-spi`, the peer can make the SD card in the slot fail or slow down at block level, or
+only watch what the guest does with it, after the firmware has initialised it or from power-on, and
+learns what each of its rules did. The card answers SPI in the runner, within each transaction
+([runner-technical.md](features/runner-technical.md#the-sd-card)): the rules are the peer's, the
+card applies them.
 
 `sd_fault`: from `t` the card has the rule `id`. It goes into the input queue (section 8) like any
 input, and applies to the block operations that start once it is in place.
@@ -867,18 +871,20 @@ input, and applies to the block operations that start once it is in place.
 - `op`: `read`, a block read, of CMD17 or each block of CMD18 the host clocks on for; `write`, a block written, of CMD24 or
   each block of CMD25, once its 512 bytes and CRC are in and its CRC is good; or `erase`, a CMD38
   over its whole range. Each block of a multiple block read or write is one operation.
-- `action`: `error` or `delay`. An error for a read is the data error token `0x04`, "card ECC
-  failed", in place of the data block, after which the card sends nothing more of the read, a
+- `action`: `error`, `delay` or `observe`. An error for a read is the data error token `0x04`, "card
+  ECC failed", in place of the data block, after which the card sends nothing more of the read, a
   CMD18 included; for a write it is the data response `0x0d`, "write error", and the block on the
   image stays as it was; a CMD25 then waits for its next token, as after any write error. An erase
-  cannot fail: `error` with `erase` is a protocol error.
+  cannot fail: `error` with `erase` is a protocol error. `observe` changes nothing: the operation
+  goes on as without the rule, its bytes and their timing included, and the rule only reports it. It
+  takes any `op`.
 - `delay`: with `delay` only, required, 1 ns to 10 000 000 000 ns (10 s), measured on the bus's
   clock from the operation's start. A read's data block goes out once it has passed: until then the
   card sends `0xff`, its access time (N<sub>AC</sub>). A write is busy after its data response, an
   erase after its R1: the card holds MISO at `0x00` (SD spec §7.2.4) and hears nothing that comes in,
   a command included, until the delay has passed; with CS high it lets go of MISO. A write or erase
   is in the image from its data response or R1 on: the busy time is time only. `delay` with
-  `error` is a protocol error.
+  `error` or `observe` is a protocol error (`sd_fault: an observe takes no "delay"`).
 - `count`: how many operations the rule applies to before it is gone, over every card it meets, 1
   to 2⁶³ − 1; `null` or
   absent, every one until it is cleared.
@@ -887,14 +893,17 @@ input, and applies to the block operations that start once it is in place.
   card may change before the rule comes due or after it (5.19), so the runner does not hold the
   range against a card's size: a block past the last of the card in the slot is never met.
 
-An operation meets at most one rule: of those whose `op` and `blocks` it matches, the one given last,
-so a one-shot rule given after a lasting one applies first, and the lasting one again once it is
-spent. The rule counts the operation when the operation starts: a read at its command or, for the
-next block of a CMD18, at the first byte the host clocks after the block before it that does not
-start a command; a write at its data response; an erase at its CMD38. So a CMD12 right after a
-block's CRC, as ESP-IDF's `sdspi` sends it after the last block it wants, begins no further block
-and meets no rule; a host that clocks idle bytes before its CMD12 has begun the next block, which
-counts. A rule that comes due while an operation is under way leaves it alone, and so
+An operation meets at most one rule that fails or delays it: of those whose `op` and `blocks` it
+matches, the one given last, so a one-shot rule given after a lasting one applies first, and the
+lasting one again once it is spent. It also meets every rule with `observe` whose `op` and `blocks`
+it matches, whenever they were given: one with `observe` given last does not take the operation
+away from a rule that fails or delays it. Each rule an operation meets counts it and reports it
+with an `sd_op` of its own. A rule counts the operation when the operation starts: a read at its
+command or, for the next block of a CMD18, at the first byte the host clocks after the block before
+it that does not start a command; a write at its data response; an erase at its CMD38. So a CMD12
+right after a block's CRC, as ESP-IDF's `sdspi` sends it after the last block it wants, begins no
+further block and meets no rule; a host that clocks idle bytes before its CMD12 has begun the next
+block, which counts. A rule that comes due while an operation is under way leaves it alone, and so
 does a clear: a delayed read or a busy write keeps the delay it met.
 
 The rules are the peer's and outlive the card: they stay through `power`, `chip_reset` and a change
@@ -912,11 +921,16 @@ Without a rule the card is as it always was: it answers at once.
 not an event: it carries no `seq`, sets no block point and asks for no answer, and comes in `t`
 order with the events, before the `sync` of the turn whose block point is at or after its `t`.
 `fault` is the rule's `id`; `op` and `action` are the rule's; `blocks` the operation's first and
-last block, one block for a read or a write; `delay` the rule's delay, `null` for an error; and
-`written` whether the card wrote the image: `false` for a read and a failed write, `true` for a
-delayed write or erase the card carried out. A write that the image itself refuses, as without the
-rule, is `false` too. The runner's `SD card:` line counts the operations as `N operations faulted`
-([runner](features/runner-user.md#what-it-prints)).
+last block, one block for a read or a write; `delay` the rule's delay, `null` for an error and an
+observe; and `written` whether the card wrote the image: `false` for a read and a failed write,
+`true` for a write or erase the card carried out, delayed or observed. A write that the image
+itself refuses, as without the rule, is `false` too, and so is a write a rule with `observe` met
+that another rule failed. An operation that meets several rules has an `sd_op` for each, at the
+same `t`, in the order the peer gave the rules. The runner's `SD card:` line counts the operations
+that a rule with `error` or `delay` met as `N operations faulted`, and those that one or more rules
+with `observe` met as `N operations observed` ([runner](features/runner-user.md#what-it-prints)).
+The harness's `BoardLink` hands each `sd_op` to the SD card slot, which fails the link on a `fault`
+it never gave and on an `op`, `action` or `delay` that is not that rule's.
 
 The card's clock is the bus's: the board tells the slot the bus cycle at every tick
 (`BoardModel::advance_to`), and a transaction happens at the cycle of the tick before it, which is
