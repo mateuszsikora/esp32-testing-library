@@ -301,6 +301,23 @@ esp32sim --chip esp32 --board none --boot rom --console uart0 --flash-mb 4 --max
   `python3 tools/benchtime.py compare OUT_ACCELERATED OUT_SOFTWARE` must report that all results
   agree.
 
+`tools/hci_probe` runs on a real board, not on esp32sim: it asks the chip's own Bluetooth controller,
+through VHCI, what it reports, and prints every HCI packet both ways, `TX` and `RX` in hex, on the
+USB-Serial/JTAG console. For an ESP32-S3, in the v5.3.6 container:
+
+```sh
+idf.py -C tools/hci_probe -DIDF_TARGET=esp32s3 build
+```
+
+then, on the host, from `tools/hci_probe/build`, `python -m esptool --chip esp32s3 --port PORT
+write-flash @flash_args`, and read the console for 20 s after a reset.
+Its `sdkconfig.defaults` configure Bluedroid as ESP-IDF's BLE 4.2 examples do, without starting it,
+so that the controller runs as under them (`BLE_50:0` in `BLE_INIT: Feature Config`); without
+Bluedroid in the build the controller runs with `BLE_50:1` and answers otherwise. The ESP32-S3's
+answers, of 2026-11-19, are in `tools/hci_probe/esp32s3.txt`, its address masked and the
+advertising reports of the devices around left out; `esp32tl/bluetooth/guest.py` reports them for
+an LE-only chip.
+
 The production images, which are not in this repository, ran with `--flash-mb 4 --psram-mb 4` and
 `--flash-at` at `0x1000` (bootloader), `0x8000` (partition table), `0x10000` (otadata) and `0x20000`
 (the application in `ota_0`), plus `--flash-at 0x9000=<nvs image>` for the runs that named a

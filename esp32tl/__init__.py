@@ -17,6 +17,24 @@ from esp32tl.bluetooth.controller import Pairing as Pairing
 from esp32tl.bluetooth.controller import UnderWay as UnderWay
 from esp32tl.bluetooth.controller import UnknownCommand as UnknownCommand
 from esp32tl.bluetooth.guest import GuestController as GuestController
+from esp32tl.bluetooth.le import Advertisement as Advertisement
+from esp32tl.bluetooth.le import BleCentral as BleCentral
+from esp32tl.bluetooth.le import BleDevice as BleDevice
+from esp32tl.bluetooth.le import BleError as BleError
+from esp32tl.bluetooth.le import BlePeripheral as BlePeripheral
+from esp32tl.bluetooth.le import Disconnection as Disconnection
+from esp32tl.bluetooth.le import DiscoveredCharacteristic as DiscoveredCharacteristic
+from esp32tl.bluetooth.le import DiscoveredService as DiscoveredService
+from esp32tl.bluetooth.le import Discovery as Discovery
+from esp32tl.bluetooth.le import GattCharacteristic as GattCharacteristic
+from esp32tl.bluetooth.le import GattRead as GattRead
+from esp32tl.bluetooth.le import GattService as GattService
+from esp32tl.bluetooth.le import GattWrite as GattWrite
+from esp32tl.bluetooth.le import LeConnection as LeConnection
+from esp32tl.bluetooth.le import LeEvent as LeEvent
+from esp32tl.bluetooth.le import LePairing as LePairing
+from esp32tl.bluetooth.le import Notification as Notification
+from esp32tl.bluetooth.le import Subscription as Subscription
 from esp32tl.bluetooth.peer import BluetoothDevice as BluetoothDevice
 from esp32tl.bluetooth.peer import ChannelEvent as ChannelEvent
 from esp32tl.bluetooth.peer import PeerError as PeerError
@@ -151,10 +169,15 @@ __all__ = [
     "TEST_CLIENT",
     "UBX",
     "AccessPoint",
+    "Advertisement",
     "Air",
     "AirError",
     "AirEvent",
     "BackendError",
+    "BleCentral",
+    "BleDevice",
+    "BleError",
+    "BlePeripheral",
     "Bluetooth",
     "BluetoothDevice",
     "BluetoothError",
@@ -184,11 +207,19 @@ __all__ = [
     "DatagramService",
     "Delivery",
     "Dhcp",
+    "Disconnection",
+    "DiscoveredCharacteristic",
+    "DiscoveredService",
+    "Discovery",
     "Dns",
     "Ethernet",
     "FaultedOperation",
     "FlashFile",
     "FlashSnapshot",
+    "GattCharacteristic",
+    "GattRead",
+    "GattService",
+    "GattWrite",
     "Gnss",
     "GnssReceiver",
     "GuestController",
@@ -199,6 +230,9 @@ __all__ = [
     "HttpServer",
     "IdleFramedModel",
     "Internet",
+    "LeConnection",
+    "LeEvent",
+    "LePairing",
     "Lease",
     "LineCondition",
     "LineEvent",
@@ -218,6 +252,7 @@ __all__ = [
     "Network",
     "NeverHappened",
     "NotReachable",
+    "Notification",
     "Ntp",
     "OtaData",
     "OtaEntry",
@@ -246,6 +281,7 @@ __all__ = [
     "StationConfig",
     "StreamService",
     "SubscribeRequest",
+    "Subscription",
     "Tap",
     "TcpClient",
     "TcpConnection",

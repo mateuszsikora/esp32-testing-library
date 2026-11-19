@@ -83,7 +83,9 @@ profile:
 | `http_request` | the three | Nothing |
 | `hello_world_psram` | `esp32s3`, `esp32p4`, `esp32s31` | ESP-IDF's `hello_world` with `firmware/hello_world_psram/sdkconfig.defaults`, `CONFIG_SPIRAM=y`, and on the S3 `sdkconfig.defaults.esp32s3`, `CONFIG_SPIRAM_MODE_OCT=y`, the octal PSRAM of the S3 devkit's N8R8 module. On the P4 and the S31 the build names the PSRAM driver (`-DCOMPONENTS=main;esp_psram`), which `hello_world`'s minimal build leaves out from ESP-IDF v5.5 on |
 | `hello_world_8mb` | the three | Nothing: as on the classic ESP32, `hello_world` built for an 8 MB flash |
-| `gatt_server` | `esp32s3`, `esp32c3` | ESP-IDF's `examples/bluetooth/bluedroid/ble/gatt_server`, unmodified, with its own `sdkconfig.defaults`: a BLE GATT server that advertises as `ESP_GATTS_DEMO`. Not for the C6, whose BLE esp32sim runs only for ESP-IDF v5.5.x images |
+| `gatt_server` | `esp32s3`, `esp32c3` | ESP-IDF's `examples/bluetooth/bluedroid/ble/gatt_server`, unmodified, with its own `sdkconfig.defaults`: a BLE GATT server that advertises as `ESP_GATTS_DEMO`. Not for the C6, whose BLE esp32sim runs only for ESP-IDF v5.5.x images ([below](#gatt_server-gatt_client-and-gatt_security_server)) |
+| `gatt_client` | `esp32s3`, `esp32c3` | ESP-IDF's `examples/bluetooth/bluedroid/ble/gatt_client`, unmodified: a BLE GATT client that scans for `ESP_GATTS_DEMO` and connects to it ([below](#gatt_server-gatt_client-and-gatt_security_server)) |
+| `gatt_security_server` | `esp32s3`, `esp32c3` | ESP-IDF's `examples/bluetooth/bluedroid/ble/gatt_security_server`, unmodified: a BLE heart rate server that advertises from a resolvable private address and asks a central to pair, Just Works, bonded ([below](#gatt_server-gatt_client-and-gatt_security_server)) |
 | `console_repl_usb` | the three, `esp32p4`, `esp32s31` | Not built for the classic ESP32, which has no USB-Serial/JTAG controller: `firmware/console_repl_usb`, `console_repl` with its console on the chip's USB-Serial/JTAG controller ([below](#console_repl_usb)) |
 | `hello_world`, `console_repl`, `gpio_echo`, `nvs_reader` | `esp32p4`, `esp32s31` | As for the three; the P4's are built for chip revision v3.0 and later, ESP-IDF's default |
 | `reset_reasons` | the three, `esp32p4`, `esp32s31` | Nothing; the deep sleep of its fourth boot does not wake on any of the five, which esp32sim does not model there, so `tests/test_chips.py` runs it to the sleep ([below](#reset_reasons)) |
@@ -92,10 +94,45 @@ profile:
 The images that need what esp32sim does not model on these chips, a wake from deep sleep
 (`timer_wake`, `deep_sleep`, `persistence`), an SD card over SPI (`sdspi`, `sd_remount`) or Bluetooth Classic
 (`bt_spp_initiator`), are not built for them, nor, for the P4 and the S31, those that need a UART
-route (`nmea_reader`), Wi-Fi (`http_request`) or Bluetooth (`gatt_server`)
+route (`nmea_reader`), Wi-Fi (`http_request`) or Bluetooth (`gatt_server`, `gatt_client`,
+`gatt_security_server`)
 ([issue #229](https://github.com/mateuszsikora/esp32-testing-library/issues/229)). `reset_reasons`
 is built for all five although its last boot sleeps: what it checks comes before the sleep.
-`tests/test_chips.py` runs every one of these images.
+`tests/test_chips.py` runs every one of these images, and `tests/test_ble.py` the BLE ones against
+the test's LE peers.
+
+## `gatt_server`, `gatt_client` and `gatt_security_server`
+
+ESP-IDF v5.3.6's Bluedroid BLE examples, unmodified, each with its own `sdkconfig.defaults` and its
+`sdkconfig.defaults.<chip>`, which build Bluedroid with the BLE 4.2 features
+(`CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y`, `CONFIG_BT_BLE_50_FEATURES_SUPPORTED` not set): legacy
+advertising and scanning, which the harness's link carries. Built for the ESP32-S3 and the
+ESP32-C3. What `tests/test_ble.py` asks of each, on both chips:
+
+- **`gatt_server`** advertises as `ESP_GATTS_DEMO`, from its public address, with services `0x00FF`
+  and `0x00EE`, each with one characteristic, `0xFF01` and `0xEE01`; `0xFF01` reads `de ed be ef`
+  and notifies 15 bytes, `00` to `0e`, when a central subscribes to it. A `BleCentral` finds it,
+  connects, discovers, reads, subscribes, is notified and writes; the firmware prints what was
+  written, `GATTS_DEMO: 01 02 03`. On connecting it asks for a supervision timeout of 4 s
+  (`Connection params update, status 0, conn_int 32, latency 0, timeout 400`); with the central
+  out of range its link falls 4 s later (`GATTS_DEMO: Disconnected, remote 00:00:00:00:5c:01,
+  reason 0x08`), and it advertises again.
+- **`gatt_client`** scans for a device called `ESP_GATTS_DEMO`, connects, discovers the service
+  `0x00FF`, subscribes to `0xFF01`'s notifications and writes it 35 bytes, `00` to `22`, then prints
+  each notification (`GATTC_DEMO: Notification received`, then its bytes in hex). A
+  `BlePeripheral` with that name, service and characteristic gets all of it; switched off, the
+  firmware's link falls with reason `0x08`, and it does not scan again.
+- **`gatt_security_server`** turns on local privacy and advertises as `ESP_BLE_SECURITY`, its name in
+  the scan response, from a resolvable private address the controller makes; connected, it asks for
+  security, and the central pairs Just Works with LE Secure Connections and bonding (`SEC_GATTS_DEMO:
+  Pairing successfully, auth_mode ESP_LE_AUTH_REQ_SC_BOND`). It keeps the bond in the NVS: after
+  `board.reset()` it advertises from a new address, and a central that kept the keys encrypts the
+  link with them, without pairing again.
+
+Not for the ESP32-C6, whose hooks in esp32sim take images of ESP-IDF v5.5.x
+([issue #229](https://github.com/mateuszsikora/esp32-testing-library/issues/229), G5). NimBLE's
+`bleprph` and `blecent` are not built. TODO(owner): whether they run through esp32sim's VHCI hooks;
+not tried.
 
 ## `console_repl_usb`
 

@@ -42,8 +42,9 @@ the containers, and once inside each, which builds. With `IDF_LOCAL=1` it runs o
    written. With no arguments, the list is all of `IMAGES`. With `--chips`, `IMAGES` is
    `CHIP_IMAGES`: `IMAGE@CHIP` for each of `hello_world`, `console_repl`, `gpio_echo`,
    `nmea_reader`, `nvs_reader` and `http_request` on each of `esp32s3`, `esp32c3` and `esp32c6`,
-   then `hello_world_psram@esp32s3`, `gatt_server@esp32s3` and `gatt_server@esp32c3`
-   (`project_of`: `$IDF_PATH/examples/bluetooth/bluedroid/ble/gatt_server`), then
+   then `hello_world_psram@esp32s3`, then `gatt_server`, `gatt_client` and `gatt_security_server`
+   on `esp32s3`, then the same three on `esp32c3` (`project_of`:
+   `$IDF_PATH/examples/bluetooth/bluedroid/ble/<image>`), then
    `hello_world_8mb` on each of `esp32s3`, `esp32c3` and `esp32c6`, then
    `console_repl_usb@esp32s3`, `@esp32c3` and `@esp32c6` (`project_of`:
    `$PWD/firmware/console_repl_usb`, whose own `sdkconfig.defaults` ESP-IDF reads as the project's),

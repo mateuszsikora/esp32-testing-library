@@ -682,7 +682,11 @@ class Esp32Sim(Board):
             bridging=self._bridging,
         )
         self._bluetooth = Bluetooth(
-            asked=self._asked, log=self.log, directory=self.directory, files=self._files
+            asked=self._asked,
+            log=self.log,
+            directory=self.directory,
+            files=self._files,
+            chip=profile.chip,
         )
         slot = [] if self._sd_card is None else [self._sd_card]
         self.link = BoardLink(

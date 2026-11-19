@@ -352,6 +352,9 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A firmware that starts its Bluetooth controller without board.bluetooth ends the run](harness.md#a-firmware-that-starts-its-bluetooth-controller-without-boardbluetooth-ends-the-run) | `harness.md` | decided (#259) |
 | [History conditions scan from where their last poll ended](harness.md#history-conditions-scan-from-where-their-last-poll-ended) | `harness.md` | decided (#262) |
 | [A real receiver's capture or raw NMEA log is converted to the emulated clock, not modelled](harness.md#a-real-receivers-capture-or-raw-nmea-log-is-converted-to-the-emulated-clock-not-modelled) | `harness.md` | decided (#263) |
+| [Bluetooth LE peers on Bumble's LE link layer, with esp32tl's fixes](harness.md#bluetooth-le-peers-on-bumbles-le-link-layer-with-esp32tls-fixes) | `harness.md` | decided (#234) |
+| [An LE-only chip's controller reports LE alone and takes Espressif's report flow control](harness.md#an-le-only-chips-controller-reports-le-alone-and-takes-espressifs-report-flow-control) | `harness.md` | decided (#234) |
+| [Extended advertising, LE Audio, the coded PHY and several connections wait](harness.md#extended-advertising-le-audio-the-coded-phy-and-several-connections-wait) | `harness.md` | postponed (#234) |
 
 ## The runner crate and esp32sim
 

@@ -1,8 +1,9 @@
 # Bluetooth peer: how it works
 
-Four modules in `esp32tl/bluetooth/`: `air.py`, the loop on the board's clock and the virtual
+Six modules in `esp32tl/bluetooth/`: `air.py`, the loop on the board's clock and the virtual
 link; `controller.py`, Bumble's virtual controller with what Classic devices need and Bumble
-0.0.236 lacks; `guest.py`, the firmware's controller; `peer.py`, the device and the SPP peer. The
+0.0.236 lacks; `link_layer.py`, the LE link layer under it; `guest.py`, the firmware's controller;
+`peer.py`, the device and the SPP peer; `le.py`, the LE devices ([below](#bluetooth-le)). The
 interface that puts the firmware's controller on the board's link is
 `esp32tl/interfaces/bluetooth.py`, the `bt` fixture. What the user sees is in
 [bluetooth-peer-user.md](bluetooth-peer-user.md).
@@ -507,8 +508,8 @@ interface that puts the firmware's controller on the board's link is
     output in `lost` when no DLC is open or `Link.reaches` refuses the holder's address, so what goes
     out on a link that lost contact does not enter `events`. `forget_keys` puts a new
     `MemoryKeyStore` in `device.keystore`; a link under way keeps the key in its `Security`.
-11. **The firmware's controller.** `GuestController(name, link, address=ADDRESS)` is a
-    `Controller` with `lmp_features_max_page_number` 2 (`MAX_PAGE`), its features cut to the bits
+11. **The firmware's controller.** `GuestController(name, link, address=ADDRESS, *, chip="esp32")`
+    is, on the classic ESP32, a `Controller` with `lmp_features_max_page_number` 2 (`MAX_PAGE`), its features cut to the bits
     of pages 0 to 2 (`PAGES_MASK`) and without `LE_SUPPORTED_CONTROLLER`, `acl_data_packet_length`
     and `acl_to_host` both `ACL_LENGTH`, `HCI_MAX - 5`, 491. `chip_reset()` is `_restart()` and
     `_defaults()`; `chip_off()` is `_restart(back=False)` and `_defaults()`; `chip_on()` is
@@ -516,12 +517,14 @@ interface that puts the firmware's controller on the board's link is
     (`components/bt/host/bluedroid/device/controller.c:523`, ESP-IDF v5.3.6), and Bumble reports
     four (`lmp_features_max_page_number = 3`). TODO(owner): `ADDRESS`, `24:6F:28:00:11:24`, is the
     spike's; what the classic ESP32's eFuse gives the controller on esp32sim, the base MAC plus 2,
-    is not read.
-12. **The interface.** `Bluetooth(*, asked, log, address, latency=LATENCY_NS, directory, files)`
+    is not read. On an LE-only chip it is the one of [Bluetooth LE](#bluetooth-le).
+12. **The interface.** `Bluetooth(*, asked, log, address, latency=LATENCY_NS, directory, files,
+    chip="esp32")`
     (`esp32tl/interfaces/bluetooth.py`) is an `Interface` named `bluetooth`, with no wire, whose
     `bluetooth` is true. `use()`, from `Board.bluetooth` the first time, calls
     `asked(Request("bluetooth", source="model"))`, then makes an `Air(board_clock=True)` and a
-    `GuestController("esp32", air._link, address)` on it, through `air.call`, and makes itself the
+    `GuestController(chip, air._link, address, chip=chip)` on it, through `air.call`, and makes
+    itself the
     controller's `host`: Bumble's controller sends its host packets with `call_soon(host.on_packet,
     ...)`, and `on_packet` keeps each in `_out` with the air's time. `air` and `controller` call
     `use()`; `used` says whether it ran. Until then `latency()` and `quiet_until()` are `None`,
@@ -578,9 +581,9 @@ interface that puts the firmware's controller on the board's link is
 | `SIX_DIGITS` | `1_000_000`: the range of a number to compare and of a passkey |
 | `UnknownCommand(t, op_code, name)` | Named tuple: a command the controller answered with `UNKNOWN_HCI_COMMAND_ERROR`, `t: Duration` on the air's clock |
 | `GIAC`, `IAC_LAPS`, `BR_EDR_FEATURES` | `0x9E8B33`; `range(0x9E8B00, 0x9E8B40)`; page 0's features, above |
-| `GuestController(name, link, address=ADDRESS)` | `esp32tl/bluetooth/guest.py`: a `Controller`, BR/EDR only, pages 0 to 2, `acl_to_host` `ACL_LENGTH`; `chip_reset()`, `chip_off()`, `chip_on()` |
+| `GuestController(name, link, address=ADDRESS, *, chip="esp32")` | `esp32tl/bluetooth/guest.py`: a `Controller`, on the classic ESP32 BR/EDR only, pages 0 to 2, `acl_to_host` `ACL_LENGTH`; `chip_reset()`, `chip_off()`, `chip_on()`; LE only on an LE chip ([below](#bluetooth-le)) |
 | `ADDRESS`, `ACL_LENGTH`, `MAX_PAGE` | `esp32tl/bluetooth/guest.py`: `"24:6F:28:00:11:24"`; `491`, `HCI_MAX - 5`; `2` |
-| `Bluetooth(*, asked=..., log=None, address=ADDRESS, latency=LATENCY_NS, directory=None, files=None)` | `esp32tl/interfaces/bluetooth.py`: the `Interface` above; `use()`, `used`, `air`, `controller`, `address`; `tap(path)`, `tapped`, `directory` (the working directory unless given), `files`; `pairings()`, the guest's controller's; `supply(on)`, `chip_reset(t)`; `packets_from_host`, `bytes_from_host`, `packets_to_host`, `bytes_to_host`; `unknown_commands()`, `devices()`; `report()`, `properties()`; `close()` |
+| `Bluetooth(*, asked=..., log=None, address=ADDRESS, latency=LATENCY_NS, directory=None, files=None, chip="esp32")` | `esp32tl/interfaces/bluetooth.py`: the `Interface` above; `use()`, `used`, `air`, `controller`, `address`; `tap(path)`, `tapped`, `directory` (the working directory unless given), `files`; `pairings()`, the guest's controller's; `supply(on)`, `chip_reset(t)`; `packets_from_host`, `bytes_from_host`, `packets_to_host`, `bytes_to_host`; `unknown_commands()`, `devices()`; `report()`, `properties()`; `close()` |
 | `LATENCY_NS`, `BluetoothError` | `esp32tl/interfaces/bluetooth.py`: `100_000`; a `RuntimeError`, what the controller sent that the link cannot carry |
 | `Security` | Dataclass: one link's authentication on one side: `initiator`, `init_key`, `local_rand`, `peer_rand`, `link_key`, `pairing`, `challenge`, `peer_challenge`, `authenticated` |
 | `LmpInRand`, `LmpCombKey`, `LmpSres`, `LmpEncryptionModeReq`, `LmpSupervisionTimeout` | LMP packets Bumble does not define, registered with `lmp.Packet.subclass` |
@@ -939,12 +942,263 @@ Classic is not in Bumble 0.0.236, so `Device.connect(timeout=)` cannot end a pag
 searching the peer's SDP at the same instant fail the air with `Exception in callback
 Host.on_packet(): invalid state`: Bumble 0.0.236's `sdp.Server` keeps one channel at a time.
 
+## Bluetooth LE
+
+Two modules beside the Classic ones: `esp32tl/bluetooth/link_layer.py`, the LE link layer every
+esp32tl controller has, and `esp32tl/bluetooth/le.py`, the LE devices. `Controller` subclasses
+`LinkLayer`, which subclasses Bumble's `Controller`; `GuestController` takes the chip.
+
+### Data flow
+
+1. **Advertising.** `LinkLayer._le_defaults` puts an `Advertiser`, a subclass of Bumble's
+   `LegacyAdvertiser`, in `le_legacy_advertiser`, with the defaults of Vol 4, Part E, 7.8.5: an
+   interval of `0x0800` slots (1.28 s), `ADV_IND`, channel map 7. Bumble's handlers of
+   `LE_Set_Advertising_Parameters`, `_Data`, `LE_Set_Scan_Response_Data` and `_Enable` fill it in.
+   `Advertiser._on_timer_fired` sends one `ll.AdvInd` and calls itself again
+   `max(advertising_interval_min, 0x20) * 0.625 ms` later, where Bumble divides the number by 1000
+   and takes it for seconds; `send_advertising_data` sends for `ADV_IND`, `ADV_SCAN_IND` and
+   `ADV_NONCONN_IND`, where Bumble sends for `ADV_IND` alone, and nothing for the directed types.
+   `Advertiser.address` is `LinkLayer.own_address(own_address_type, peer_address_type,
+   peer_address)`: the public address for `0x00`, the random one for `0x01`; for `0x02` and `0x03`
+   the resolvable private address `_rpa(local_irk)` makes from the resolving list's entry of the
+   peer, when it has one with a non-zero local IRK, and the public or the random address otherwise.
+   `_rpa` draws a `prand` of 3 bytes from `random_bytes`, sets its two top bits to `01`, and prefixes
+   `crypto.ah(irk, prand)`; it keeps the address, by IRK, until `le_rpa_timeout` seconds have passed
+   on the loop's clock (900 until the host sets one), and `le_restart` forgets it.
+2. **The link.** `Link.send_advertising_pdu` delivers to every other controller while the sender
+   and the receiver are `present`, whatever links were severed, by `_heard_on_link(sender, pdu)`
+   where the receiver has it, so that the receiver knows the advertiser's controller, which a
+   private address names no controller by. `send_acl_data` for LE takes the sender's connection to
+   the destination address and the controller it is with (`_le_peers`, else
+   `find_le_controller`), and delivers from the connection's `self_address` while `reaches` holds
+   for the two public addresses; Bumble's link sends from the sender's `random_address` whatever
+   the connection's address, which a peer with a public address never finds. `send_ll_control_pdu`
+   delivers the same way and drops what Bumble's link would raise for.
+3. **Scanning and initiating.** `_heard_on_link` passes an `ll.ConnectInd` to `on_le_connect_ind`
+   and an `ll.AdvInd` to `_on_advertising`, and drops the rest (an `AdvExtInd`). `_on_advertising`
+   reads the advertiser's type and scan response from its `le_legacy_advertiser` at the instant:
+   with `le_scan_enable`, `_report` sends `LE_Advertising_Report` of the type's event, with the
+   advertiser's `rssi`, then, for an active scan (`le_scan_type` 1) of `ADV_IND` or `ADV_SCAN_IND`, a
+   `SCAN_RSP` with its scan response data. With `filter_duplicates` a report of an address and
+   type already reported since the scan was enabled is not sent; `admits_report()` may drop it too
+   (`GuestController`). An initiation, `pending_le_connection` an `LE_Create_Connection`, connects to
+   an `ADV_IND` from the peer address, or from an address on `filter_accept_list` with initiator
+   filter policy 1: `_connect` makes the central's `Connection` from `own_address`, keeps the
+   advertiser in `_le_peers` and the supervision timeout in `_le_timeouts`, sends `ll.ConnectInd`
+   and tells the host. `on_le_connect_ind` makes the peripheral's, when its advertiser is enabled,
+   connectable and at the PDU's address, keeps the central and the timeout, and stops advertising.
+   `_connection_complete` sends `LE_Enhanced_Connection_Complete`, with this side's address as the
+   local resolvable private address when it is one, when bit 9 of `le_event_mask` is set, and
+   `LE_Connection_Complete` otherwise, both with the initiator's interval, latency and timeout.
+   `LE_Create_Connection_Cancel` ends the initiation with `_initiation_ended`, which, once the
+   `Command_Complete` is out, sends the connection complete event the LE event mask asks for with
+   `UNKNOWN_CONNECTION_IDENTIFIER`; with none under way it returns `COMMAND_DISALLOWED`.
+   `HCI_Disconnect` of an LE connection sends `LL_TERMINATE_IND` with the host's reason and gives
+   this side's host `CONNECTION_TERMINATED_BY_LOCAL_HOST` (0x16) (Vol 1, Part F, 2.22), where
+   Bumble gives both sides the host's reason; a Classic link's stays Bumble's. `LE_Connection_Update` and an `LL_CONNECTION_UPDATE_IND` heard
+   update `_le_timeouts`, then go to Bumble's handlers.
+4. **The host's lists and numbers.** `filter_accept_list` is a set of `(address type, address
+   bytes)`, of at most `filter_accept_list_size` (8); `resolving_list` a dict of `(type, bytes)` to
+   `(peer IRK, local IRK)`, of at most `resolving_list_size` (8). Bumble 0.0.236 has no class for
+   `LE_Remove_Device_From_Resolving_List`, so its handler reads the raw parameters and sends its
+   own `Command_Complete`. `LE_Rand` returns `random_bytes(8)`. `LE_Set_Data_Length` succeeds, and
+   the first time for a connection sends `LE_Data_Length_Change` with the connection's lengths:
+   each way, the least of what the sender sends at most and the receiver takes, in octets and in
+   time, the time at most 2120 µs, 251 octets on the 1M PHY, the one this link carries
+   (`MAX_OCTETS`, `MAX_TIME_US`). A controller's own may be longer: the LE-only guest's is the
+   S3's 17040 µs, which `LE_Read_Maximum_Data_Length` returns. `le_features` drops
+   `LE_EXTENDED_ADVERTISING`, `LE_PERIODIC_ADVERTISING` and `LE_CODED_PHY` (`LEFT_OUT_FEATURES`),
+   so that Bumble's own `Device` and the firmware's host take the legacy commands.
+5. **ACL data for the host.** `LinkLayer.on_link_acl_data` sends an LE connection's PDU through
+   `acl_to_host_packets(handle, data)`, the fragmenting `Controller` has for BR/EDR too, cut to
+   `host_acl_length` and `acl_to_host`.
+6. **Supervision and leaving.** `Controller.left()` severs the LE peers' public addresses with the
+   Classic ones (`_le_held()`), then `le_lose_contact()`: both ends of each LE connection take the
+   loop's time in `_le_lost_contact` and set a timer `_le_timeouts[peer]` × 10 ms on (72, Bumble's
+   720 ms, without one), whose `_le_timed_out` calls `on_le_disconnected(connection,
+   CONNECTION_TIMEOUT)`. `on_le_disconnected` forgets the connection's peer, timeout and timer,
+   tells the host through Bumble's handler, and `_let_go_of(peer)`, which `Controller._let_go`
+   answers: the link is let go when neither side holds anything for the other, Classic or LE.
+   `power_lost()` calls `le_power_lost()`: every LE connection times out at once, its own host told,
+   advertising and scanning stop, and an initiation ends with `_initiation_ended`, so that its host,
+   which outlives the power loss on the test's side, does not wait for it. In a restart, `HCI_Reset`
+   or the chip's, the host is unplugged for it and `_initiation_ended` tells it nothing, as the
+   restart tells its host nothing. `_defaults()`, at `HCI_Reset`, a chip reset
+   and creation, calls `le_restart()`, which stops the advertiser and makes the LE defaults again,
+   also the LE event mask, `0x1F`.
+7. **The guest on an LE-only chip.** `GuestController(name, link, address, *, chip="esp32")`, with
+   `chip` in `LE_CHIPS` (`esp32s3`, `esp32c3`, `esp32c6`), has `le_only` and what an ESP32-S3
+   answered `tools/hci_probe` (`tools/hci_probe/esp32s3.txt`): page 0 alone
+   (`lmp_features_max_page_number` 0) of `LE_ONLY_FEATURES`; `hci_version`, `lmp_version`
+   `LE_VERSION` (9), `hci_revision`, `lmp_subversion` `LE_REVISION` (`0x0016`),
+   `manufacturer_company_identifier` `ESPRESSIF` (`0x02E5`); `le_features` `LE_FEATURES` (`0xFF`);
+   `le_acl_data_packet_length` `LE_ACL_LENGTH` (251), `total_num_le_acl_data_packets`
+   `LE_ACL_PACKETS` (12); `filter_accept_list_size` 12, `resolving_list_size` 10;
+   `supported_max_tx_time` and `_rx_time` `LE_MAX_TIME_US` (17040); `advertising_channel_tx_power`
+   9, which its own `LE_Read_Advertising_Physical_Channel_Tx_Power` handler returns (Bumble's
+   returns 0). `Read_Local_Supported_Commands` returns `LE_SUPPORTED_COMMANDS`, the S3's 64 bytes;
+   `on_hci_command_packet` answers a command whose bit in it is clear, by
+   `hci.HCI_SUPPORTED_COMMANDS_MASKS`, with `_le_unknown`, which keeps it in `unknown_commands` and
+   sends `Command_Complete` with `UNKNOWN_HCI_COMMAND`, and so does `on_hci_command` for a command
+   with no handler and no mask; `send_hci_packet` puts `LE_COMMAND_PACKETS` (5) in every
+   `Command_Complete` and `Command_Status`. `on_hci_command` takes `SET_ADV_FLOW_CONTROL`
+   (`0xFD09`: enable, credits, lost threshold), which sets `_report_credits` (`None` when off) and
+   `_lost_threshold` and completes, and `ADV_REPORT_FLOW_CONTROL` (`0xFD0A`: credits), which adds
+   them, answers nothing and calls `_tell_discarded`: with a credit and `_discarded` at the
+   threshold or past it, it sends the host the LE Meta event `DISCARD_REPORT` (`0xF0`) with the
+   count, four bytes little-endian, takes a credit for it and starts the count again.
+   `admits_report()` takes a credit, or counts the report in `dropped_reports` and `_discarded` with
+   none left. Bluedroid sends `0xFD0A` with `HCI_CMD_MSG_F_SRC_NOACK`, which its HCI layer sends
+   without taking a command credit or waiting for an event
+   (`components/bt/host/bluedroid/hci/hci_layer.c`, v5.3.6); it asserts in
+   `hci_adv_credits_consumed` (`hci_hal_h4.c`) on a report it has no credit for, and counts the
+   discard event as one (`btm_ble_process_adv_discard_evt`). On the classic ESP32 it is as before.
+   `Bluetooth(..., chip=...)` makes it with the profile's chip, which `Esp32Sim` passes.
+8. **The devices.** `BleDevice(air, *, name, address, rssi, io_capability, confirms, passkey,
+   bonding)` is a `Radio`, the base it shares with `BluetoothDevice` (`rssi`, `present`,
+   `switch_off`, `switch_on`, `out_of_range`, `in_range`, `forget_keys`, `_become`). It makes a
+   `Controller` and a `_LeDevice`, Bumble's `Device` with `classic_enabled=False` and `le_enabled`,
+   whose `on_advertising_report` also hands each report to `reports`; its
+   `pairing_config_factory` gives `PairingConfig(sc=True, mitm=io_capability !=
+   "no_input_no_output", bonding=bonding, delegate=_User(...))`, `_User` the Classic devices' with
+   `generate_passkey` returning `passkey` when given. It puts itself in `air.le_devices`, powers on
+   at once, and on each `EVENT_CONNECTION` of its role keeps the `LeConnection`, listens to the
+   connection's disconnection, pairing, pairing failure, encryption change and security request,
+   and notes each in `events` and, through `air.note`, in `air.log`. `_paired_with` takes a pairing
+   for a bond when the SMP session's `bonding`, both sides' wish as Bumble settles it, holds and
+   `_has_ltk(keys)`: an `ltk` of LE Secure Connections, or the `ltk_central` and `ltk_peripheral`
+   of legacy pairing; without a bond it deletes the keys Bumble 0.0.236 stores anyway
+   (`smp.Manager.on_pairing`), under the peer's identity address, and calls
+   `Device.refresh_resolving_list`, since the resolver took the peer's IRK with the keys.
+   `_secure`, on a security request,
+   encrypts with the keystore's keys for the peer when they hold a long term key, or pairs without.
+   The "next …" conditions are `_after(name, …)`: a `FirstFrom` of `esp32tl/interfaces/condition.py`
+   over the history in attribute `name`, looked up at each poll, so that a poll reads only the
+   records appended since the last one (invariant 266). `_operation`
+   starts a coroutine with `air.start` and returns a `Condition` (service `BLE`) that finds its
+   result, or raises `BleError` from what it raised. `BlePeripheral` adds its GATT database from
+   `GattService`s (a `gatt.Characteristic` with a `CharacteristicValue` whose `read` and `write`
+   go to `_read` and `_written`, which raise `ATT_Error` with `READ_NOT_PERMITTED` and
+   `WRITE_NOT_PERMITTED` for what its properties do not allow, which Bumble 0.0.236's server does not
+   check, and `EVENT_SUBSCRIPTION` to `_subscription`), and advertises with
+   `Device.start_advertising(own_address_type=PUBLIC, auto_restart=True, …)`, the data from
+   `_advertising`, after a `stop_advertising` when Bumble's device has an advertiser left, also after
+   a power loss. `BleCentral` scans with `start_scanning(active=True, own_address_type=PUBLIC)`, and
+   `_report` keeps an `ADV_IND` or `ADV_SCAN_IND` until the `SCAN_RSP` of its address, and any
+   other report at once, as an `Advertisement`; it connects with
+   `Device.connect(address, own_address_type=PUBLIC)`, which has no timeout, and `cancel_connect`
+   ends it with `Device.cancel_connection`; it uses a Bumble `Peer` for GATT. `_advertising` puts
+   a name longer than 29 bytes, which no AD structure holds, as a shortened name (`0x08`), its
+   first 29 bytes cut to whole characters.
+9. **The report.** `Bluetooth.use()` sets `air.log` to the run log's `test`; `report()` adds
+   `advertising reports dropped for want of the host's credits: N` and each of `air.le_devices`
+   with its events, `properties()` `dropped_reports` and `le_devices`.
+
+### Interfaces
+
+| Name | What |
+|---|---|
+| `LinkLayer(name, link, address)` | `esp32tl/bluetooth/link_layer.py`: a Bumble `Controller`; `acl_to_host`; `filter_accept_list`, `resolving_list`, `le_rpa_timeout`; `own_address(own_address_type, peer_address_type, peer_address)`; `admits_report()`; `le_remote_version(command)`, whether the handle is an LE connection's; `acl_to_host_packets(handle, data)`; `le_lose_contact()`, `le_power_lost()`, `le_restart()`; private: `_le_peers`, `_le_held()`, `_le_holds(other)`, `_let_go_of(other)`, `_heard_on_link(sender, pdu)` |
+| `Advertiser` | `esp32tl/bluetooth/link_layer.py`: Bumble's `LegacyAdvertiser`, `address` by `own_address` |
+| `ADVERTISING_UNIT_S`, `ADVERTISING_INTERVAL_MIN`, `ADVERTISING_INTERVAL_DEFAULT`, `SUPERVISION_UNIT_S`, `SUPERVISION_TIMEOUT_DEFAULT`, `RPA_TIMEOUT_DEFAULT_S`, `LE_EVENT_MASK_DEFAULT`, `ENHANCED_CONNECTION_COMPLETE`, `MAX_OCTETS`, `MAX_TIME_US`, `LEFT_OUT_FEATURES` | `0.000625`; `0x0020`; `0x0800`; `0.01`; `72`; `900`; `0x1F`; `1 << 9`; `251`; `2120`; extended and periodic advertising, the coded PHY |
+| `GuestController(name, link, address=ADDRESS, *, chip="esp32")` | also `chip`, `le_only`, `dropped_reports`, `admits_report()` |
+| `LE_CHIPS`, `LE_ONLY_FEATURES`, `LE_VERSION`, `LE_REVISION`, `ESPRESSIF`, `LE_FEATURES`, `LE_ACL_LENGTH`, `LE_ACL_PACKETS`, `FILTER_ACCEPT_LIST_SIZE`, `RESOLVING_LIST_SIZE`, `LE_MAX_TIME_US`, `ADVERTISING_TX_POWER`, `LE_SUPPORTED_COMMANDS`, `LE_SUPPORTED`, `LE_COMMAND_PACKETS`, `SET_ADV_FLOW_CONTROL`, `ADV_REPORT_FLOW_CONTROL`, `DISCARD_REPORT` | `esp32tl/bluetooth/guest.py`: `esp32s3`, `esp32c3`, `esp32c6`; the S3's values above; `0xFD09`; `0xFD0A`; `0xF0` |
+| `Radio` | `esp32tl/bluetooth/peer.py`: the base of `BluetoothDevice` and `BleDevice` |
+| `BleDevice`, `BlePeripheral(air, *, name, services=(), service_uuids=None, manufacturer_data=None, address=PERIPHERAL_ADDRESS, interval=INTERVAL, connectable=True, rssi=RSSI, io_capability="no_input_no_output", confirms=True, passkey=None, bonding=True)`, `BleCentral(air, *, name=CENTRAL_NAME, address=CENTRAL_ADDRESS, rssi=RSSI, io_capability="no_input_no_output", confirms=True, passkey=None, bonding=True)` | `esp32tl/bluetooth/le.py`, as the user document lists them; `role`, `"peripheral"` or `"central"` |
+| `GattService(uuid, characteristics=())`, `GattCharacteristic(uuid, value=b"", properties=("read",), encrypted=False)` | Frozen dataclasses; the sequences kept as tuples |
+| `Advertisement`, `LeConnection`, `Disconnection`, `GattWrite`, `GattRead`, `Notification`, `Subscription`, `LePairing`, `DiscoveredCharacteristic`, `DiscoveredService`, `Discovery`, `LeEvent` | Named tuples, every `at` a `Duration` on the air's clock |
+| `BleError` | A `RuntimeError`, raised by an operation's condition |
+| `PERIPHERAL_ADDRESS`, `CENTRAL_ADDRESS`, `CENTRAL_NAME`, `INTERVAL`, `AD_MAX`, `FLAGS`, `PROPERTIES`, `IO_CAPABILITIES` | `"00:00:00:00:5B:02"`, `"00:00:00:00:5C:01"`, `"esp32tl central"`, `ms(100)`, `31`, `0x06`; the property names to Bumble's `Characteristic.Properties`; the five IO capability names, `keyboard_display` Bumble's `DISPLAY_OUTPUT_AND_KEYBOARD_INPUT` |
+| `Air.le_devices`, `Air.log`, `Air.note(text)` | `esp32tl/bluetooth/air.py`: the LE devices made on the air; where their events go, `None` but on the board's air |
+
+### Bumble's internals it relies on
+
+`bumble.controller.Controller`: `le_legacy_advertiser`, `le_connections`, `pending_le_connection`,
+`le_scan_enable`, `le_scan_type`, `filter_duplicates`, `le_event_mask`, `le_rpa_timeout`,
+`le_features`, `filter_accept_list_size`, `resolving_list_size`, `supported_max_*`,
+`allocate_connection_handle`, `find_le_connection_by_handle`, `send_advertising_pdu`,
+`on_ll_control_pdu`, `on_le_disconnected`, `on_hci_le_set_scan_enable_command`,
+`on_hci_le_connection_update_command`, `_send_hci_command_status`. `bumble.controller.LegacyAdvertiser`
+and its `_on_timer_fired`, `send_advertising_data`, `start`, `stop`, `timer_handle`.
+`bumble.controller.Connection`. `bumble.ll`: `AdvInd`, `ConnectInd`, `ConnectionUpdateInd`.
+`bumble.crypto.ah`. `bumble.device.Device`: `on_advertising_report`, a host event handler by its
+name; `start_advertising`, `stop_advertising`, `legacy_advertiser`, `start_scanning`,
+`stop_scanning`, `is_scanning`, `connect`, `notify_subscriber`, `indicate_subscriber`,
+`keystore`, `address_resolver`, `EVENT_CONNECTION`; `Connection`'s `EVENT_DISCONNECTION`,
+`EVENT_PAIRING`, `EVENT_PAIRING_FAILURE`, `EVENT_CONNECTION_ENCRYPTION_CHANGE`,
+`EVENT_SECURITY_REQUEST`, `pair`, `encrypt`, `disconnect`, `encryption`. `bumble.device.Peer`:
+`discover_services`, `services`, `get_characteristics_by_uuid`; its proxies' `discover_characteristics`,
+`discover_descriptors`, `read_value`, `write_value`, `subscribe`. `bumble.gatt`: `Service`,
+`Characteristic` and its `EVENT_SUBSCRIPTION`, `CharacteristicValue`, which Bumble's server reads and
+writes without checking `READABLE` or `WRITEABLE` (`gatt_server.py`, `# TODO: check permissions`),
+but checks the encryption permissions. `bumble.pairing.PairingDelegate.generate_passkey`. `bumble.smp.Manager.sessions`, by connection
+handle, and its sessions' `bonding`, still there when `EVENT_PAIRING` comes; `PairingKeys`' `ltk`,
+`ltk_central` and `ltk_peripheral`; the keystore's `get`, `get_all` and `delete`.
+`Device.is_le_connecting` and `cancel_connection`.
+`bumble.smp`: a security request is the application's, as `EVENT_SECURITY_REQUEST`.
+
+### Failure modes
+
+| Message | Exception | Cause |
+|---|---|---|
+| `{kind}: uuid is {text!r}, not a 16-bit UUID in hex, as 'FF01', or a 128-bit one` | `PeerError` | `_uuid`: not a `str` of 4 or 32 hex digits, dashes aside |
+| `GattCharacteristic {uuid}: properties are {properties!r}, not one or more of read, write, write_without_response, notify, indicate` | `PeerError` | |
+| `BlePeripheral: {what} ({n} bytes) fit neither in the advertising data nor in the scan response, 31 bytes each` | `PeerError` | `_advertising` |
+| `{name}: no central is subscribed to {notifications|indications} of {uuid}: wait for peripheral.is_subscribed({uuid!r})` | `PeerError` | `_send` |
+| `{name}: not connected: {call} needs a connection, made with central.connect(...)` | `PeerError` | `_require` |
+| `{name}: a connection is being made already: wait for it, or end it with central.cancel_connect()` | `PeerError` | `connect` while Bumble's `is_le_connecting` |
+| `{description}: the peer answered {ATT error name} ({code:#04x})` | `BleError`, from `ATT_Error` | `_operation`'s condition, `_why` |
+| `{description}: reason {reason:#04x}` | `BleError` | `BleCentral.pair` |
+
+Bumble's SMP logs `pairing failure (CONFIRM_VALUE_FAILED)` as a warning for a failed pairing.
+
+### Determinism
+
+What the link layer draws, `LE_Rand` and the RPAs, comes from the controller's generator, seeded with
+its address, so two runs of the firmware advertise from the same addresses at the same instants.
+Bumble's Security Manager draws its own randoms, the keys of LE Secure Connections and a passkey a
+display shows without `passkey`, from `secrets`: they differ between runs, and what crosses the
+air with them (the public keys, the confirm values) too; the instants do not.
+`tests/test_ble_peer.py::test_two_runs_advertise_and_connect_at_the_same_instants` holds the
+instants.
+
+### Tests
+
+- `tests/test_ble_peer.py`: on an `Air()`, raw hosts on `Controller`s: advertising at the host's
+  interval with the scan response for an active scan, none for a passive one, and duplicates
+  filtered; non-connectable advertising never connected to; both hosts given the central's
+  parameters; an initiation by the filter accept list; a cancelled initiation; `LE_Rand` the same in
+  two runs; an RPA from the resolving list that resolves with the IRK and changes after the RPA
+  timeout, and the fallback to the public address; `LE_Enhanced_Connection_Complete` with the local
+  RPA; LE data cut to the host's buffer; an initiation a reset ends, of which the host hears
+  nothing; a disconnect told as the local host's (0x16) on its side and the remote user's (0x13) on
+  the other. The guest: page 0 of an LE-only chip, the classic ESP32's unchanged; its answers, byte
+  for byte the S3's, and its `Command_Complete` for what it does not know; the data length it tells
+  of a connection, on the 1M PHY; Espressif's flow control, and the discard event past the lost
+  threshold. The peers: the advertising data, what goes into the scan response, discovery, read,
+  write, notify and indicate, a refused request, an encrypted characteristic, passkey entry and
+  numeric comparison, out of range and back, switched off and on, forgotten keys, the test's
+  mistakes, the report and the run log, two runs; a name advertised shortened; a pairing without
+  bonding on one side, which keeps no key; legacy pairing's bond; a connection cancelled, and one
+  ended by switching the central off; a "next …" poll that reads only what came since the last one,
+  of `next_advertisement` and `next_write`.
+- `tests/test_ble.py`: on the ESP32-S3 and the ESP32-C3, `gatt_server` found, connected to, read,
+  written and notifying, the tap's LE packets, also in the btsnoop file `dumps_btsnoop` makes of
+  them, the report's events; out of range at its 4 s timeout and reconnected; `gatt_client` finding
+  the peripheral, subscribing, writing 35 bytes and notified, then the peripheral switched off;
+  `gatt_security_server` paired Just Works, bonded, and encrypted with the kept keys after
+  `board.reset()`, at a new RPA. Each asserts `bt.unknown_commands() == []`.
+
 ## See also
 
 - [Bluetooth peer](bluetooth-peer-user.md)
 - [Decisions: the Bluetooth peer](../decisions/harness.md#the-bluetooth-peer-runs-bumble-in-the-harness-on-the-boards-clock)
 - [Bumble](https://github.com/google/bumble), 0.0.236: `bumble/controller.py`, `bumble/link.py`,
-  `bumble/rfcomm.py`
+  `bumble/rfcomm.py`, `bumble/device.py`, `bumble/gatt_server.py`, `bumble/smp.py`
+- ESP-IDF v5.3.6: `components/bt/host/bluedroid/hci/hci_hal_h4.c` and `hci_layer.c`, the flow control
+  of advertising reports; `components/bt/host/bluedroid/stack/include/stack/hcidefs.h`, its vendor
+  op codes
+- [Decisions: the LE peers](../decisions/harness.md#bluetooth-le-peers-on-bumbles-le-link-layer-with-esp32tls-fixes)
 - ESP-IDF v5.3.6: `components/bt/host/bluedroid/device/controller.c`, `get_features_classic`
 - [Bluetooth Core 5.4, Vol 4, Part E](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host-controller-interface/host-controller-interface-functional-specification.html),
   read on 2026-11-04: 6.6, 6.7, 6.21, 7.1.9, 7.3.16, 7.3.42, 7.7.33, 7.7.38, 7.7.46; read on

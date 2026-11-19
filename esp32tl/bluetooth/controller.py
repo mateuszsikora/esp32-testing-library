@@ -73,6 +73,7 @@ from bumble.controller import Connection, SspState
 from bumble.controller import Controller as BumbleController
 
 from esp32tl.bluetooth.air import Link
+from esp32tl.bluetooth.link_layer import LinkLayer
 from esp32tl.units import Duration
 
 # Bluetooth's inquiry length unit: 1.28 s.
@@ -125,11 +126,6 @@ INQUIRY_RESULT_FILTER = 0x01
 CONNECTION_SETUP_FILTER = 0x02
 ALL_DEVICES = 0x00
 NO_AUTO_ACCEPT = 0x01
-
-# The packet boundary flags of ACL data for the host (Vol 4, Part E, 5.4.2): the first packet of
-# an automatically flushable L2CAP PDU, and a continuing fragment.
-FIRST_FLUSHABLE = 0b10
-CONTINUING = 0b01
 
 
 @lmp.Packet.subclass
@@ -322,12 +318,12 @@ def response(link_key: bytes, challenge: bytes, claimant: hci.Address) -> bytes:
     return _hash(b"sres", link_key, challenge, bytes(claimant))[:4]
 
 
-class Controller(BumbleController):
-    """A Bumble controller at `address` on `link`, named `name` in Bumble's logs, which also does
-    inquiry, legacy pairing, authentication with a stored key, encryption, a page timeout, link
-    supervision, the rejection of a page, a connection accept timeout and page scan, keeps a page
-    it hears apart from its own, resets, answers the commands it does not know and cuts ACL data to
-    the host's buffer.
+class Controller(LinkLayer):
+    """A Bumble controller at `address` on `link`, named `name` in Bumble's logs, with the LE link
+    layer of `LinkLayer`, which also does inquiry, legacy pairing, authentication with a stored
+    key, encryption, a page timeout, link supervision, the rejection of a page, a connection accept
+    timeout and page scan, keeps a page it hears apart from its own, resets, answers the commands
+    it does not know and cuts ACL data to the host's buffer.
 
     `acl_to_host` is the most ACL data a packet to the host carries, besides what the host's
     `Host_Buffer_Size` says: `None` for no bound of the transport's."""
@@ -336,7 +332,7 @@ class Controller(BumbleController):
     acl_to_host: int | None = None
 
     def __init__(self, name: str, link: Link, address: str) -> None:
-        super().__init__(name, link=link, public_address=address)
+        super().__init__(name, link, address)
         self.lmp_features = hci.LmpFeatureMask(
             (self.lmp_features & ~hci.LmpFeatureMask.BR_EDR_NOT_SUPPORTED) | BR_EDR_FEATURES
         )
@@ -401,6 +397,8 @@ class Controller(BumbleController):
             hci.LmpFeatureMask.SECURE_SIMPLE_PAIRING_HOST_SUPPORT
             | hci.LmpFeatureMask.LE_SUPPORTED_HOST
         )
+        # LE's: no advertising, scan or initiation, and their parameters the specification's.
+        self.le_restart()
 
     def random_bytes(self, n: int) -> bytes:
         return self._random.randbytes(n)
@@ -609,7 +607,9 @@ class Controller(BumbleController):
     ) -> None:
         """7.1.23: the version the peer's controller has, what `LMP_version_req` would tell, read
         from it on the link. A peer that cannot be reached does not answer: the link falls at its
-        timeout."""
+        timeout. An LE connection's is `LinkLayer`'s."""
+        if self.le_remote_version(command):
+            return
         connection = self._linked_command(command.connection_handle, command.op_code)
         if connection is None:
             return
@@ -740,19 +740,7 @@ class Controller(BumbleController):
         if transport != core.PhysicalTransport.BR_EDR or connection is None:
             super().on_link_acl_data(sender_address, transport, data)
             return
-        bounds = [b for b in (self.host_acl_length, self.acl_to_host) if b is not None]
-        size = min(bounds) if bounds else max(len(data), 1)
-        for at in range(0, max(len(data), 1), size):
-            fragment = data[at : at + size]
-            self.send_hci_packet(
-                hci.HCI_AclDataPacket(
-                    connection.handle,
-                    FIRST_FLUSHABLE if at == 0 else CONTINUING,
-                    0,
-                    len(fragment),
-                    fragment,
-                )
-            )
+        self.acl_to_host_packets(connection.handle, data)
 
     # Inquiry.
 
@@ -1255,7 +1243,8 @@ class Controller(BumbleController):
         contact, and so does whoever holds a page of this device that it holds nothing for itself,
         as after that page ended or crossed one this device rejected. A page of its own that nobody
         heard is no link: it ends by itself; a page of another that it never heard is none either.
-        One the target heard, the target holds, and only that end has a timeout to wait for."""
+        One the target heard, the target holds, and only that end has a timeout to wait for.
+        Both ends of each LE connection lose contact too, and fall at its supervision timeout."""
         mine = [peer for peer in self.held() if self._holds(peer)]
         holders = [
             other.public_address
@@ -1265,12 +1254,14 @@ class Controller(BumbleController):
             and other._holds(self.public_address)
         ]
         peers = mine + holders
-        self.link.leave(self.public_address, peers)
+        le = [other.public_address for other in self._le_held()]
+        self.link.leave(self.public_address, list(dict.fromkeys(peers + le)))
         for peer in peers:
             self._lose_contact(peer)
             other = self.link.find_classic_controller(peer)
             if isinstance(other, Controller):
                 other._lose_contact(self.public_address)
+        self.le_lose_contact()
 
     def _held_by(self, peer: hci.Address) -> bool:
         other = self.link.find_classic_controller(peer)
@@ -1292,6 +1283,7 @@ class Controller(BumbleController):
             self._inquiry_complete()
         for peer in self.held():
             self._link_timed_out(peer)
+        self.le_power_lost()
 
     # Authentication: this side's host asks.
 
@@ -1622,9 +1614,15 @@ class Controller(BumbleController):
         self._let_go(peer_address)
 
     def _let_go(self, peer: hci.Address) -> None:
-        """When neither side holds anything for the other any more, they may page."""
-        if peer not in self.held() and not self._held_by(peer):
+        """When neither side holds anything for the other any more, on BR/EDR or LE, they may page
+        and connect again."""
+        other = self.link.find_classic_controller(peer)
+        le = isinstance(other, LinkLayer) and (self._le_holds(other) or other._le_holds(self))
+        if peer not in self.held() and not self._held_by(peer) and not le:
             self.link.let_go(self.public_address, peer)
+
+    def _let_go_of(self, other: LinkLayer) -> None:
+        self._let_go(other.public_address)
 
     def authenticated(self, peer: hci.Address) -> bool:
         """Whether the link to `peer` is authenticated, on this side: by legacy pairing, by a

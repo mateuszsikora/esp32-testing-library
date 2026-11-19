@@ -2,7 +2,11 @@
 
 Bluetooth Classic devices for the firmware to talk to, or to find: `SppPeer` can be discovered by
 its name, pairs with a PIN or with Secure Simple Pairing, and offers the Serial Port Profile (SPP),
-whose bytes a model in the test answers, on the board's clock; `BluetoothDevice` is the same device with no SPP. They run on
+whose bytes a model in the test answers, on the board's clock; `BluetoothDevice` is the same device with no SPP. And Bluetooth LE
+devices, for firmware on a chip whose controller is LE only, the ESP32-S3, the ESP32-C3 and the
+ESP32-C6: `BlePeripheral` advertises and serves a GATT database the firmware connects to as a
+central, and `BleCentral` scans for the firmware's advertising, connects to it and uses its GATT
+database ([below](#bluetooth-le-bleperipheral-and-blecentral)). They run on
 [Bumble](https://github.com/google/bumble)'s virtual link, in the harness's process.
 
 On the emulator `board.bluetooth` puts them in front of the firmware: the firmware's Bluetooth host
@@ -111,7 +115,7 @@ fixture is an error at setup with the same message after `esp32sim: `
 |---|---|
 | `board.bluetooth.use()` | Before `board.power_on()`: gives the firmware the harness's controller, with no device on the air until the test makes one; returns the `Air`. Once is enough; any other look at the interface does the same |
 | `board.bluetooth.air` | The `Air` of the board's devices, on its clock |
-| `board.bluetooth.controller` | The firmware's controller, a `GuestController` at `24:6F:28:00:11:24` |
+| `board.bluetooth.controller` | The firmware's controller, a `GuestController` at `24:6F:28:00:11:24`, of the profile's chip ([below](#the-firmwares-controller)) |
 | `board.bluetooth.unknown_commands()` | The commands of the firmware's host the controller did not know, `UnknownCommand(t, op_code, name)` named tuples, with `t: Duration` |
 | `board.bluetooth.pairings()` | The firmware's pairings that ended, each a `Pairing` ([Secure Simple Pairing](#secure-simple-pairing)) |
 | `board.bluetooth.devices()` | The other devices made on the air, `(name, address, present)` each, in the order of their addresses; `present` is false for one switched off or out of range now |
@@ -126,24 +130,61 @@ on the air, as `ESP_SPP_ACCEPTOR (00:00:00:00:5B:01)`, and `phone (00:00:00:00:5
 for one switched off or out of range. The `esp32sim_link` property has the same under `bluetooth`:
 `address`, the four counts, `tap` (the btsnoop file's path, or `null`), `unknown_commands` (`t_ns`,
 `op_code`, `name` each), `pairings` (`t_ns`, `peer`, `initiator`, `method`, `number`, `status`,
-`authenticated` each; [Secure Simple Pairing](#secure-simple-pairing)) and `devices` (`name`,
-`address`, `present` each); `null` without `board.bluetooth`. Between `unknown commands` and
-`devices` the report lists the firmware's pairings under `pairings (N):`. After
+`authenticated` each; [Secure Simple Pairing](#secure-simple-pairing)), `devices` (`name`,
+`address`, `present` each), `dropped_reports` (below) and `le_devices` (`name`, `address`,
+`role`, and `events`, `t_ns` and `text` each; [Bluetooth LE](#what-the-report-and-the-run-log-say));
+`null` without `board.bluetooth`. Between `unknown commands` and
+`devices` the report lists the firmware's pairings under `pairings (N):`; after `devices`, each LE
+device's events. After
 `board.bluetooth.tap(path)` the first line ends with `; tapped into {path}`.
 
 ### The firmware's controller
 
 It does what the devices' controllers do ([time on the air](#time-on-the-air),
-[a peer that leaves](#a-peer-that-leaves)), and what Bluedroid needs of a controller:
+[a peer that leaves](#a-peer-that-leaves)), and what Bluedroid needs of a controller. What it
+reports is the chip's, which it takes from the board profile's `chip`:
 
-- Three pages of features, 0 to 2, as the classic ESP32's controller has (Bluedroid stops on a
-  fourth), page 0 with the BR/EDR features: encryption, role switch, the RSSI and extended inquiry
-  results, Secure Simple Pairing, and none for LE, since the firmware runs its controller for
-  Classic alone. TODO(owner): what the classic ESP32's controller reports on page 0.
-- An ACL buffer of 491 bytes, the most a packet of esp32sim's VHCI holds (496 bytes, 5 of them the
-  packet's header), both ways: the firmware's own data, and the peer's data cut to fit, also to the
-  firmware's `Host_Buffer_Size` when that is smaller. TODO(owner): what the classic ESP32's
-  controller reports in `Read_Buffer_Size`.
+- **The classic ESP32**: three pages of features, 0 to 2, as its controller has (Bluedroid stops on
+  a fourth), page 0 with the BR/EDR features: encryption, role switch, the RSSI and extended
+  inquiry results, Secure Simple Pairing, and none for LE, since the firmware runs its controller
+  for Classic alone. TODO(owner): what the classic ESP32's controller reports on page 0.
+- **The ESP32-S3, the ESP32-C3 and the ESP32-C6**, whose controllers are Bluetooth LE only: what an
+  ESP32-S3 (QFN56, revision v0.2) answered on 2026-11-19, with ESP-IDF v5.3.6's controller
+  `51d9dfd` started as Bluedroid's BLE 4.2 examples start it
+  ([`tools/hci_probe`](../stage0-findings.md#reproducing), its capture in
+  `tools/hci_probe/esp32s3.txt`). Version 5.0 (HCI and LMP version 9, revision and subversion
+  `0x0016`), Espressif's company identifier `0x02E5`; page 0 of the features alone, `LE Supported
+  (Controller)` and `BR/EDR Not Supported`; LE features `0xFF`, encryption to the extended scanner
+  filter policies, with no 2M or coded PHY and no extended advertising (a controller-only build,
+  whose controller runs with `BLE_50:1`, reports `0x080001F9FF` instead); `LE_Read_Buffer_Size` 251
+  bytes and 12 packets; a filter accept list of 12 and a resolving list of 10; a maximum data
+  length of 251 octets and 17040 µs each way; an advertising power of 9 dBm; its own
+  `Read_Local_Supported_Commands`, and 5 command packets in each `Command_Complete` and
+  `Command_Status`. A command that list does not name, as `Read_Buffer_Size`,
+  `Read_Local_Extended_Features` or `Inquiry`, and any command it does not know get
+  `Command_Complete` with `UNKNOWN_HCI_COMMAND_ERROR`, and are listed in `bt.unknown_commands()`;
+  Bluedroid without Classic sends none of them. The ESP32-C3's controller is built from the same
+  sources; TODO(owner): measured on an ESP32-C3 and an ESP32-C6, which take the S3's values
+  meanwhile. Its address stays `24:6F:28:00:11:24`, where a real chip's is its base MAC plus 2.
+
+  It also takes Espressif's two vendor commands for the flow control of advertising reports, which
+  Bluedroid sends an LE controller right after `HCI_Reset`: `0xFD09` turns it on with a number of
+  credits and a lost threshold, and completes; the controller then sends no more `LE Advertising
+  Report` events than the credits and drops the rest; `0xFD0A` gives credits back, and gets no
+  event, as Bluedroid expects of it. Once the reports dropped since the last count reach the lost
+  threshold, the next credit given back brings, before any report, Espressif's vendor LE Meta
+  event `0xF0` with their number, four bytes little-endian, which takes a credit: the S3 sent
+  `04 3E 05 F0 68 00 00 00` for 104 reports when 2 credits came back. The report says
+  `advertising reports dropped for want of the host's credits: N` when it dropped any, and
+  `dropped_reports` counts them. Bluedroid asserts on a report it has no credit for, so a
+  controller that ignored the credits would stop the firmware.
+- ACL data of at most 491 bytes a packet to the firmware, the most a packet of esp32sim's VHCI holds
+  (496 bytes, 5 of them the packet's header): the peer's data cut to fit, also to the firmware's
+  `Host_Buffer_Size` when that is smaller, on BR/EDR and on LE. From the firmware, packets of at
+  most what the controller's buffer sizes say: on the classic ESP32 `Read_Buffer_Size` says 491;
+  on an LE-only chip `LE_Read_Buffer_Size` says 251, so Bluedroid sends its data in packets of
+  251 bytes. TODO(owner): what the classic ESP32's controller reports in
+  `Read_Buffer_Size`.
 - An answer to every command: one it does not know gets `UNKNOWN_HCI_COMMAND_ERROR` in the event the
   host waits for, `Command_Status` for a command answered so before it completes, `Command_Complete`
   for any other, and is listed in `bt.unknown_commands()`.
@@ -526,6 +567,279 @@ own coroutine's callbacks, is prefixed with asyncio's description of where it wa
 `Exception in callback Host.on_packet(): …`.
 `NeverHappened` is the board's, also from `esp32tl`.
 
+## Bluetooth LE: `BlePeripheral` and `BleCentral`
+
+On a chip whose controller is LE only (the ESP32-S3, the ESP32-C3; the ESP32-C6 once esp32sim's
+hooks take its images, #229 G5), the firmware's Bluedroid talks LE to the harness's controller,
+and the test puts LE devices beside the board. ESP-IDF's `gatt_server`, `gatt_client` and
+`gatt_security_server`, unmodified, run against them on both chips (`tests/test_ble.py`;
+[validation firmware](validation-firmware-user.md#gatt_server-gatt_client-and-gatt_security_server)).
+
+### The firmware as a central: `BlePeripheral`
+
+```python
+import pytest
+
+from esp32tl import BlePeripheral, GattCharacteristic, GattService
+from esp32tl.units import seconds
+
+
+@pytest.mark.board_profile("esp32-c3-devkitm")
+@pytest.mark.app_path("../firmware/gatt_client", build_dir="build-esp32c3")
+def test_the_firmware_writes_and_is_notified(board, bt, console):
+    peripheral = BlePeripheral(
+        bt.air,
+        name="ESP_GATTS_DEMO",
+        services=[
+            GattService("00FF", [GattCharacteristic("FF01", properties=("write", "notify"))])
+        ],
+    )
+    written = peripheral.next_write("FF01")
+    board.power_on()
+    board.wait_until(peripheral.is_subscribed("FF01"), within=seconds(5))
+    assert board.wait_until(written, within=seconds(1)).value == bytes(range(35))
+    board.wait_until(peripheral.notify("FF01", b"hello"), within=seconds(1))
+    console.expect_exact("GATTC_DEMO: 68 65 6c 6c 6f", timeout=1)
+```
+
+`BlePeripheral(air, *, name, services=(), service_uuids=None, manufacturer_data=None,
+address="00:00:00:00:5B:02", interval=ms(100), connectable=True, rssi=-50,
+io_capability="no_input_no_output", confirms=True, passkey=None, bonding=True)`:
+
+| Argument | What it is |
+|---|---|
+| `name` | Its name, a string of 1 to 248 bytes in UTF-8: whole in its GATT database (`0x2A00`), and in its advertising when it fits, in at most 29 bytes; a longer one is advertised shortened, its first 29 bytes of whole characters |
+| `services` | Its GATT database: `GattService(uuid, characteristics)`, each a primary service, with `GattCharacteristic(uuid, value=b"", properties=("read",), encrypted=False)` each |
+| `service_uuids` | The service UUIDs it advertises: the services' unless given; `()` for none |
+| `manufacturer_data` | `(company identifier, bytes)` for the manufacturer specific data of its advertising, or `None` |
+| `address` | Its public address, which it advertises from; no other device on the air may have it |
+| `interval` | Its advertising interval, a `Duration` of 20 ms to 10.24 s |
+| `connectable` | Whether a central can connect to it: undirected connectable and scannable advertising (`ADV_IND`), or scannable only (`ADV_SCAN_IND`) |
+| `rssi` | The signal strength a scan hears it at, in dBm, -127 to 20 |
+| `io_capability`, `confirms`, `passkey`, `bonding` | How it pairs ([below](#pairing)) |
+
+A UUID is 4 hex digits for a 16-bit one, `"FF01"`, or a 128-bit one with or without its dashes,
+`"6E400002-B5A3-F393-E0A9-E50E24DCCA9E"`; esp32tl writes them back the first way for 16 bits and
+the second for 128. A characteristic's `properties` are any of `read`, `write`,
+`write_without_response`, `notify` and `indicate`; one that notifies or indicates has a Client
+Characteristic Configuration descriptor. With `encrypted`, it is read and written only over an
+encrypted link: an unencrypted one gets `INSUFFICIENT_ENCRYPTION`. A read of one without `read`
+gets `READ_NOT_PERMITTED`, a write of one without `write` `WRITE_NOT_PERMITTED`. The UUIDs of the
+characteristics must differ, as they name them.
+
+From its creation, at the air's instant, it advertises every `interval`: the flags (LE General
+Discoverable, BR/EDR not supported), then its name, its 16-bit service UUIDs, its 128-bit ones and
+its manufacturer data, each in the 31 bytes of the advertising data while it fits, else in the scan
+response, which an active scan gets. It takes one central at a time, stops advertising while
+connected, and advertises again once the connection ends.
+
+| Name | What |
+|---|---|
+| `peripheral.value(uuid)` | The characteristic's value now: what the firmware last wrote, or the test set or notified |
+| `peripheral.set_value(uuid, value)` | Sets it, for the next read, without notifying |
+| `peripheral.writes` | Every write of the firmware, `GattWrite(at, uuid, value)` |
+| `peripheral.next_write(uuid=None, value=None)` | A condition: the first write after the call, to `uuid` and containing `value` where given |
+| `peripheral.subscriptions` | Every write of a Client Characteristic Configuration, `Subscription(at, uuid, notify, indicate)` |
+| `peripheral.subscribed(uuid)`, `peripheral.is_subscribed(uuid)` | Whether the connected central subscribed to the characteristic, and a condition for it |
+| `peripheral.notify(uuid, value)`, `peripheral.indicate(uuid, value)` | Sets the value and sends it to the subscribed central, at the board's instant; a condition that finds the `Notification(at, uuid, value, indication)` once sent, for an indication once the central confirmed it |
+| `peripheral.notifications` | What it sent |
+| `peripheral.advertising` | Whether it advertises now |
+
+### The firmware as a peripheral: `BleCentral`
+
+```python
+from esp32tl import BleCentral
+
+
+@pytest.mark.board_profile("esp32-s3-devkitc")
+@pytest.mark.app_path("../firmware/gatt_server", build_dir="build-esp32s3")
+def test_the_firmware_is_read_written_and_notifies(board, bt, console):
+    central = BleCentral(bt.air, name="phone")
+    board.power_on()
+    seen = board.wait_until(central.next_advertisement(name="ESP_GATTS_DEMO"), within=seconds(5))
+    board.wait_until(central.connect(seen), within=seconds(2))
+    read = board.wait_until(central.read("FF01"), within=seconds(1))
+    assert read.value == bytes.fromhex("deedbeef")
+    notified = central.next_notification("FF01")
+    board.wait_until(central.subscribe("FF01"), within=seconds(1))
+    assert board.wait_until(notified, within=seconds(1)).value == bytes(range(15))
+    board.wait_until(central.write("FF01", b"\x01\x02\x03"), within=seconds(1))
+    console.expect_exact("GATTS_DEMO: 01 02 03", timeout=1)
+```
+
+`BleCentral(air, *, name="esp32tl central", address="00:00:00:00:5C:01", rssi=-50,
+io_capability="no_input_no_output", confirms=True, passkey=None, bonding=True)` scans from its
+creation, actively, from its public address, and keeps every advertising event it hears, with the
+scan response of a scannable one, in `central.advertisements`: `Advertisement(at, address,
+address_type, name, service_uuids, manufacturer_data, rssi, connectable, data, scan_response)`,
+`address_type` `"public"` or `"random"`, `name` the complete or the shortened local name, from the
+advertising data or the scan response. It goes on scanning while connected.
+
+What it does over a connection takes time on the air, so each call starts it at the board's
+instant and returns a condition for `board.wait_until`, which finds what the call got, or raises
+`BleError` for what went wrong, as `esp32tl central's write of FF01: the peer answered
+WRITE_NOT_PERMITTED (0x03)`:
+
+| Call | Starts | The condition finds |
+|---|---|---|
+| `central.next_advertisement(*, name=None, address=None, service_uuid=None)` | Nothing: a condition for the first advertising event heard after the call, matching what is given; `name` is compared with the name advertised, so for a device that advertises a shortened one, the shortened one | The `Advertisement` |
+| `central.connect(to)` | A connection to `to`, an `Advertisement` heard or a public address, at the next connectable advertising event it hears from it, however long that takes: `central.cancel_connect()` ends it, and so does switching the central off, and the condition then raises `BleError` | `LeConnection(at, peer, role)` |
+| `central.discover()` | The discovery of the peer's primary services, their characteristics and descriptors | `Discovery(at, services)`, each a `DiscoveredService(uuid, characteristics)` of `DiscoveredCharacteristic(uuid, handle, properties)`; kept in `central.discovery` until the connection ends |
+| `central.read(uuid)` | A read of the characteristic | `GattRead(at, uuid, value)` |
+| `central.write(uuid, value, *, with_response=True)` | A write request, or with `with_response=False` a write command | `GattWrite(at, uuid, value)` |
+| `central.subscribe(uuid, *, indicate=False)` | A write of the characteristic's Client Characteristic Configuration, for notifications or indications | `Subscription(at, uuid, notify, indicate)` |
+| `central.next_notification(uuid=None, value=None)` | Nothing: a condition for the first notification or indication received after the call | The `Notification` |
+| `central.pair()` | A pairing, as the initiator ([below](#pairing)) | `LePairing(at, peer, succeeded, bonded, reason)` |
+| `central.disconnect()` | The end of the connection | `Disconnection(at, peer, reason)` |
+
+`read`, `write` and `subscribe` name a characteristic by its UUID, the first of that UUID in the
+peer's database, and discover the database first when the central has not. One connection at a
+time. Its connections have Bumble's parameters: an interval of 15 to 30 ms, a latency of 0 and a
+supervision timeout of 720 ms, until the peripheral asks for others: `gatt_server` asks for 20 to
+40 ms and 4 s, and gets them. The notifications and indications it received are in
+`central.notifications`.
+
+### Both kinds
+
+| Name | What |
+|---|---|
+| `device.connected`, `device.is_connected`, `device.is_disconnected` | Whether it has a connection now, and conditions for it |
+| `device.peer` | The address of the device it is connected to, the identity address once a bond resolved it; `None` without a connection |
+| `device.encrypted`, `device.is_encrypted` | Whether the connection is encrypted now, and a condition for it |
+| `device.connections`, `device.disconnections`, `device.pairings` | Every `LeConnection`, `Disconnection` and `LePairing`, in order |
+| `device.next_connection()`, `device.next_disconnection()`, `device.next_pairing()` | Conditions for the first one after the call |
+| `device.events` | `LeEvent(at, text)`, everything it did ([below](#what-the-report-and-the-run-log-say)) |
+| `device.switch_off()`, `switch_on()`, `out_of_range()`, `in_range()`, `present`, `rssi` | As for a Classic device ([a peer that leaves](#a-peer-that-leaves)), and [below](#leaving) |
+| `device.forget_keys()` | It loses the keys it bonded with |
+| `central.cancel_connect()` | Ends the connection being made, at the board's instant; nothing to cancel is nothing done |
+| `device.device` | Its Bumble device |
+
+A `Disconnection`'s `reason` is an HCI error code, with `reason_name` such as
+`CONNECTION_TIMEOUT_ERROR (0x08)`: `0x08` for a link that lost contact, `0x13` for the other side's
+disconnect, `0x16` for its own.
+
+### Pairing
+
+Pairing is the LE Security Manager's, Bumble's on the test's side and Bluedroid's on the firmware's,
+with LE Secure Connections. Its association model comes from the two IO capabilities:
+`no_input_no_output`, the default, pairs Just Works; `display_only`, `display_yes_no`,
+`keyboard_only` and `keyboard_display` are the others. `confirms` is the user's yes to a number
+to compare; `passkey`, six digits, is what the user types on a keyboard, or what a display shows
+(Bumble draws one otherwise). A firmware without LE Secure Connections pairs the legacy way, which
+Bumble does too.
+
+A pairing is a bond, `LePairing.bonded`, when both sides asked for bonding (`bonding`, the default,
+on this side, and the firmware's auth request, as `ESP_LE_AUTH_BOND`) and it gave a long term key,
+of LE Secure Connections or of legacy pairing. The device then keeps the keys until
+`forget_keys()`; without a bond it keeps none, and the next connection pairs again.
+
+- **The central starts it** with `central.pair()`, or when the peer asks for security
+  (`gatt_security_server` does as soon as it is connected): with keys kept for the peer, the
+  central encrypts the link with them; without, it pairs, as a phone does. A peripheral answers the
+  pairing it is asked for; it does not start one.
+- **Across a reset of the firmware.** Bluedroid keeps its bonds in the NVS, which a reset keeps:
+  after `board.reset()` `gatt_security_server` advertises from a new resolvable private address, the
+  central resolves it with the identity key it got when pairing, and the link is encrypted with the
+  kept keys, with no pairing again; `central.peer` is then the firmware's identity address,
+  `24:6F:28:00:11:24`.
+- **The firmware's private address.** A host that puts its local identity key in the controller's
+  resolving list and advertises with own address type `0x02` or `0x03`, as Bluedroid's
+  `esp_ble_gap_config_local_privacy(true)` does, gets a resolvable private address made by the
+  controller, made again after the host's RPA timeout or when the chip restarts, and told to the host
+  in `LE_Enhanced_Connection_Complete`.
+
+`device.pairings` holds each that ended, `LePairing(at, peer, succeeded, bonded, reason)`, where
+`reason` is the Security Manager's for one that failed (Vol 3, Part H, 3.5.5), as `0x04` for a
+confirm value that failed, a passkey typed that differs from the one shown.
+
+### Leaving
+
+`switch_off()`, `out_of_range()` and their undoing work as for a Classic device. To the other side:
+
+- **The connection falls with `CONNECTION_TIMEOUT` (`0x08`)** at its supervision timeout after the
+  device left, on each end still holding it: the timeout it was made or last updated with. With
+  `gatt_server`, which asks for 4 s, the firmware logs `GATTS_DEMO: Disconnected, remote
+  00:00:00:00:5c:01, reason 0x08` 4 s after the central went out of range, and advertises again;
+  back in range, the central hears it and connects again. A `BlePeripheral` switched off under
+  `gatt_client` is gone: the firmware logs `reason 0x08` at its own supervision timeout, and
+  `gatt_client` does not scan again.
+- **Advertising is not heard** from a device off the air, and a device off the air hears none.
+
+At the device itself, a switch off ends its connections at once, which its own Bumble host hears
+with `0x08`; switched on, a peripheral advertises again and a central scans again. Out of range, it
+runs on, and its connection falls at its timeout as the other side's does. The board's own
+supply and resets take the firmware's controller off the air as for Classic
+([above](#in-front-of-the-firmware-boardbluetooth)): a central connected to the firmware sees its
+link fall at its timeout, 720 ms for Bumble's.
+
+### What the report and the run log say
+
+Each LE device keeps its events in `device.events`, `LeEvent(at, text)`, and on `bt.air` puts each in
+the run log as it happens, `bluetooth: phone: connected to 24:6F:28:00:11:24, as central`, and in
+the report, after `devices:`, under its name, address and role:
+
+```text
+  phone (00:00:00:00:5C:01), LE central: 7 events
+    0.225472533 s  advertising seen from 'ESP_GATTS_DEMO' 24:6F:28:00:11:24 (public)
+    0.245472533 s  connected to 24:6F:28:00:11:24, as central
+    0.655558400 s  discovered 4 services of 24:6F:28:00:11:24: 1801, 1800, 00FF, 00EE
+    0.675725333 s  read FF01 of 24:6F:28:00:11:24: deedbeef
+    0.715859733 s  notification of FF01 from 24:6F:28:00:11:24: 000102030405060708090a0b0c0d0e
+    0.715992266 s  subscribed to notifications of FF01 of 24:6F:28:00:11:24
+    0.745794666 s  wrote FF01 of 24:6F:28:00:11:24: 010203
+```
+
+That is `gatt_server` on the ESP32-S3 with the central of the example above (seen on 2026-11-19).
+The notification comes before the subscription is done: `gatt_server` notifies as soon as the
+Client Characteristic Configuration is written, before Bumble has the write's response.
+
+The events: `advertising seen from 'NAME' ADDRESS (public|random)`, once for each address;
+`connected to ADDRESS, as central` or `connected from ADDRESS, as peripheral`; `disconnected from
+ADDRESS: CONNECTION_TIMEOUT_ERROR (0x08)` with the reason; `encrypted with ADDRESS`; `paired with
+ADDRESS, bonded` or `pairing with ADDRESS failed: reason 0x04`; on a central `discovered N services
+of ADDRESS: …`, `read UUID of ADDRESS: HEX`, `wrote UUID of ADDRESS: HEX`, `subscribed to
+notifications of UUID of ADDRESS`, `notification of UUID from ADDRESS: HEX`; on a peripheral
+`ADDRESS wrote UUID: HEX`, `ADDRESS subscribed to UUID: notifications`, `notification of UUID to
+ADDRESS: HEX`. The btsnoop tap (`bt.tap(path)`) has the LE packets as they crossed the VHCI,
+unchanged: the commands, the LE Meta events and the ACL data of the connections.
+
+### What is left out
+
+Extended and periodic advertising, the coded PHY, isochronous channels (LE Audio), directed
+advertising, more than one connection on a central, the connection's events and their timing (data
+crosses at the instant it is sent, as on the Classic link), the resolution of a peer's private
+address by the firmware's controller (Bluedroid resolves it itself), and the out of band pairing:
+[decisions](../decisions/harness.md#bluetooth-le-peers-on-bumbles-le-link-layer-with-esp32tls-fixes).
+
+### When something goes wrong
+
+| Message | Exception | When |
+|---|---|---|
+| `GattCharacteristic: uuid is 'FF0', not a 16-bit UUID in hex, as 'FF01', or a 128-bit one` | `PeerError` | A UUID of another form, also for a service, `service_uuids` and the UUIDs a call names, each naming its class |
+| `GattCharacteristic FF01: properties are ('fly',), not one or more of read, write, write_without_response, notify, indicate` | `PeerError` | |
+| `GattCharacteristic FF01: value is 'x', not bytes` | `PeerError` | |
+| `GattService 00FF: characteristics are ['x'], not GattCharacteristic objects` | `PeerError` | |
+| `BlePeripheral: characteristic FF01 is in the database twice: the UUIDs name the characteristics, give each its own` | `PeerError` | |
+| `BlePeripheral: interval is 0.01 s, not 20 ms to 10.24 s` | `PeerError` | |
+| `BlePeripheral: the manufacturer data (34 bytes) fit neither in the advertising data nor in the scan response, 31 bytes each` | `PeerError` | Also for the service UUIDs |
+| `BlePeripheral: manufacturer_data is (70000, b''), not a (company identifier, bytes) pair` | `PeerError` | |
+| `BleCentral: name is '', not a string of 1 to 248 bytes` | `PeerError` | |
+| `BleCentral: io_capability is 'keyboard', not one of display_only, display_yes_no, keyboard_only, no_input_no_output, keyboard_display` | `PeerError` | |
+| `sensor: no characteristic ABCD in its database` | `PeerError` | A peripheral's call for a UUID it does not serve |
+| `sensor: no central is subscribed to notifications of FF01: wait for peripheral.is_subscribed('FF01')` | `PeerError` | `notify` before the central subscribed to notifications; `indicate` before it subscribed to indications says `indications` |
+| `esp32tl central: not connected: read needs a connection, made with central.connect(...)` | `PeerError` | A central's call that needs a connection, each naming itself |
+| `esp32tl central: connected to 00:00:00:00:5B:02 already: one connection at a time` | `PeerError` | |
+| `esp32tl central: a connection is being made already: wait for it, or end it with central.cancel_connect()` | `PeerError` | `connect` while the last one is still under way |
+| `esp32tl central's write of FF01: the peer answered WRITE_NOT_PERMITTED (0x03)` | `BleError`, from Bumble's `ATT_Error`, raised by the condition | The peer refused a request: also `READ_NOT_PERMITTED (0x02)` and `INSUFFICIENT_ENCRYPTION (0x0f)` |
+| `esp32tl central's read of ABCD: 00:00:00:00:5B:02 has no characteristic ABCD` | `BleError` | |
+| `esp32tl central's connection to 00:00:00:00:5B:0F: ConnectionError: ConnectionError(hci/UNKNOWN_CONNECTION_IDENTIFIER_ERROR [0x2])` | `BleError`, from Bumble's `ConnectionError` | The connection was cancelled with `central.cancel_connect()`, or the central was switched off while making it |
+| `esp32tl central's pairing with 00:00:00:00:5B:02: reason 0x04` | `BleError` | The pairing failed, with the Security Manager's reason |
+
+The conditions say what they wait for, `the next advertisement called 'ESP_GATTS_DEMO' heard by
+phone (00:00:00:00:5C:01)` or `esp32tl central's read of FF01 (00:00:00:00:5C:01)`, in
+`NeverHappened`, and refuse `bool()`: `call the BLE condition with (), or pass it to
+board.wait_until`. `BleError` is a `RuntimeError` from `esp32tl`; its `__cause__` is what failed.
+
 ## See also
 
 - [Bluetooth peer: how it works](bluetooth-peer-technical.md)
@@ -534,6 +848,7 @@ own coroutine's callbacks, is prefixed with asyncio's description of where it wa
 - [Decisions: how a peer leaves](../decisions/harness.md#a-peer-leaves-without-a-word-keeps-its-keys-and-its-old-link-stays-dead-until-it-falls)
 - [Decisions: the air of the `bt` fixture is on the board's clock](../decisions/harness.md#the-air-of-the-bt-fixture-is-moved-by-the-boards-link-alone)
 - [esp32sim backend: Bluetooth](esp32sim-backend-user.md#bluetooth)
+- [Decisions: the LE peers](../decisions/harness.md#bluetooth-le-peers-on-bumbles-le-link-layer-with-esp32tls-fixes)
 
 ## Waiting for the SPP channel and device writes
 

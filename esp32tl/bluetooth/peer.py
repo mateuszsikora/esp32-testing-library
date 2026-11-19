@@ -157,6 +157,10 @@ class _User(PairingDelegate):
     async def get_number(self) -> int | None:
         return self.passkey
 
+    async def generate_passkey(self) -> int:
+        # The passkey an LE device's display shows, where it has one: the device's own, given.
+        return await super().generate_passkey() if self.passkey is None else self.passkey
+
     async def display_number(self, number: int, digits: int) -> None:
         return None
 
@@ -187,7 +191,86 @@ class _Device(Device):
         utils.AsyncRunner.spawn(answer())  # type: ignore[no-untyped-call]
 
 
-class BluetoothDevice:
+class Radio:
+    """What every device on `air` does, Classic or LE: it is heard at a signal strength, and can be
+    switched off and go out of range, and come back. `_controller` is its controller and `device`
+    its Bumble device, which the subclass makes."""
+
+    air: Air
+    device: Device
+    _controller: Controller | None
+    _on: bool
+    _in_range: bool
+
+    @property
+    def rssi(self) -> int:
+        """The signal strength, in dBm, the device is heard at: in its answer to an inquiry, and
+        in the reports of a scan that hears its LE advertising."""
+        assert self._controller is not None
+        return self._controller.rssi
+
+    @rssi.setter
+    def rssi(self, rssi: int) -> None:
+        self._check_rssi(rssi)
+        assert self._controller is not None
+        self._controller.rssi = rssi
+
+    def _check_rssi(self, rssi: int) -> None:
+        if isinstance(rssi, bool) or not isinstance(rssi, int) or not -127 <= rssi <= 20:
+            raise PeerError(
+                f"{type(self).__name__}: rssi is {rssi!r}, not a signal strength in dBm, -127 to 20"
+            )
+
+    @property
+    def present(self) -> bool:
+        """Whether the device is on the air: switched on and in range."""
+        return self._on and self._in_range
+
+    def switch_off(self) -> None:
+        """The device loses its power, at the air's time: gone from the air."""
+        self.air.call(lambda: self._become(False, self._in_range))
+
+    def switch_on(self) -> None:
+        """The device has its power back, at the air's time; on the air if it is in range."""
+        self.air.call(lambda: self._become(True, self._in_range))
+
+    def out_of_range(self) -> None:
+        """The device is out of reach, at the air's time: gone from the air, still running."""
+        self.air.call(lambda: self._become(self._on, False))
+
+    def in_range(self) -> None:
+        """The device is within reach again, at the air's time; on the air if it is switched on."""
+        self.air.call(lambda: self._become(self._on, True))
+
+    def forget_keys(self) -> None:
+        """The device loses the keys it keeps: from its next link on, another device that kept
+        one fails to authenticate or to encrypt, and one pairs again. For a Classic device, with
+        the PIN."""
+        self.device.keystore = MemoryKeyStore()
+
+    def _become(self, on: bool, in_range: bool) -> None:
+        assert self._controller is not None
+        was_present = self.present
+        was_on = self._on
+        self._on, self._in_range = on, in_range
+        if was_present and not self.present:
+            self._controller.left()
+        if was_on and not on:
+            self._powering_off()
+            self._controller.power_lost()
+        if was_on != on:
+            self._supply(on)
+        if self.present and not was_present:
+            self._controller.returned()
+
+    def _powering_off(self) -> None:
+        """The device is about to lose its power: what of its host's would start again stops."""
+
+    def _supply(self, on: bool) -> None:
+        """The device's power went off, or came back: nothing else here depends on it."""
+
+
+class BluetoothDevice(Radio):
     """A Classic device on `air` at `address`, discoverable and connectable from the start, called
     `name`, of class `class_of_device`, heard at `rssi` dBm, paired with `pin` if it has one, and
     offering no service: a device that is there to be found.
@@ -273,24 +356,6 @@ class BluetoothDevice:
         return str(self.device.public_address).removesuffix("/P")
 
     @property
-    def rssi(self) -> int:
-        """The signal strength, in dBm, this device answers an inquiry with."""
-        assert self._controller is not None
-        return self._controller.rssi
-
-    @rssi.setter
-    def rssi(self, rssi: int) -> None:
-        self._check_rssi(rssi)
-        assert self._controller is not None
-        self._controller.rssi = rssi
-
-    def _check_rssi(self, rssi: int) -> None:
-        if isinstance(rssi, bool) or not isinstance(rssi, int) or not -127 <= rssi <= 20:
-            raise PeerError(
-                f"{type(self).__name__}: rssi is {rssi!r}, not a signal strength in dBm, -127 to 20"
-            )
-
-    @property
     def pairings(self) -> list[Pairing]:
         """The device's pairings that ended, in order: with whom, how, the number it showed or
         its user typed, and whether it succeeded."""
@@ -304,51 +369,6 @@ class BluetoothDevice:
         assert self._controller is not None
         under_way = list(self._controller.under_way.values())
         return under_way[-1] if under_way else None
-
-    @property
-    def present(self) -> bool:
-        """Whether the device is on the air: switched on and in range."""
-        return self._on and self._in_range
-
-    def switch_off(self) -> None:
-        """The device loses its power, at the air's time: gone from the air."""
-        self.air.call(lambda: self._become(False, self._in_range))
-
-    def switch_on(self) -> None:
-        """The device has its power back, at the air's time; on the air if it is in range."""
-        self.air.call(lambda: self._become(True, self._in_range))
-
-    def out_of_range(self) -> None:
-        """The device is out of reach, at the air's time: gone from the air, still running."""
-        self.air.call(lambda: self._become(self._on, False))
-
-    def in_range(self) -> None:
-        """The device is within reach again, at the air's time; on the air if it is switched on."""
-        self.air.call(lambda: self._become(self._on, True))
-
-    def forget_keys(self) -> None:
-        """The device loses the link keys it keeps: from its next link on, another device that
-        kept one fails to authenticate, and one pairs with the PIN again."""
-        self.device.keystore = MemoryKeyStore()
-
-    def _become(self, on: bool, in_range: bool) -> None:
-        assert self._controller is not None
-        was_present = self.present
-        was_on = self._on
-        self._on, self._in_range = on, in_range
-        if was_present and not self.present:
-            self._controller.left()
-        if was_on and not on:
-            # The inquiry under way does not start again when it ends here.
-            self.device.auto_restart_inquiry = False
-            self._controller.power_lost()
-        if was_on != on:
-            self._supply(on)
-        if self.present and not was_present:
-            self._controller.returned()
-
-    def _supply(self, on: bool) -> None:
-        """The device's power went off, or came back: nothing else here depends on it."""
 
     def _make(self, address: Address) -> Device:
         controller = Controller(self.name, self.air._link, str(address))
@@ -375,6 +395,10 @@ class BluetoothDevice:
         )
         self._serve(device)
         return device
+
+    def _powering_off(self) -> None:
+        # The inquiry under way does not start again when it ends here.
+        self.device.auto_restart_inquiry = False
 
     def _serve(self, device: Device) -> None:
         """The services `device` offers: none."""

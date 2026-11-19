@@ -249,7 +249,7 @@ A test imports from three modules, and from no other:
 
 | Module | What it holds |
 |---|---|
-| `esp32tl` | Every class, exception and constant a test names: the board (`Board`, `Boot`, `UptimeZero`, `POWERON_RESET`, `DEEPSLEEP_RESET`, `RESET_REASONS`, `Condition`, `condition`), its profile (`BoardProfile`, `UartRoute`, `LineRoute`, `SdCardRoute`), the interfaces and what they return (`Console`, `ConsoleLine`, `Uart`, `Gnss`, `Modem`, `Lines`, `OutputLine`, `LineEvent`, `SdCard`, `CardImage`, `Wifi`, `Bluetooth`, `Tap`, ...), the sources and models (`Replay`, `Real`, `Model`, `ReactiveModel`, `IdleFramedModel`, `Timed`, `GnssReceiver`, `ModemModel`, `ModemCommand`, `ModemRestart`, `Protocol`, `AT`, `PMTK`, `UBX`, `GNSS`), the build and the flash (`Build`, `FlashSnapshot`, `Namespaces`, `Typed`, `u8` to `i64`), the network and its services (`Internet`, `Broker`, `Message`, `MqttClient`, `TEST_CLIENT`, `Publication`, `HttpServer`, `HttpRequest`, `TcpConnection`, `CertificateAuthority`, ...), Bluetooth (`Air`, `SppPeer`, `BluetoothDevice`, `ChannelEvent`, `WrittenLine`, `Refusal`, `Pairing`, ...) and the exceptions (`NeverHappened`, `RunEnded`, `BoardOff`, `SourceError`, `BackendError`, `PeerError`, `AirError`, `ConnectionEnded`, `NotReachable`, ...). `esp32tl.__all__` lists them all |
+| `esp32tl` | Every class, exception and constant a test names: the board (`Board`, `Boot`, `UptimeZero`, `POWERON_RESET`, `DEEPSLEEP_RESET`, `RESET_REASONS`, `Condition`, `condition`), its profile (`BoardProfile`, `UartRoute`, `LineRoute`, `SdCardRoute`), the interfaces and what they return (`Console`, `ConsoleLine`, `Uart`, `Gnss`, `Modem`, `Lines`, `OutputLine`, `LineEvent`, `SdCard`, `CardImage`, `Wifi`, `Bluetooth`, `Tap`, ...), the sources and models (`Replay`, `Real`, `Model`, `ReactiveModel`, `IdleFramedModel`, `Timed`, `GnssReceiver`, `ModemModel`, `ModemCommand`, `ModemRestart`, `Protocol`, `AT`, `PMTK`, `UBX`, `GNSS`), the build and the flash (`Build`, `FlashSnapshot`, `Namespaces`, `Typed`, `u8` to `i64`), the network and its services (`Internet`, `Broker`, `Message`, `MqttClient`, `TEST_CLIENT`, `Publication`, `HttpServer`, `HttpRequest`, `TcpConnection`, `CertificateAuthority`, ...), Bluetooth (`Air`, `SppPeer`, `BluetoothDevice`, `ChannelEvent`, `WrittenLine`, `Refusal`, `Pairing`, `BlePeripheral`, `BleCentral`, `BleDevice`, `GattService`, `GattCharacteristic`, `Advertisement`, `LeConnection`, `Disconnection`, `GattRead`, `GattWrite`, `Notification`, `Subscription`, `LePairing`, `Discovery`, `DiscoveredService`, `DiscoveredCharacteristic`, `LeEvent`, ...) and the exceptions (`NeverHappened`, `RunEnded`, `BoardOff`, `SourceError`, `BackendError`, `PeerError`, `AirError`, `BleError`, `ConnectionEnded`, `NotReachable`, ...). `esp32tl.__all__` lists them all |
 | `esp32tl.units` | The units: `Duration`, `Speed`, `Distance`, `Rate`, `Heading`, `Position`, their constructors (`ms`, `seconds`, `km_h`, `m`, ...), the compass points and `about` ([units](models-user.md#units)) |
 | `esp32tl.recording` | The recording format: reading and writing a recording, and its `Recording`, `Header`, `Event` and `ClockSwitch` ([the recording format](../recording-format.md)) |
 
@@ -1366,11 +1366,14 @@ def test_joins_and_fetches_from_the_tests_server(board):
 ### The bt fixture
 
 `board.bluetooth`, also the `bt` fixture, is the chip's Bluetooth, which every board profile has, as
-every chip a profile may name does; the peers here are Bluetooth Classic devices, which a BLE-only
-chip (the ESP32-S3, C3 and C6) cannot reach: there `bt` forwards the firmware's HCI and taps it,
-and its host starts, but no device on the air talks to it yet ([issue #234](https://github.com/mateuszsikora/esp32-testing-library/issues/234)). On esp32sim it puts the firmware's controller on an air around the board,
-on the board's clock, where the test puts the devices the firmware talks to or finds, `SppPeer` and
-`BluetoothDevice`, and the run forwards the firmware's HCI to that controller:
+every chip a profile may name does. On the classic ESP32 the peers are Bluetooth Classic devices,
+`SppPeer` and `BluetoothDevice`; on a chip whose controller is LE only (the ESP32-S3 and the C3, the
+C6 once esp32sim takes its images) the firmware's controller is LE only too, of the profile's chip,
+and the peers are `BlePeripheral` and `BleCentral`, with their GATT databases, advertising and
+pairing ([Bluetooth LE](bluetooth-peer-user.md#bluetooth-le-bleperipheral-and-blecentral)). On
+esp32sim it puts the firmware's controller on an air around the board, on the board's clock, where
+the test puts the devices the firmware talks to or finds, and the run forwards the firmware's HCI to
+that controller:
 
 ```python
 from esp32tl import SppPeer

@@ -84,7 +84,12 @@ CHIP_IMAGES = [
         "nvs_reader",
         "http_request",
     )
-] + [("hello_world_psram", "esp32s3"), ("gatt_server", "esp32s3"), ("gatt_server", "esp32c3")]
+] + [("hello_world_psram", "esp32s3")]
+CHIP_IMAGES += [
+    (image, chip)
+    for chip in ("esp32s3", "esp32c3")
+    for image in ("gatt_server", "gatt_client", "gatt_security_server")
+]
 CHIP_IMAGES += [("hello_world_8mb", chip) for chip in ("esp32s3", "esp32c3", "esp32c6")]
 CHIP_IMAGES += [("console_repl_usb", chip) for chip in ("esp32s3", "esp32c3", "esp32c6")]
 CHIP_IMAGES += [

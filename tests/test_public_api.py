@@ -33,10 +33,14 @@ INTERFACE_SIDE = {name for name in vars(Interface) if not name.startswith("_")}
 # constructs the others.
 CONSTRUCTED = {
     esp32tl.Air,
+    esp32tl.BleCentral,
+    esp32tl.BlePeripheral,
     esp32tl.BluetoothDevice,
     esp32tl.Broker,
     esp32tl.CertificateAuthority,
     esp32tl.Condition,
+    esp32tl.GattCharacteristic,
+    esp32tl.GattService,
     esp32tl.IdleFramedModel,
     esp32tl.Model,
     esp32tl.Protocol,

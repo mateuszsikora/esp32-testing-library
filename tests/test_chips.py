@@ -171,7 +171,7 @@ def on_chip(chip: str, profile: str, banner: str) -> type:
                 self, board: Esp32Sim, bt: Bluetooth, console: Console, tmp_path: Path
             ) -> None:
                 # Bluedroid's own HCI goes through esp32sim's VHCI to the harness's controller,
-                # which answers every command it sends; there is no LE peer yet (#234)
+                # which answers every command it sends; tests/test_ble.py puts LE peers beside it
                 tap = bt.tap(tmp_path / "hci.btsnoop")
                 board.power_on()
                 console.expect_exact("GATTS_DEMO: Advertising start successfully", timeout=5)
