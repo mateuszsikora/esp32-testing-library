@@ -96,8 +96,12 @@ held. The port's rate does not change during the run.
 says `source: real` and `clock: wall`; its `in` events are at the source's stamps, without the bytes
 it dropped; its `out` events are at the firmware's times.
 
-Such a recording replays only on a route of a run on the wall clock, since a replay refuses another
-clock than its backend's ([replay](replay-user.md#what-a-replay-refuses)).
+As it is, such a recording replays only on a route of a run on the wall clock, since a replay
+refuses another clock than its backend's ([replay](replay-user.md#what-a-replay-refuses)).
+`esp32tl recording retime capture.jsonl capture-emulated.jsonl` puts it on the emulated clock: its
+`in` events at their times from the first, which goes in at 1 s, and none of its `out` events. A
+run on the emulator then replays what the device sent, faster than real time and the same way every
+run ([replaying what a real receiver sent](replay-user.md#replaying-what-a-real-receiver-sent)).
 
 ## What the report says
 

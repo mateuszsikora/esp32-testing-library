@@ -489,6 +489,21 @@ that references to its number keep their meaning.
     resyncs, and the ten emulated seconds take less than ten wall seconds: nothing paced the run
     to wall time.
     `tests/test_nmea_reader.py::test_time_is_emulated`
+- **265.** What a real device sent replays on the emulated clock once converted, and the same way
+    every run: `retime` keeps a wall-clock recording's `in` events at their spacing from the first,
+    which goes in at the start, drops its `out` events and refuses a recording with a time on
+    another clock; `from_nmea` makes one event an epoch, an epoch a period apart, and refuses a log
+    with a bad checksum, a line that is no sentence, times that skip or go back, or an epoch that
+    does not fit its period at the route's baud, naming the line. A capture retimed replays into
+    `nmea_reader` with the fixes the capture's run printed, the same in two runs, and the committed
+    log converts to the committed recording byte for byte.
+    `tests/test_recording.py::test_retime_keeps_the_in_events_from_the_first_at_the_start_and_drops_the_out_ones`,
+    `tests/test_recording.py::test_retime_refuses`,
+    `tests/test_recording.py::test_a_log_is_an_epoch_an_event_a_period_apart`,
+    `tests/test_recording.py::test_a_malformed_log_is_refused_with_its_line`,
+    `tests/test_recording.py::test_the_committed_log_converts_to_the_committed_recording`,
+    `tests/test_real_source.py::test_a_capture_converted_replays_on_the_emulated_clock_the_same_every_run`,
+    `tests/test_nmea_reader.py::test_a_real_receiver_s_log_converted_gives_its_fixes`
 - **52.** A tap records every byte that crossed its route, `out` of the ESP32 and `in` from whatever is
     at the far end, at the time it crossed, and writes it once the run has ended as a recording in
     time order that reads back: a tap of a replay holds the replay's events as they were recorded.

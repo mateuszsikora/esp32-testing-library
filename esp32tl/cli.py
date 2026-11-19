@@ -1,5 +1,7 @@
 """The `esp32tl` command: `run` and `replay` run an app on the esp32sim backend outside pytest
-(plan M1), its console on stdout; `record` comes with M2.
+(plan M1), its console on stdout; `record` comes with M2. `recording retime` and `recording nmea`
+convert what a real device sent, a wall-clock recording or a raw NMEA log, into a recording a run
+on the emulated clock replays (`docs/recording-format.md`).
 
 A run is the backend's without pytest-embedded: the runner is spawned with `--board socket:PATH`,
 its stdout and stderr are the command's own, and a `BoardLink` serves the socket in a thread. A
@@ -15,6 +17,7 @@ connected; a second Ctrl-C kills it. The runner is in a session of its own, so t
 import argparse
 import contextlib
 import math
+import os
 import shutil
 import signal
 import socket
@@ -24,18 +27,19 @@ import threading
 from collections.abc import Sequence
 from pathlib import Path
 
-from esp32tl import __version__, boards, runtime
+from esp32tl import __version__, boards, recording, runtime
 from esp32tl.backends import esp32sim
 from esp32tl.backends.esp32sim import BackendError
 from esp32tl.boards import DEFAULT_PROFILE, ProfileError
 from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import BoardLink
-from esp32tl.recording import EMULATED, RecordingError
+from esp32tl.recording import EMULATED, ENDS, RecordingError
 from esp32tl.sources.replay import ReplayError
 
 # What the command exits with when it cannot start the run, as the runner does for an input it
-# cannot load; and when the user ended the run with Ctrl-C, as a shell reports SIGINT.
+# cannot load, or cannot convert a recording; and when the user ended the run with Ctrl-C, as a
+# shell reports SIGINT.
 CANNOT_START = 2
 INTERRUPTED = 128 + signal.SIGINT
 
@@ -70,10 +74,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     replay_parser.add_argument(
         "--recording", required=True, type=Path, help="the recording to replay"
     )
+    recording_arguments(commands)
     args = parser.parse_args(argv)
     if args.command is None:
         parser.print_help()
         return 0
+    if args.command == "recording":
+        return convert(args)
     if args.command == "runtime":
         try:
             print(runtime.prepare())
@@ -113,6 +120,120 @@ def run_arguments(parser: argparse.ArgumentParser) -> None:
         metavar="S",
         help=f"end the run after S emulated seconds (default {esp32sim.MAX_SECONDS})",
     )
+
+
+def recording_arguments(commands: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
+    parser = commands.add_parser(
+        "recording",
+        help="convert what a real device sent into a recording the emulator replays",
+        description="Convert what a real device sent into a recording a run on the emulated clock"
+        " replays.",
+    )
+    conversions = parser.add_subparsers(dest="conversion", metavar="CONVERSION", required=True)
+    retime = conversions.add_parser(
+        "retime",
+        help="put a recording on the wall clock on the emulated clock",
+        description="Put a recording on the wall clock, as gnss.tap writes beside gnss.real, on"
+        " the emulated clock: its in events at their times from the first, none of its out"
+        " events.",
+    )
+    nmea = conversions.add_parser(
+        "nmea",
+        help="turn a raw NMEA log into a recording",
+        description="Turn a raw NMEA log, a receiver's sentences one a line, into a recording on"
+        " the emulated clock: one event an epoch, an epoch a period apart.",
+    )
+    for conversion in (retime, nmea):
+        conversion.add_argument("input", type=Path, metavar="IN", help="the file to convert")
+        conversion.add_argument("output", type=Path, metavar="OUT", help="the recording to write")
+        conversion.add_argument(
+            "--start",
+            type=at_least_zero,
+            default=recording.START_NS / recording.NS_PER_S,
+            metavar="S",
+            help="the emulated time of the first event, in seconds (default 1)",
+        )
+    retime.add_argument("--end", choices=ENDS, help="the recording's end (default the original's)")
+    nmea.add_argument(
+        "--board",
+        default=DEFAULT_PROFILE,
+        help=f"the board profile the recording is for (default {DEFAULT_PROFILE})",
+    )
+    nmea.add_argument(
+        "--interface",
+        default="uart.gnss",
+        help="the UART route of the profile it replays into, as gnss or uart.gnss (default"
+        " uart.gnss); its baud is the one each epoch must fit in",
+    )
+    nmea.add_argument(
+        "--period",
+        type=positive,
+        default=1.0,
+        metavar="S",
+        help="the receiver's time between two epochs, in seconds (default 1)",
+    )
+    nmea.add_argument(
+        "--end", choices=ENDS, default="hold", help="the recording's end (default hold)"
+    )
+
+
+def convert(args: argparse.Namespace) -> int:
+    """Runs `esp32tl recording CONVERSION`: writes the converted recording, or says why not and
+    returns CANNOT_START."""
+    start_ns = round(args.start * recording.NS_PER_S)
+    try:
+        if args.conversion == "retime":
+            converted = recording.retime(
+                recording.read(args.input), start_ns=start_ns, end=args.end
+            )
+        else:
+            interface = args.interface if "." in args.interface else f"uart.{args.interface}"
+            profile = boards.profile(args.board)
+            wire = esp32sim.route_wire(profile, interface)
+            converted = recording.read_nmea(
+                args.input,
+                board=profile.name,
+                interface=interface,
+                baud=wire.baud,
+                period_ns=round(args.period * recording.NS_PER_S),
+                start_ns=start_ns,
+                end=args.end,
+            )
+    except (ProfileError, BackendError, RecordingError) as error:
+        print(f"esp32tl: {error}", file=sys.stderr)
+        return CANNOT_START
+    try:
+        replace(args.output, recording.dumps(converted))
+    except OSError as error:
+        print(f"esp32tl: {error}", file=sys.stderr)
+        return CANNOT_START
+    return 0
+
+
+def replace(path: Path, text: str) -> None:
+    """Writes `text` to `path` through a file beside it, which replaces `path` only once it is
+    written whole: a write that fails, out of space for one, leaves `path` as it was, also when
+    it is the input. The file is made with the mode `path` would get, the umask's."""
+    partial = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    descriptor = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+            file.write(text)
+        os.replace(partial, path)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+
+
+def at_least_zero(text: str) -> float:
+    """A finite number of seconds from 0."""
+    try:
+        value = float(text)
+    except ValueError:
+        value = math.nan
+    if not (math.isfinite(value) and value >= 0):
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number of seconds from 0")
+    return value
 
 
 def positive(text: str) -> float:

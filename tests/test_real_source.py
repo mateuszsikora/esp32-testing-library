@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 import serial
+from test_cli import NMEA_READER as NMEA_READER_APP
+from test_cli import esp32tl, finished
 
 from esp32tl import recording
 from esp32tl.backends import esp32sim
@@ -816,6 +818,77 @@ def test_the_firmware_reads_the_device_and_the_run_follows_wall_time(
     assert f" bytes in, 0 out, {dropped} dropped" in report
     count = f"{stats.rt_resyncs} resync{'' if stats.rt_resyncs == 1 else 's'}"
     assert f"{count}: stretches of wall time the guest did not see" in report
+
+
+@NMEA_READER
+def test_a_capture_converted_replays_on_the_emulated_clock_the_same_every_run(
+    board: Esp32Sim, gnss: Gnss, console: Console, device: Device, tmp_path: Path
+) -> None:
+    """What `gnss.tap` wrote beside `gnss.real`, put on the emulated clock by `esp32tl recording
+    retime`, replays into nmea_reader on an emulated run, `esp32tl replay`, with the fixes the
+    capture holds, and two such runs print the same console."""
+    gnss.real(device.port)
+    tap = gnss.tap(tmp_path / "capture.jsonl")
+    board.power_on()
+    console.expect_exact(FIRST_LINE)
+    # Each epoch said again until the firmware has printed its fix: a stall of the host costs
+    # bytes, and a sentence it has heard once prints once.
+    for epoch, fix in CAPTURED:
+        heard = threading.Event()
+        writer = device.repeat(epoch, heard)
+        console.expect_exact(fix, timeout=10)
+        heard.set()
+        writer.join()
+    board.wait(seconds(0.2))
+    board.close()
+    printed = [line.text for line in console.lines(r"^fix")]
+    assert printed == [fix for _, fix in CAPTURED]
+    converted = tmp_path / "converted.jsonl"
+    code, _, err = finished(esp32tl("recording", "retime", str(tap.path), str(converted), apps=()))
+    assert code == 0, err
+    made = recording.read(converted)
+    assert made.header.clock == recording.EMULATED
+    assert made.header.source == "real"
+    assert made.events[0].t == recording.START_NS
+    assert {event.dir for event in made.events} == {"in"}
+    end = made.events[-1].t / 1e9 + 1
+    replay = ("replay", "--app", "firmware/nmea_reader", "--interface", "gnss")
+    runs = [
+        finished(
+            esp32tl(
+                *replay,
+                *("--recording", str(converted), "--max-seconds", f"{end:.3f}"),
+                apps=(NMEA_READER_APP,),
+            )
+        )
+        for _ in range(2)
+    ]
+    assert [code for code, _, _ in runs] == [0, 0], runs[0][2]
+    assert runs[0][1] == runs[1][1]
+    replayed = [line.rstrip("\r") for line in runs[0][1].splitlines()]
+    assert [line for line in replayed if line.startswith("fix")] == printed
+
+
+def epoch(time_of_day: str, lat: str, lon: str) -> bytes:
+    """A GGA and an RMC of one epoch, at `time_of_day`, north and east."""
+    return nmea(f"GPGGA,{time_of_day},{lat},N,{lon},E,1,08,0.9,545.4,M,46.9,M,,") + nmea(
+        f"GPRMC,{time_of_day},A,{lat},N,{lon},E,0.2,,191126,,,A"
+    )
+
+
+def nmea(body: str) -> bytes:
+    check = 0
+    for character in body.encode("ascii"):
+        check ^= character
+    return f"${body}*{check:02X}\r\n".encode("ascii")
+
+
+# What the device of the capture says, an epoch at a time, and the fix nmea_reader prints of it.
+CAPTURED = [
+    (epoch("120000.00", "4807.0380", "01131.0000"), "fix acquired lat=48.117300 lon=11.516667"),
+    (epoch("120001.00", "4807.0400", "01131.0020"), "fix lat=48.117333 lon=11.516700"),
+    (epoch("120002.00", "4807.0420", "01131.0010"), "fix lat=48.117367 lon=11.516683"),
+]
 
 
 @NMEA_READER

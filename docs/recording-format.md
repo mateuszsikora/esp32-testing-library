@@ -3,12 +3,13 @@
 A recording is what crossed one interface's wire, and when: the bytes a GNSS receiver sent the
 ESP32, or a modem's answers and the requests they answered. esp32tl replays a recording into the
 firmware ([replay](features/replay-user.md)), and a tap writes one of what crossed a route during a
-run ([taps](features/run-report-user.md#tapping-a-route));
-`scripts/generate-gnss-recordings.py` writes the committed ones in `recordings/`
-([validation firmware](features/validation-firmware-user.md#the-gnss-recordings)).
-This document is the format; `esp32tl/recording.py` reads and writes it. An HCI tap, of the
-firmware's Bluetooth, is a btsnoop file with this format's header beside it
-([HCI taps](#hci-taps)).
+run ([taps](features/run-report-user.md#tapping-a-route)); `scripts/generate-gnss-recordings.py`
+writes the generated ones in `recordings/` ([validation
+firmware](features/validation-firmware-user.md#the-gnss-recordings)), and `esp32tl recording`
+converts what a real device sent, a recording on the wall clock or a raw NMEA log, into one on the
+emulated clock ([Converting what a real device sent](#converting-what-a-real-device-sent)). This
+document is the format; `esp32tl/recording.py` reads and writes it. An HCI tap, of the firmware's
+Bluetooth, is a btsnoop file with this format's header beside it ([HCI taps](#hci-taps)).
 
 ## The file
 
@@ -36,9 +37,10 @@ clock switch, in the order they happened.
 | `tools` | object of strings | no, `{}` | The versions of the tools that made it, by name: `esp32tl`, `esp32sim` (the full revision the runner's `hello` names) |
 | `created` | string | yes | When it was made, in UTC: `YYYY-MM-DDTHH:MM:SSZ`, fractions of a second allowed (`.5Z`), nothing else |
 
-The header may carry fields of its own beyond these, as the generated recordings carry
-`generator` (script, seed, baud). They are read, kept as they are, and written back after the
-format's own fields; a replay ignores them. A field of this table is never an extra.
+The header may carry fields of its own beyond these, as the generated recordings carry `generator`
+(script, seed, baud) and a converted one carries `converted` ([Converting what a real device
+sent](#converting-what-a-real-device-sent)). They are read, kept as they are, and written back after
+the format's own fields; a replay ignores them. A field of this table is never an extra.
 
 Console taps use `interface: console`, `source: none` on esp32sim or `real` on serial, and
 `out` events for guest output and `in` events for test writes. Input timestamps are the board
@@ -120,6 +122,101 @@ clock other than its backend's ([replay](features/replay-user.md#what-a-replay-r
 | `write_btsnoop(path, recording)`, `dumps_btsnoop(recording)` | An HCI tap: the btsnoop file at `path` and its sidecar; `dumps_btsnoop` gives the file's bytes and the sidecar's text |
 | `read_btsnoop(path)`, `loads_btsnoop(data, header, name="<btsnoop>")` | The `Recording` in a btsnoop file and its sidecar, or in their contents |
 | `sidecar(path)` | The sidecar of the btsnoop file at `path`: `path` with `.json` added |
+| `retime(recording, *, start_ns=START_NS, end=None)` | A recording on the wall clock on the emulated clock ([below](#a-recording-on-the-wall-clock)) |
+| `from_nmea(log, *, board, interface, baud, period_ns=1_000_000_000, start_ns=START_NS, created=None, source="real", end="hold", name="<nmea>")`, `read_nmea(path, **options)` | A raw NMEA log, `bytes` or `str`, or the one in a file, as a recording ([below](#a-raw-nmea-log)); `options` are `from_nmea`'s but `name`, which is `path` |
+| `START_NS`, `NS_PER_S`, `CONVERTED` | `1_000_000_000`, the time of a converted recording's first event unless asked otherwise; `1_000_000_000`; `"converted"`, the header's field a conversion adds |
+
+## Converting what a real device sent
+
+A replay refuses a recording on another clock than its run's
+([replay](features/replay-user.md#what-a-replay-refuses)), and a raw NMEA log is no recording at
+all. Two conversions make either a recording on the emulated clock, which a run on the emulator
+replays the same way every time ([replaying what a real receiver
+sent](features/replay-user.md#replaying-what-a-real-receiver-sent)). Both are also commands,
+`esp32tl recording retime` and `esp32tl recording nmea` ([the `esp32tl`
+command](features/cli-user.md#converting-what-a-real-device-sent)). Both put the first event at 1 s
+by default (`START_NS`), after `nmea_reader` has configured its UART, as the generated recordings
+do, and both add a field to the header, `converted`, of what was done. The format's version stays 1.
+
+### A recording on the wall clock
+
+`retime(recording, start_ns=START_NS, end=None)` takes a recording all of whose times are on the
+`wall` clock, such as the tap of a route with a [real source](features/real-source-user.md), and
+gives:
+
+- its `in` events, each at its time less the first `in` event's, plus `start_ns`: the spacing of the
+  events, and the first at `start_ns`. An event of a real source's tap is what one turn handed over,
+  stamped with one time, so the bytes within it keep no spacing of their own. A `wall` time has no
+  fixed origin, and a real source's tap leaves out what the device sent before the run's first turn,
+  so the times start where the first byte came, not at the original's 0;
+- none of its `out` events: what the firmware sent the device. A recording with requests answers
+  the firmware's commands by [matching](features/matching-user.md), and a capture's commands would
+  go unmatched there. The timing of the device's answers to commands is lost; a stream of NMEA
+  sentences has none;
+- the original's header, `board`, `interface`, `source`, `end`, `app_sha256`, `tools`, `created`
+  and its own fields, on the `emulated-fifo-write` clock, its `end` the one given unless `end` is
+  `None`, with
+  `"converted": {"from": "wall", "first_t": T, "start_ns": S, "dropped_out": N}`: the first `in`
+  event's original time, the start, and the `out` events left out.
+
+The same recording gives the same bytes. Refused, with `RecordingError`:
+
+| Message | Cause |
+|---|---|
+| `the recording is on the emulated-fifo-write clock already: a replay takes it as it is` | Every time is on the emulated clock |
+| `the recording has times on the emulated-fifo-write and wall clock: retime converts one on the wall clock alone` | A clock switch |
+| `the recording has no in event: nothing to replay` | Only `out` events, or none |
+
+### A raw NMEA log
+
+`from_nmea(log, board=..., interface=..., baud=...)` takes what a receiver sent as a serial
+terminal, `cat` or a vendor tool saves it: NMEA 0183 sentences, one a line.
+
+- A line is a sentence, `$`, printable ASCII, then `*` and the checksum, two hex digits, upper or
+  lower case, which must be the XOR of the characters between `$` and `*`. It ends with `\r\n` or
+  `\n`; spaces and tabs after the sentence, and UTF-8's byte order mark before the first line, are
+  left out. Blank lines and lines starting with `#`, comments as gpsd's logs carry them, are
+  skipped. Anything else, binary UBX among it, is refused with its line.
+- An epoch starts at an RMC or a GGA, of any talker (`$GPRMC`, `$GNGGA`), whose time is not the
+  current epoch's, or whose address the current epoch already has. An RMC and a GGA of one time are
+  one epoch, with the sentences without a time (GSV, GSA, VTG, GLL, TXT) after them. The second rule
+  splits the epochs of a cold start, whose RMC and GGA have an empty time. Times compare by their
+  value, so `120000.000` and `120000.00` are one time. A proprietary sentence, whose address starts
+  with `P`, is no RMC or GGA: Garmin's `$PGRMC` is a sentence without a time.
+- The sentences before the first RMC or GGA are the end of an epoch the log came in on: an epoch of
+  their own.
+- Epoch k is one event at `start_ns + k * period_ns`, its sentences back to back, each ended by
+  `\r\n` whatever the log's line ending was. A replay sends an event's bytes at the route's baud
+  from its time.
+- Two epochs that both have a time are as many periods apart in the log's times as they are in
+  epochs: a log that skips epochs, goes back, or comes from a receiver at another rate than
+  `period_ns` is refused. A time just after midnight is after one just before it.
+- Every epoch must fit in its period at `baud`, ten bits a byte (8N1): a log saved at 115200 baud
+  does not play at 9600.
+- The header: `board` and `interface` as given, `source` `real` unless given, `clock`
+  `emulated-fifo-write`, `end` `hold` unless given, `app_sha256` `null`, `tools` `{}`. `created` is
+  given, or else the date and time of the first RMC that has both, or else the time of the
+  conversion. And
+  `"converted": {"from": "nmea", "baud": B, "period_ns": P, "start_ns": S}`.
+
+`read_nmea(path, ...)` reads the file at `path`, the file then named in the errors. Refused, with
+`RecordingError`, `{file}:{line}: {what}` or `{file}: {what}`; `{sentence}` is the line's first 40
+characters, a byte outside ASCII as `\xb5`:
+
+| `{what}` | Cause |
+|---|---|
+| `{sentence} is not an NMEA sentence: a sentence starts with $` | A line that is not a sentence, binary data among them |
+| `{sentence} is not an NMEA sentence: a sentence is printable ASCII` | A control character or a byte outside ASCII in it |
+| `{sentence} has no checksum: a sentence ends with * and two hex digits` | |
+| `{address} has no time field: an RMC or a GGA gives one, empty when the receiver has no time` | An RMC or a GGA with no field after its address, as `$GPRMC*4B`; an empty one, `$GPRMC,,V,…`, is a cold start's |
+| `{sentence}: checksum {hh}, and the sentence's is {HH}` | A checksum that does not match |
+| `time {value} is not hhmmss or hhmmss.ss` | An RMC's or a GGA's time field |
+| `time {t} is not after {t0}, the time on line {n}: the log goes back` | An epoch's time at or before the latest one's |
+| `time {t} is {s} s after {t0} on line {n}, not one period of {p} s: the log skips epochs, or the receiver sends at another rate` | `not {k} periods` when epochs without a time come between |
+| `the epoch from this line is {n} bytes, {s} s at {baud} baud, longer than its period of {p} s` | |
+| `no RMC or GGA sentence: the epochs cannot be told apart`, after `{file}: ` | |
+| `no NMEA sentence: nothing to replay`, after `{file}: ` | Comments and blank lines only, or an empty file |
+| the `OSError`'s text, after `{file}: ` | `read_nmea` cannot read the file |
 
 ## Errors
 
@@ -221,12 +318,22 @@ btsnoop file, or the sidecar for an error in the sidecar.
 
 ## Tests
 
-`tests/test_recording.py`: every committed recording reads, with the generator's header fields,
-and writes back byte for byte; the optional header fields' defaults; a clock switch putting the
-events after it on the new clock, and round-tripping; `Event.since` within a clock and its
-`ClockError` across; `write` then `read` through a file; each error of the table above (but the
-non-UTF-8 file) with its line; the file named in the errors; and a `Recording` and a `Header`
-built in code checked as a read one.
+`tests/test_recording.py`: every committed recording reads and writes back byte for byte, the
+generated ones with the generator's header fields; the optional header fields' defaults; a clock
+switch putting the events after it on the new clock, and round-tripping; `Event.since` within a
+clock and its `ClockError` across; `write` then `read` through a file; each error of the table above
+(but the non-UTF-8 file) with its line; the file named in the errors; and a `Recording` and a
+`Header` built in code checked as a read one.
+
+The conversions, in the same file: `retime` keeping the `in` events from the first at the start,
+dropping the `out` ones, and keeping the header but for an `end` given; each of its refusals;
+`from_nmea` on a cold start, a log that came in mid-epoch, LF endings, comments and blank lines, a
+byte order mark and spaces after a sentence, an RMC and a GGA of one time given with different
+decimals, Garmin's `$PGRMC`, a 10 Hz log across midnight, epochs without a time between two with
+one; each error of the NMEA table above with its line; and `recordings/gnss-neo-m8n.jsonl` what
+`read_nmea` makes of `recordings/gnss-neo-m8n.nmea`, byte for byte. `tests/test_real_source.py`
+replays what `retime` made of a capture, and `tests/test_nmea_reader.py` the converted log
+([replay](features/replay-user.md#replaying-what-a-real-receiver-sent)).
 
 HCI taps, in the same file: a recording written as btsnoop and read back whole, the sidecar the
 header's line, the file's header and first record byte for byte; the file as Bumble's `BtSnooper`
