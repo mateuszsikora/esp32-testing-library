@@ -305,7 +305,7 @@ def test_every_condition_has_the_shape_of_its_kind() -> None:
     )
     wrong: list[str] = []
     for cls, name, kind, parameters in found:
-        where = f"{cls.__qualname__}.{name}, a {kind}"
+        where = f"{cls.__qualname__}.{name}, {'an' if kind == 'attribute' else 'a'} {kind}"
         if name.startswith("next_"):
             if kind != "method":
                 wrong.append(f"{where}: a next_* condition is a method")
@@ -317,7 +317,7 @@ def test_every_condition_has_the_shape_of_its_kind() -> None:
         else:
             if parameters and kind != "method":
                 wrong.append(f"{where}: a state condition with an argument is a method")
-            if not parameters and kind == "method":
+            if not parameters and kind != "property":
                 wrong.append(f"{where}: a state condition with no argument is a property")
             if (cls, name) in HAPPENED and name.startswith("is_"):
                 wrong.append(f"{where}: what has happened is named without is_")
