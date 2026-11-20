@@ -532,6 +532,8 @@ use `make setup` in an editable checkout.
 - A PlatformIO build needs `firmware.bin` and either `firmware.factory.bin` or `bootloader.bin` and
   `partitions.bin`, with `firmware.elf` for the `bt` fixture; a job that tests it elsewhere hands
   over those files of `.pio/build/<env>/` ([builds](../features/builds-user.md)).
+- A firmware built for several chips runs the suite once per chip, in a matrix job per build and
+  board profile ([one suite on several chips](../features/pytest-plugin-user.md#one-suite-on-several-chips)).
 
 What to cache, and on what key:
 

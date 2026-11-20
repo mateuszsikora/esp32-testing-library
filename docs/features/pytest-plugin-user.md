@@ -198,6 +198,170 @@ See [read the flash of a run](flash-contents-user.md#read-the-flash-of-a-run).
 What the backend needs besides the build, the runner and the ROM ELF, is in
 [the esp32sim backend](esp32sim-backend-user.md#what-it-needs).
 
+### One suite on several chips
+
+A firmware built for several chips, one PlatformIO environment or ESP-IDF build directory per
+chip, runs its suite once per chip: one pytest session for each pair of a build and a board
+profile, with the [project defaults](#project-defaults) overridden by `-o`. esp32tl has no targets
+of its own: no option lists the chips, and a test id does not name one
+([why](../decisions/harness.md#one-suite-runs-on-several-chips-as-one-pytest-session-per-build-and-profile)).
+
+The PlatformIO project of [writing tests](../guides/writing-tests.md#where-the-tests-go), with
+a second environment for an ESP32-S3 and a profile file per chip, `tests/boards/esp32.toml` and
+`tests/boards/esp32-s3.toml`:
+
+```ini
+; platformio.ini
+[env:esp32]
+platform = espressif32
+board = esp32dev
+framework = espidf
+
+[env:esp32-s3]
+platform = espressif32
+board = esp32-s3-devkitc-1
+framework = espidf
+```
+
+```toml
+# pyproject.toml, beside platformio.ini and tests/
+[tool.pytest.ini_options]
+addopts = ["-ra"]
+testpaths = ["tests"]
+esp32tl_app_path = "."
+esp32tl_build_dir = ".pio/build/esp32"
+esp32tl_board_profile_path = "tests/boards/esp32.toml"
+```
+
+In GitHub Actions, a matrix job per chip:
+
+```yaml
+jobs:
+  test:
+    name: test (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: esp32
+            env: esp32
+            # Relative to the app, esp32tl_app_path, here the project's directory.
+            build: .pio/build/esp32
+            # Relative to the directory of pyproject.toml, the configuration file.
+            profile: tests/boards/esp32.toml
+          - name: esp32-s3
+            env: esp32-s3
+            build: .pio/build/esp32-s3
+            profile: tests/boards/esp32-s3.toml
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      # mtools builds the SD card's image, for the tests that use one.
+      - run: sudo apt-get install -y mtools
+      - run: python -m pip install esp32tl platformio
+      - run: esp32tl runtime prepare
+      - run: pio run -e ${{ matrix.env }}
+      - run: >-
+          pytest tests
+          -o esp32tl_build_dir=${{ matrix.build }}
+          -o esp32tl_board_profile_path=${{ matrix.profile }}
+          --junitxml=junit-${{ matrix.name }}.xml
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: junit-${{ matrix.name }}
+          path: junit-${{ matrix.name }}.xml
+```
+
+The two paths have different bases, as in the configuration file:
+
+- `esp32tl_build_dir` is relative to the app. With `esp32tl_app_path = "."` that is the
+  directory of `pyproject.toml`. Without `esp32tl_app_path` the app is each test file's
+  directory, and `.pio/build/esp32-s3` names `tests/.pio/build/esp32-s3`, which holds no build.
+- `esp32tl_board_profile_path` is relative to the configuration file's directory, whether it comes
+  from the file or from `-o`.
+
+Neither is relative to the directory pytest starts in. An absolute path avoids the question:
+`-o esp32tl_build_dir=$GITHUB_WORKSPACE/.pio/build/esp32-s3`.
+
+`-o` sets the project defaults, and a marker still wins over them for its test, class or module
+([the selection, closest first](#project-defaults)). A test with an `app_path` marker runs the
+marker's app and its build, the marker's `build_dir` or that app's `build/`, in every job, whatever
+`esp32tl_build_dir` the job sets; one with a `board_profile` marker runs the marker's profile, and
+skips what that profile's chip lacks, whatever `esp32tl_board_profile_path` the job sets. A
+marker can so select another build or profile than the job names, and with them another chip; a
+build and a profile of different chips, one from a marker and one from the job, give the test an
+error at setup, as below. Keep both markers out of the tests that follow the matrix.
+
+The board profile's `chip` is the chip esp32sim runs, and the build is checked against it. A
+matrix entry whose build and profile name different chips gives each test an error at setup, as
+`esp32sim: /path/to/project/.pio/build/esp32-s3 is built for esp32s3; the board's chip is esp32: build for esp32 or choose a board profile with that chip`
+([when the build cannot be loaded](builds-user.md#when-the-build-cannot-be-loaded)): a wrong pair
+fails rather than being skipped.
+
+A job may take a bundled profile instead of a file, as `esp32-s3-devkitc`. When `pyproject.toml`
+sets `esp32tl_board_profile_path`, the job empties it as it names the profile, since an empty value
+is no value:
+
+```sh
+pytest tests -o esp32tl_build_dir=.pio/build/esp32-s3 \
+             -o esp32tl_board_profile=esp32-s3-devkitc -o esp32tl_board_profile_path=
+```
+
+Without `-o esp32tl_board_profile_path=`, both options are set and pytest stops before collection:
+`ERROR: esp32tl_board_profile and esp32tl_board_profile_path are both set: set the bundled name or the file`.
+
+Each job writes its own JUnit file and uploads it under its own name, so the reports of two chips
+never mix: the test ids are the same in both, and the job's name and the file's say which chip
+ran. `-o junit_suite_name=${{ matrix.name }}`, a pytest option, also puts the name in the
+report's `testsuite` element. Each test's run report starts with the build it loaded, as
+`build: /path/to/project/.pio/build/esp32-s3 (PlatformIO for esp32s3); app_sha256 {sha256}`, and
+names its board profile by the profile's `name` on the next line, as
+`board my-s3-board, watching …`, so a test that ran another build or profile than its matrix entry
+names shows it
+([the link's report](esp32sim-backend-user.md#the-links-report)).
+
+Within one job, `-n auto` runs the session's tests in parallel as usual, with pytest-xdist
+installed beside esp32tl ([parallel execution](#parallel-execution)). On the serial backend each job is one board on its own `--port`, on a runner the board is attached
+to; the chips that backend runs, and the profiles it refuses, are in
+[builds and flashing](serial-backend-user.md#builds-and-flashing).
+
+A test that asks for what esp32sim does not model on a chip, an SD card on the S3 for example, is
+skipped in that chip's job with the reason
+([chips other than the classic ESP32](esp32sim-backend-user.md#chips-other-than-the-classic-esp32)),
+and runs in the others. `-ra`, in `addopts` above, lists each job's skips with their reasons, so
+a job's skip list is its chip's. Two gaps that table names fail instead of skipping, since nothing
+asks for them before the firmware reaches them: deep sleep on the S3, C3 and C6, where
+`board.wait_for_wake` raises when its time is up, and Bluetooth on the C6 with an image built with
+ESP-IDF v5.3.6, which fails at `board.power_on()`.
+
+On your machine, the same with a shell loop, which fails when any chip's session fails:
+
+```sh
+status=0
+for chip in esp32 esp32-s3; do
+  pio run -e "$chip" || { status=1; continue; }
+  pytest tests -o esp32tl_build_dir=".pio/build/$chip" \
+               -o esp32tl_board_profile_path="tests/boards/$chip.toml" \
+               --junitxml="junit-$chip.xml" || status=1
+done
+test "$status" -eq 0
+```
+
+or with pytest's `PYTEST_ADDOPTS`, which pytest reads as options before the command line's, for a
+shell that stays on one chip:
+
+```sh
+export PYTEST_ADDOPTS="-o esp32tl_build_dir=.pio/build/esp32-s3 -o esp32tl_board_profile_path=tests/boards/esp32-s3.toml"
+pytest tests
+pytest tests/test_console.py
+```
+
+A `-o` on the command line comes after `PYTEST_ADDOPTS` and wins over it for the same option.
+
 ## One board and its interfaces
 
 Annotate tests with `from esp32tl import Board` and request just `board: Board`:
