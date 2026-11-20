@@ -291,9 +291,10 @@ Neither is relative to the directory pytest starts in. An absolute path avoids t
 ([the selection, closest first](#project-defaults)). A test with an `app_path` marker runs the
 marker's app and its build, the marker's `build_dir` or that app's `build/`, in every job, whatever
 `esp32tl_build_dir` the job sets; one with a `board_profile` marker runs the marker's profile, and
-skips what that profile's chip lacks, whatever `esp32tl_board_profile_path` the job sets. Such a
-test does not run the chip its job is named after. Keep both markers out of the tests that follow
-the matrix.
+skips what that profile's chip lacks, whatever `esp32tl_board_profile_path` the job sets. A
+marker can so select another build or profile than the job names, and with them another chip; a
+build and a profile of different chips, one from a marker and one from the job, give the test an
+error at setup, as below. Keep both markers out of the tests that follow the matrix.
 
 The board profile's `chip` is the chip esp32sim runs, and the build is checked against it. A
 matrix entry whose build and profile name different chips gives each test an error at setup, as
