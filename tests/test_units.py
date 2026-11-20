@@ -105,8 +105,23 @@ def test_quantities_of_different_kinds_do_not_mix() -> None:
     for bad in (math.inf, math.nan):
         with pytest.raises(ValueError, match="is not a finite number"):
             km(bad)
-    with pytest.raises(TypeError, match="is not a whole number of nanoseconds"):
-        Duration(1.5)  # type: ignore[arg-type]
+
+
+def test_a_duration_made_from_a_duration_says_it_is_one_already() -> None:
+    with pytest.raises(TypeError) as wrapped:
+        Duration(seconds(3.7116536))  # type: ignore[arg-type]
+    assert str(wrapped.value) == (
+        "Duration: seconds(3.7116536) is already a Duration; use it as it is"
+    )
+    with pytest.raises(TypeError) as fraction:
+        Duration(3.5)  # type: ignore[arg-type]
+    assert str(fraction.value) == "Duration: 3.5 is not a whole number of nanoseconds"
+    for unit in (ms, seconds, minutes, hours):
+        with pytest.raises(TypeError) as scaled:
+            unit(seconds(1))  # type: ignore[arg-type]
+        assert str(scaled.value) == (
+            f"{unit.__name__}: seconds(1) is already a Duration; use it as it is"
+        )
 
 
 def test_headings_are_degrees_clockwise_from_north() -> None:

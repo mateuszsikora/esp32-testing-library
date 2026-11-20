@@ -52,6 +52,8 @@ class Duration:
     ns: int
 
     def __post_init__(self) -> None:
+        if isinstance(self.ns, Duration):
+            raise TypeError(_already_a_duration(self.ns, "Duration"))
         if isinstance(self.ns, bool) or not isinstance(self.ns, int):
             raise TypeError(f"Duration: {self.ns!r} is not a whole number of nanoseconds")
 
@@ -105,7 +107,15 @@ class Duration:
         return f"seconds({str(self)[:-2]})"
 
 
+def _already_a_duration(value: Duration, what: str) -> str:
+    """What a `Duration` made from a `Duration` says: the mistake of a test that wraps a time it
+    already has, as `Duration(line.at)`."""
+    return f"{what}: {value!r} is already a Duration; use it as it is"
+
+
 def _duration(value: float, ns_per_unit: int, unit: str) -> Duration:
+    if isinstance(value, Duration):
+        raise TypeError(_already_a_duration(value, unit))
     value = number(value, unit)
     if isinstance(value, int):
         return Duration(value * ns_per_unit)

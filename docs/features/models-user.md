@@ -20,8 +20,12 @@ Everything below is in `esp32tl.units`.
 | `Position` | `Position(lat, lon)`, decimal degrees, north and east positive | `.lat`, `.lon` | degrees |
 
 `x` is an `int` or a `float`, finite; anything else raises `TypeError` or `ValueError`, as in
-`seconds: '1' is not a number`. A mile is the statute mile, 1609.344 m; a knot is 1852 m an hour;
-a foot is 0.3048 m. `Heading(-90)` is `WEST`.
+`seconds: '1' is not a number`. A `Duration` is not one: `Duration(line.at)` raises `TypeError:
+Duration: seconds(3.7116536) is already a Duration; use it as it is`, and `seconds(line.at)` the
+same with `seconds:` in front, where `Duration(1.5)` says `Duration: 1.5 is not a whole number of
+nanoseconds`. A time a history gives is a `Duration` already, so a test written when they were
+nanoseconds drops the wrapping. A mile is the statute mile, 1609.344 m; a knot is 1852 m an hour; a
+foot is 0.3048 m. `Heading(-90)` is `WEST`.
 
 - A `Duration` is also an instant on the board's clock: `board.now` is one, the time since
   power-on, and so is a console line's `at`. `line.at - back_at` is a `Duration`.

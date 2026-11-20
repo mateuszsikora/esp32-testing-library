@@ -192,6 +192,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The LilyGO profile takes its GNSS route, flash and PSRAM from LilyGO's documentation](harness.md#the-lilygo-profile-takes-its-gnss-route-flash-and-psram-from-lilygos-documentation) | `harness.md` | decided (#64) |
 | [The LilyGO SD slot and additional controls declare wiring without new model effects](harness.md#the-lilygo-sd-slot-and-additional-controls-declare-wiring-without-new-model-effects) | `harness.md` | decided (#100) |
 | [The board's durations are Durations, and an expect's timeout also takes seconds](harness.md#the-boards-durations-are-durations-and-an-expects-timeout-also-takes-seconds) | `harness.md` | decided (#69) |
+| [A Duration given a Duration refuses it, saying it is one already](harness.md#a-duration-given-a-duration-refuses-it-saying-it-is-one-already) | `harness.md` | decided (#284) |
 | [Headings are a type of their own, and positions are on a sphere](harness.md#headings-are-a-type-of-their-own-and-positions-are-on-a-sphere) | `harness.md` | decided (#69) |
 | [The GNSS receiver's epochs fall on whole seconds of the world's time](harness.md#the-gnss-receivers-epochs-fall-on-whole-seconds-of-the-worlds-time) | `harness.md` | decided (#69) |
 | [A lost fix keeps the receiver moving, and a fix puts it at a place, standing](harness.md#a-lost-fix-keeps-the-receiver-moving-and-a-fix-puts-it-at-a-place-standing) | `harness.md` | decided (#69) |
