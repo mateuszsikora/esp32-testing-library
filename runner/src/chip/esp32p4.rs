@@ -246,4 +246,8 @@ impl<R: esp32p4::Revision> Guest for P4<R> {
     fn flash(&self) -> Cow<'_, [u8]> {
         Cow::Borrowed(&self.bus.flash)
     }
+    fn write_flash(&mut self, offset: usize, data: &[u8]) -> Result<(), String> {
+        super::fits(self.bus.flash.len(), offset, data.len())?;
+        esp_soc::SocBus::write_flash(&mut self.bus, offset, data)
+    }
 }

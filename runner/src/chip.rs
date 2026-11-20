@@ -206,6 +206,36 @@ pub(crate) fn flash_without_trampoline<'a>(
     std::borrow::Cow::Owned(copy)
 }
 
+/// Whether `len` bytes at `offset` fit in a flash of `flash` bytes, as `Guest::write_flash` asks
+/// before it writes any: esp32sim's own refusal does not say where (protocol 5.25).
+pub(crate) fn fits(flash: usize, offset: usize, len: usize) -> Result<(), String> {
+    match offset.checked_add(len) {
+        Some(end) if end <= flash => Ok(()),
+        _ => Err(format!(
+            "{len} bytes at {offset:#x} end past the flash, of {flash} bytes"
+        )),
+    }
+}
+
+/// `Guest::write_flash` on a chip whose Bluetooth is esp32sim's VHCI, after the bytes are in the
+/// flash: those that fall under esp32sim's trampoline go into its copy of the code there too, the
+/// copy `reboot()` puts back, so that the next boot, and `flash_without_trampoline`, find what the
+/// peer wrote.
+pub(crate) fn under_trampoline(
+    original: &mut Option<(usize, Vec<u8>)>,
+    offset: usize,
+    data: &[u8],
+) {
+    let Some((at, code)) = original else {
+        return;
+    };
+    let start = offset.max(*at);
+    let end = (offset + data.len()).min(*at + code.len());
+    if start < end {
+        code[start - *at..end - *at].copy_from_slice(&data[start - offset..end - offset]);
+    }
+}
+
 /// The bus cycles in one tick of `domain`, as a chip's clock tree divides them
 /// (`Peripherals::CLOCKS` of its `device_set!`). A pin without the domain fails the build where
 /// a constant asks for it.

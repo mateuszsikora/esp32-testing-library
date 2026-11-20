@@ -3298,8 +3298,10 @@ the firmware counts from its own boot starts again: a test reads it as
 at 0 with cause 1, so it holds every reset, the firmware's own and its watchdogs' included.
 
 This extends [a run starts at board.power_on(), and so does the runner](#a-run-starts-at-boardpower_on-and-so-does-the-runner):
-the first `power_on()` still starts the runner, and sources, taps and `board.nvs()` are still
-given before it, also when a later boot would find them.
+the first `power_on()` still starts the runner, and sources and taps are still given before it,
+also when a later boot would find them. `board.nvs()` was too, until #278 let it write while the
+board is off between two boots ([board.nvs merges by values, before power-on and between
+boots](#boardnvs-merges-by-values-before-power-on-and-between-boots)).
 
 **Rejected:** ending the runner at `power_off()` and starting a new one at `power_on()`, with the
 flash dumped to a file in between, because the new run's clock and turns would start again from 0,
@@ -5131,3 +5133,21 @@ segment of an open connection with RST too, because that ends a connection the t
 end; `drop`, then `unblock`, or the broker's `disconnect`, does that. Also rejected: blocking UDP
 ports, because what the scenarios need is a service on TCP that stops answering while DNS and NTP
 answer; a UDP block can come with a firmware that needs it.
+
+## board.nvs merges by values, before power-on and between boots
+
+Status: decided (#278)
+
+`board.nvs(..., merge=True)` reads the partition's values as they are now, with `nvs_values`, puts
+the test's keys over them, and writes the whole partition anew with `nvs_image`: before the first
+power-on over the build's image and the test's earlier calls, after a `power_off()` over the
+runner's flash. With the board off after its first power-on, the write goes to the runner in the
+turn the test holds ([the peer writes the flash in its turn, with the supply off](runner.md#the-peer-writes-the-flash-in-its-turn-with-the-supply-off)).
+With the board on, `board.nvs` raises `BoardOff`, as `power_on()` on a board that is on does.
+
+**Rejected:** a merge that keeps the firmware's layout of its NVS items, editing the pages in place.
+What the firmware reads back is the same, and a second NVS writer in esp32tl, beside Espressif's
+generator, would be a second place for the format to go wrong.
+
+**Rejected:** `BackendError` for a board that is on, as before #278, because the cause is the
+board's state, which the test changes with `power_off()`, not the backend's setup.

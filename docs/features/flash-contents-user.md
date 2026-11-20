@@ -1,6 +1,7 @@
 # Flash contents from a test
 
-`board.nvs()` gives the firmware configuration before it boots, and `board.flash()` reads back what
+`board.nvs()` gives the firmware configuration before it boots, or while the board is off between
+two boots, and `board.flash()` reads back what
 the firmware has written. The test names a partition in the build's own table and supplies or reads
 namespaces and keys. esp32tl knows their NVS types, not what those keys mean to a product.
 
@@ -27,20 +28,60 @@ def test_connects(board):
 The app still comes from the [`app_path` marker](pytest-plugin-user.md). The partition table is
 the one the build flashes: the `partition-table` entry of an ESP-IDF build's `flasher_args.json`,
 or the table at `0x8000` of a PlatformIO build, in `partitions.bin` or `firmware.factory.bin`
-([builds](builds-user.md)). `board.nvs(namespaces, partition="nvs")` resolves
+([builds](builds-user.md)). `board.nvs(namespaces, partition="nvs", *, merge=False)` resolves
 `partition` by name in that table; use `partition="settings"` for another NVS partition.
 No flash offset belongs in the test.
 
-Each call supplies a **whole partition**, replacing any image supplied by the build. A later
-successful call for the same partition replaces the earlier call, without merging keys. Calls
-for different partitions are independent. An empty mapping creates empty NVS. The source build
-is never edited; each run gets its own image beside its `dut.log`, retained after teardown.
+Without `merge`, each call supplies a **whole partition**: the partition holds the test's keys and
+nothing else, replacing any image supplied by the build. A later successful call for the same
+partition replaces the earlier call. With `merge=True` the test's keys go **over what the partition
+holds now**, and every namespace and key the test does not name keeps its value: before the first
+power-on, what the build flashes there and what earlier `board.nvs` calls gave; after a power-off,
+what the firmware left in the flash. A key the test names takes the test's value and type. Calls for
+different partitions are independent. An empty mapping creates empty NVS, or, with `merge`, leaves
+the keys as they are. The source build is never edited; each run gets its own image beside its
+`dut.log`, `nvs-9000.bin` for a partition at `0x9000`, retained after teardown. A write between two
+boots gets a file of its own, named by the board's time in nanoseconds, `nvs-9000-t2000000000.bin`,
+and `nvs-9000-t2000000000-2.bin` for a second write in the same instant, so the image the run
+started with stays as it was.
 Firmware changes to emulated flash are not saved back to that image:
 [read them with `board.flash()`](#read-the-flash-of-a-run).
+
+A merge keeps the values, not how the firmware laid them out: the partition is written anew, so NVS
+items move, erased entries and old copies of a key are gone, and a blob the firmware wrote in the
+old single-entry format comes back in the chunked one, which `nvs_get_blob` reads alike. NVS keeps
+a key written with two types as two keys, `config/port` as a `u16` and as a string, and the new
+partition holds one value a key, so a merge that does not name such a key is refused before it
+writes anything; naming it replaces both.
 
 `board.nvs(...)` is supported on esp32sim only. On serial it skips with
 `serial: NVS contents cannot be configured on this backend`, without generating or writing a
 replacement partition.
+
+## Change NVS between two boots
+
+After `board.power_off()` the board stays off until `board.power_on()`, and `board.nvs(...)` writes
+into its flash meanwhile, for the firmware's next boot to read. So a test provisions one key while
+keeping what the firmware stored on its first boot, a counter, a calibration or a pairing, or
+changes a setting between two boots of the same run:
+
+```python
+from esp32tl import u32
+
+
+def test_keeps_its_count_through_a_new_setting(board):
+    board.power_on()
+    board.console.expect_exact("persistence: done")  # the firmware's own message
+    board.power_off()
+    board.nvs({"persistence": {"note": "from the test"}}, merge=True)
+    assert board.flash().nvs()["persistence"] == {"boots": u32(2), "note": "from the test"}
+    board.power_on()
+    board.console.expect_exact("persistence: note=from the test")
+```
+
+The write takes none of the board's time: `board.now` stands where it was, in the instant of the
+`power_off()` or after a wait with the board off. `board.flash()` reads the new partition at once.
+While the board is on, `board.nvs(...)` is refused: the firmware could be writing the same flash.
 
 ## Choose the type the firmware reads
 
@@ -72,7 +113,11 @@ It is installed with esp32tl; no local ESP-IDF install is needed.
 
 ## Errors
 
-- After power-on: `BackendError: board.nvs: write the flash before board.power_on()`.
+- While the board is on: `BoardOff: board.nvs: the board is on: call board.power_off() first, and write the flash while it is off`.
+- Once the run has ended: `RunEnded`, which says when and why.
+- The runner refused the write: `BackendError: board.nvs: the runner cannot write the flash: ERROR`,
+  `ERROR` the image's path and why; with `merge` between boots, the runner could not give the
+  flash to merge over: `BackendError: board.nvs: the runner cannot dump the flash to merge over it: ERROR`.
 - Missing partition: `BackendError: the build has no partition 'settings': it has nvs, phy_init, factory`
   (the available names come from that build).
 - Wrong partition type or flags: `BackendError: board.nvs: partition 'factory' must be unencrypted, writable NVS`.
@@ -80,11 +125,18 @@ It is installed with esp32tl; no local ESP-IDF install is needed.
   `TypeError: config/key: use str, bytes, u8(), i8(), u16(), i16(), u32(), i32(), u64() or i64(); a bare int has no NVS width`.
 - A generator failure raises `ValueError` with `NVS generator failed: ERROR` and the generator's
   exception message.
+- A string that is not UTF-8, as `board.flash().nvs()` reads one the firmware wrote, and so as a
+  merge would write it back: `ValueError: config/key: an NVS string is written as UTF-8, and this one holds bytes that are not (surrogates): give the key a value of its own`.
+  Naming the key in the merge replaces it.
+- A merge over a key the firmware wrote with two types, which the test does not name:
+  `BackendError: board.nvs: config/port holds a u16 and a string in partition 'nvs', which a merge cannot keep both of: give config/port a value in the test's keys, or write without merge`.
 
-A failed validation or generation leaves a previous successful image for that partition intact.
-A passing test that sets up NVS without powering on fails teardown, for example:
-`esp32sim: the test set up the NVS partition 'nvs' and never called board.power_on(): it ran no firmware`.
-The run report records the call and partition name, without the configuration values.
+A failed validation or generation leaves a previous successful image for that partition intact,
+and writes nothing into the flash of a run. A passing test that sets up NVS without powering on
+fails teardown, for example: `esp32sim: the test set up the NVS partition 'nvs' and never called
+board.power_on(): it ran no firmware`. The run report records the call, the partition's name and
+`merge=True` when it is given, without the configuration values: `board.nvs(partition='nvs',
+merge=True)`.
 
 ## Read the flash of a run
 
@@ -113,6 +165,10 @@ A test can read it at any time from `board.power_on()` on, as often as it likes:
 - **After `board.reset()` or `board.power_off()`.** The flash keeps what the firmware wrote through
   both, and reads the same with the supply off. `power_off()` comes into effect at the next wait,
   and a read in between sees the same flash.
+- **On the ESP32-S31**, while the board is on, `board.flash()` reads the flash as of the chip's
+  last reset: esp32sim keeps what the firmware wrote since apart, and gives it up only at a reset.
+  From `board.power_off()` on, and so for `board.nvs(..., merge=True)` between two boots, it reads
+  everything.
 - **At the end of a run.** After `RunEnded`, or with the runner gone for any reason short of a crash
   of its own, `board.flash()` reads what the run left, which covers what the firmware wrote after
   the test last looked. In a fixture's teardown it works until the `board` fixture's own teardown
@@ -132,7 +188,7 @@ would find on the next boot: the later write when it is whole, and never a strin
 as if it were entries. Two exceptions to `nvs_get_*`: NVS
 keeps a key written with two types as two keys, and `nvs` reads the later one; and a string that is
 not UTF-8 keeps its bytes as surrogates (`surrogateescape`) rather than failing the read of the
-others.
+others; `board.nvs(...)` cannot write such a string back.
 
 `ota()` gives the two entries of the OTA data partition, in their order, and the app partition they
 select now, as `esp_ota_get_boot_partition()` finds it:

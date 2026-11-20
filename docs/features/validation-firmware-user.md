@@ -48,7 +48,7 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `mqtt_session` | `firmware/mqtt_session`: esp-mqtt with CleanSession=0, a 60 s keepalive and a retained Will over the LilyGO modem route, which prints Session Present and each message's DUP, and publishes a QoS 1 backlog on command ([below](#mqtt_session)) |
 | `http_request` | ESP-IDF's `examples/protocols/http_request`, unmodified, with its default `sdkconfig`, for target `esp32`: joins a Wi-Fi access point and fetches `http://example.com/` over and over ([below](#http_request)) |
 | `http_server` | `firmware/http_server`, this repository's own project, for target `esp32`: a Wi-Fi station that serves `GET /status` and `POST /echo` as JSON on port 80 with ESP-IDF's `esp_http_server`, for a test that opens the connection ([below](#http_server)) |
-| `persistence` | `firmware/persistence`: counts its boots in NVS, RTC memory, RAM and on an SD card, prints them with its reset reason, and restarts itself once ([below](#persistence)) |
+| `persistence` | `firmware/persistence`: counts its boots in NVS, RTC memory, RAM and on an SD card, prints them with its reset reason and the `note` a test wrote in NVS, and restarts itself once ([below](#persistence)) |
 | `ota_state` | `firmware/ota_state`: copies its app to the next OTA slot, boots it, marks it valid, then does it again and rolls back, reporting its state at each step ([below](#ota_state)) |
 | `timer_wake` | `firmware/timer_wake`: sleeps in deep sleep twice with a 2 s timer wake, counting its boots in RTC memory ([below](#timer_wake)) |
 | `reset_reasons` | `firmware/reset_reasons`: prints `esp_reset_reason()` by name at each boot and resets the next way, through `esp_restart()`, a panic, a task watchdog's panic and a 100 ms deep sleep ([below](#reset_reasons)) |
@@ -241,10 +241,14 @@ persistence: boot=2 reason=3 rom=12 rtc=2 ram=2 sd=2 uptime_ms=63
 
 `reason` is `esp_reset_reason()` (1 power-on, 3 software restart), `rom` the ROM's reset reason
 for core 0, `esp_rom_get_reset_reason(0)` (1 `POWERON_RESET`, 12 `SW_CPU_RESET`), and `uptime_ms`
-`esp_timer_get_time()` in milliseconds, the firmware's time since its boot. On the boot NVS counts
-as the first it prints `persistence: restarting` and calls `esp_restart()`; on every other boot it
-prints `persistence: done` and returns. `tests/test_power.py` runs it, and
-`tests/test_flash_snapshot.py` reads `boots` from its flash.
+`esp_timer_get_time()` in milliseconds, the firmware's time since its boot. When the namespace also
+holds a string `note`, as a test gives it with `board.nvs(...)`, the next line is
+`persistence: note=NOTE`; without one there is no such line. On the boot NVS counts as the first it
+prints `persistence: restarting` and calls `esp_restart()`; on every other boot it prints
+`persistence: done` and returns. `tests/test_power.py` runs it, `tests/test_flash_snapshot.py`
+reads `boots` from its flash, and `tests/test_nvs_between_boots.py` writes `note` and `boots` with
+`board.nvs(...)`, before power-on and between two boots
+([flash contents](flash-contents-user.md#change-nvs-between-two-boots)).
 
 ## `ota_state`
 

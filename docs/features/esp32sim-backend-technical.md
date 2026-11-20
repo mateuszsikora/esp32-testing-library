@@ -94,15 +94,21 @@ without starting anything:
    thread: the connections the test opened to the device are lost, and the device has no address
    until it takes one again ([network](network-technical.md#connections-the-test-opens)).
 
-**`Esp32Sim.nvs(namespaces, partition="nvs")`** reads the build's partition table with
+**`Esp32Sim.nvs(namespaces, partition="nvs", *, merge=False)`** raises `BoardOff` while the board
+is on, and `RunEnded` once the run has ended. It reads the build's partition table with
 `Build.table()`, up to `0xC00` bytes from the last flash file that holds `app.partition_table`
 (`0x8000` in a PlatformIO build: `partitions.bin`, or inside `firmware.factory.bin`), resolves the name and generates a whole NVS image through
-`esp32tl.flash`. It writes `nvs-<offset in hex>.bin` beside `dut.logfile`, retaining it after
-teardown. `_nvs` keeps one `(offset, path)` per partition; a later successful call replaces it.
-`runner_command(..., extra_flash=())` appends those `--flash-at` arguments after every build file,
-so the test overrides any NVS image the build supplies. The call adds
-`board.nvs(partition='NAME')` to the run log, without values, and `set_up()` includes
-`the NVS partition 'NAME'` so a passing test that never powers on fails teardown.
+`esp32tl.flash`; with `merge`, from the partition's values now, `_partition_now`, with the test's
+keys over them. It writes `nvs-<offset in hex>.bin` beside `dut.logfile`, retaining it after
+teardown. Before the first power-on, `_nvs` keeps one `(offset, path)` per partition; a later
+successful call replaces it. `runner_command(..., extra_flash=())` appends those `--flash-at`
+arguments after every build file, so the test overrides any NVS image the build supplies. After a
+`power_off()`, the board still off, it writes `nvs-<offset in hex>-t<now>.bin` instead, and
+`HeldClock.write_flash` has the runner write that file into its flash in the turn the link is held
+at (`flash_write`, protocol 5.25), and the board's time does not move. The call adds
+`board.nvs(partition='NAME')`, with `, merge=True` when given, to the run log, without values, and
+`set_up()` includes `the NVS partition 'NAME'` for each partition of `_nvs`, so a passing test that
+never powers on fails teardown.
 [Flash contents](flash-contents-technical.md) owns the formats and failures.
 
 **`Esp32Sim.flash()`** raises `BoardOff` before the first `power_on`, reads the build's table through
@@ -249,8 +255,9 @@ cannot fail with this backend; it is there for another caller:
 started, so the test can wait on a board that is off: the runner idles the guest and still takes
 the turns the clock bounds. `_asked` refuses a source or a tap once the runner has started, with
 or without the supply: `the board is on already` while it is on, `the board has been on` after.
-`nvs` refuses then too, always with `BackendError: board.nvs: write the flash before
-board.power_on()`.
+`nvs` refuses only while the supply is on, with `BoardOff: board.nvs: the board is on: call
+board.power_off() first, and write the flash while it is off`; with the supply off it writes the
+runner's flash for the next boot.
 
 A `reset()`, `power_off()` or `power_on()` once the run has ended (the runner exited, or the
 link failed, and the backend has ended the clock) raises `RunEnded` at once, through
@@ -272,8 +279,9 @@ to the turn's bounds as `the test's clock`, or `None`, on which the link answers
 (`esp32tl/link/boardlink.py`) instead, and the link folds `_latency` into the turn's `latency` with
 the interfaces' ([protocol §4](../protocol.md#4-session)); `turn` clears both. So the runner stands
 still in every turn for as long as the test does not wait. `turn` may also return `FlashDump`, when
-the test has asked for the flash: the link sends it, and gives the answer to `dumped(ack)`, which
-holds the same turn on, and neither moves the board's time nor counts a turn. The test's side runs
+the test has asked for the flash, or `FlashWrite`, when it writes a file into it: the link sends
+it, and gives the answer to `answered(ack)`, which holds the same turn on, and neither moves the
+board's time nor counts a turn. The test's side runs
 in the test's thread:
 
 - `wait(duration)` first waits until the link is held at a turn (from power-on to the runner's
@@ -536,6 +544,7 @@ repository makes.
 | `Esp32Sim.power_on(utc=None)` | The first time, starts the runner; after `power_off`, switches the supply back on (no `utc`); `BoardOff` with the supply on |
 | `Esp32Sim.power_off()`, `Esp32Sim.reset()` | The supply off; a pulse of EN. Both at the held clock's `now`, sent with the turn the link is held at; `BoardOff` when the board is not in the state they need, `RunEnded` once the run has ended |
 | `Esp32Sim.flash()` | A `FlashSnapshot` of the runner's flash at the board's time now, or as the run left it; `BoardOff` before the first `power_on` |
+| `Esp32Sim.nvs(namespaces, partition="nvs", *, merge=False)` | The test's keys in the named NVS partition: for the runner's start before the first `power_on`, into its flash while the supply is off after it; with `merge`, over the partition's values now; `BoardOff` with the supply on, `RunEnded` once the run has ended |
 | `Esp32Sim.powered`, `Esp32Sim.started` | Whether the supply is on, from `power_on` to `power_off`; whether `power_on` has started the runner |
 | `Esp32Sim.boots`, `Esp32Sim.boot` | The chip's boots as `Boot`s, the first at 0 with cause 1 and one per `reset` the link has read, each with the `uptime_zero` of the link's last `uptime` for it; the last. `BoardOff` before the first `power_on` |
 | `Esp32Sim.wait(duration)`, `Esp32Sim.wait_until(condition, *, within)`, `Esp32Sim.wait_on_clock(condition, within, description)` | The test's waits, each a `Duration` of the board's time, logged as steps of the test |
@@ -549,7 +558,7 @@ repository makes.
 | `Esp32Sim.close()` | Ends the run and writes the taps; raises `BackendError` for a tap that cannot be written, a failing exit code, a killed runner or a link error |
 | `Esp32Sim.report(run=False)`, `Esp32Sim.properties()` | The `esp32sim link` report section, with the run on the board's clock when `run`; the `esp32sim_link` user property's data |
 | `BackendError` | What keeps the backend from starting, or a failing end |
-| `HeldClock(step=STEP_NS)` | `esp32tl/backends/clock.py`: the link's `Hold`, `turn(now)`, `dumped(ack)`; `stop()`, `end(reason, at=None)`; the test's `now`, `wait(ns)`, `wait_until(condition, within_ns, description)`, `wait_for_event(condition, within_ns, description, latency_ns)`, `dump_flash()`, which returns the runner's `FlashDumpAck`, or `None` once the run has ended, and `check(step)`, which raises `RunEnded` (`the run ended {when} before {step}: {reason}`) once the run has ended |
+| `HeldClock(step=STEP_NS)` | `esp32tl/backends/clock.py`: the link's `Hold`, `turn(now)`, `answered(ack)`; `stop()`, `end(reason, at=None)`; the test's `now`, `wait(ns)`, `wait_until(condition, within_ns, description)`, `wait_for_event(condition, within_ns, description, latency_ns)`, `dump_flash()`, which returns the runner's `FlashDumpAck`, or `None` once the run has ended, `write_flash(offset, path)`, which returns its `FlashWriteAck`, or `None` once the run has ended, and `check(step)`, which raises `RunEnded` (`the run ended {when} before {step}: {reason}`) once the run has ended |
 | `nanoseconds(value, what)`, `seconds(ns)` | `esp32tl/backends/clock.py`: a `Duration` of the board's time to nanoseconds, checked; nanoseconds shown as `12.5 s`, as `str(Duration(ns))` |
 | `listen()` | The listening socket and its path, or `BackendError` |
 | `runner_path()`, `rom_path(chip="esp32", app=None)` | The runner and the ROM ELF of `rom_key(chip, app)`, or `BackendError`; `esp32tl has no ROM for {chip}; the chips are esp32, esp32s3, esp32c3, esp32c6, esp32p4, esp32p4-rev0, esp32s31` for a key `runtime.ROMS` does not have |
@@ -638,6 +647,9 @@ In the test body:
 | `the board is on already: call board.power_off() first` | `BoardOff` | `power_on()` with the supply on |
 | `the board is off already: call board.power_on() to switch it on` | `BoardOff` | `power_off()` with the supply off |
 | `the board is off: board.reset() resets a board that is on` | `BoardOff` | `reset()` before power-on or with the supply off |
+| `board.nvs: the board is on: call board.power_off() first, and write the flash while it is off` | `BoardOff` | `nvs()` with the supply on, also once the run has ended with it on, as `reset()` and `power_off()` check the supply first |
+| `board.nvs: the runner cannot write the flash: {error}` | `BackendError` | The runner's `flash_write_ack` says why it wrote nothing |
+| `board.nvs: the runner cannot dump the flash to merge over it: {error}` | `BackendError` | With `merge` between boots, the runner's `flash_dump_ack` says why it wrote no flash file |
 | `power_on: utc is {utc!r}, not a datetime with a timezone` | `TypeError`, `ValueError` | Not a `datetime`; a naive `datetime` |
 | `power_on: utc is the world's time at the first power-on; it has run on since, and the board's clock with it` | `ValueError` | A `utc` given to a `power_on()` after `power_off()` |
 | `{interface}: the board is on already: give an interface its source before board.power_on()` | `SourceError` | A source after power-on, `the board has been on` once the supply is off; not a card, which goes in and out once the run has started |

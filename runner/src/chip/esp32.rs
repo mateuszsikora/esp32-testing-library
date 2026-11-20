@@ -303,6 +303,12 @@ impl Guest for esp32::Machine {
     fn flash(&self) -> Cow<'_, [u8]> {
         super::flash_without_trampoline(&self.bus.flash, &self.bus.ble.original_flash)
     }
+    fn write_flash(&mut self, offset: usize, data: &[u8]) -> Result<(), String> {
+        super::fits(self.bus.flash.len(), offset, data.len())?;
+        esp_soc::SocBus::write_flash(&mut self.bus, offset, data)?;
+        super::under_trampoline(&mut self.bus.ble.original_flash, offset, data);
+        Ok(())
+    }
     fn sleeps_through(&self) -> bool {
         // what esp32sim's `enter_deep_sleep` asks of the RTC registers, and what its
         // `peripheral_event` does to the cores then (`esp32/src/soc.rs`); a reset not yet taken

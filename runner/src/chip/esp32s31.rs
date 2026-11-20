@@ -333,4 +333,17 @@ impl Guest for S31 {
     fn flash(&self) -> Cow<'_, [u8]> {
         Cow::Borrowed(&self.m.bus.flash)
     }
+    fn write_flash(&mut self, offset: usize, data: &[u8]) -> Result<(), String> {
+        super::fits(self.m.bus.flash.len(), offset, data.len())?;
+        // the NOR array esp32sim's cache holds becomes the flash with the bytes in it, whole:
+        // `sync_flash` has put what the guest wrote into the flash first
+        esp_soc::SocBus::write_flash(&mut self.m.bus, offset, data)
+    }
+    fn sync_flash(&mut self) {
+        // esp32sim's S31 keeps the guest's program and erase results in its cache's NOR array,
+        // and hands them to the outer flash only at a chip reset (`reboot`, `esp32s31/src/soc.rs`);
+        // the array is the cache's own. The chip is off until its power-on reset, which reboots
+        // it again, so this reset changes nothing it would run
+        self.m.reboot();
+    }
 }

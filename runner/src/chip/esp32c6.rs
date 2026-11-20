@@ -211,4 +211,10 @@ impl Guest for esp32c6::Machine {
         // (`esp32c6/src/ble.rs`, `original_flash`): with `--bt` the dump holds the trampoline
         Cow::Borrowed(&self.bus.flash)
     }
+    fn write_flash(&mut self, offset: usize, data: &[u8]) -> Result<(), String> {
+        // the C6's copy of the code under the trampoline is esp32sim's alone (`flash` above):
+        // bytes written over it would go when `reboot()` puts the code back
+        super::fits(self.bus.flash.len(), offset, data.len())?;
+        esp_soc::SocBus::write_flash(&mut self.bus, offset, data)
+    }
 }

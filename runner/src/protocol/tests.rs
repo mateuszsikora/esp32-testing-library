@@ -524,3 +524,34 @@ fn flash_dump_and_its_ack() {
         r#"{"type":"flash_dump_ack","t":7,"error":"a \"b\": no space"}"#
     );
 }
+
+#[test]
+fn flash_write_and_its_ack() {
+    assert_eq!(
+        parse(r#"{"type":"flash_write","offset":36864,"path":"/tmp/nvs.bin"}"#),
+        Ok(Incoming::FlashWrite {
+            offset: 36864,
+            path: "/tmp/nvs.bin".into()
+        })
+    );
+    assert_eq!(
+        parse(r#"{"type":"flash_write","offset":-1,"path":"/tmp/nvs.bin"}"#),
+        Err(r#"flash_write: "offset" is negative"#.into())
+    );
+    assert_eq!(
+        parse(r#"{"type":"flash_write","offset":0}"#),
+        Err(r#"flash_write: "path" is missing"#.into())
+    );
+    assert_eq!(
+        parse(r#"{"type":"flash_write","path":"/tmp/nvs.bin"}"#),
+        Err(r#"flash_write: "offset" is missing"#.into())
+    );
+    assert_eq!(
+        flash_write_ack(7, None),
+        r#"{"type":"flash_write_ack","t":7,"error":null}"#
+    );
+    assert_eq!(
+        flash_write_ack(7, Some(r#"a "b": too long"#)),
+        r#"{"type":"flash_write_ack","t":7,"error":"a \"b\": too long"}"#
+    );
+}

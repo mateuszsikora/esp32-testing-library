@@ -219,6 +219,46 @@ def test_a_flash_dump_without_flash_out_is_a_protocol_error_with_exit_code_3(
     assert peer.wait()[0] == 3
 
 
+def test_a_flash_write_with_the_supply_off_is_in_the_flash_and_the_run_goes_on(
+    socket_path: Path,
+) -> None:
+    out = socket_path.parent / "flash.bin"
+    image = socket_path.parent / "nvs.bin"
+    image.write_bytes(b"NVS!" * 4)
+    peer = Peer(socket_path, "--flash-out", str(out))
+    peer.hello()
+    peer.read_until("sync")
+    # the supply off in this very turn: the runner has the power before the write
+    peer.write(type="power", t=0, on=False)
+    peer.write(type="flash_write", offset=0x9000, path=str(image))
+    ack = peer.read_until("flash_write_ack")
+    assert ack == {"type": "flash_write_ack", "t": 0, "error": None}
+    peer.write(type="flash_dump")
+    peer.read_until("flash_dump_ack")
+    assert out.read_bytes()[0x9000:0x9010] == b"NVS!" * 4
+    peer.write(type="flash_write", offset=(4 << 20) - 2, path=str(image))
+    assert peer.read_until("flash_write_ack")["error"] == (
+        f"{image}: 16 bytes at 0x3ffffe end past the flash, of 4194304 bytes"
+    )
+    peer.write(type="wait", ack=0, quiet_until=None, latency=None)
+    assert peer.rest()[-1]["end"] == "max_seconds"
+    assert peer.wait()[0] == 0
+    assert out.read_bytes()[0x9000:0x9010] == b"NVS!" * 4
+
+
+def test_a_flash_write_with_the_supply_on_is_a_protocol_error_with_exit_code_3(
+    socket_path: Path,
+) -> None:
+    image = socket_path.parent / "nvs.bin"
+    image.write_bytes(b"NVS!")
+    peer = Peer(socket_path)
+    peer.hello()
+    peer.read_until("sync")
+    peer.write(type="flash_write", offset=0x9000, path=str(image))
+    assert "flash_write with the supply on" in peer.read_until("stats")["detail"]
+    assert peer.wait()[0] == 3
+
+
 def test_flash_out_without_a_board_writes_the_flash_at_the_end_of_the_run(
     socket_path: Path,
 ) -> None:

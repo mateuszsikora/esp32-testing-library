@@ -19,6 +19,7 @@ from pytest_embedded.utils import Meta
 
 from esp32tl import boards, flash
 from esp32tl.backends import esp32sim
+from esp32tl.backends.clock import HeldClock
 from esp32tl.backends.esp32sim import BackendError, Esp32Sim
 from esp32tl.build import ESP_IDF, Build, FlashFile
 from esp32tl.flash import (
@@ -35,6 +36,8 @@ from esp32tl.flash import (
     u32,
     u64,
 )
+from esp32tl.interfaces import BoardOff, RunEnded
+from esp32tl.link.protocol import FlashDumpAck, FlashWriteAck
 
 
 def entry(
@@ -180,6 +183,10 @@ def test_generator_failure_is_visible_and_bad_sizes_are_refused() -> None:
             flash.nvs_image({}, size)
     with pytest.raises(ValueError, match="cannot contain NUL"):
         flash.nvs_image({"config": {"text": "a\0b"}}, 0x3000)
+    # a string of a snapshot whose bytes are not UTF-8, as a merge would write it back
+    text = b"\xff\xfe".decode("utf-8", "surrogateescape")
+    with pytest.raises(ValueError, match=r"^config/text: an NVS string is written as UTF-8"):
+        flash.nvs_image({"config": {"text": text}}, 0x3000)
 
 
 @pytest.fixture
@@ -243,8 +250,149 @@ def test_nvs_refuses_unknown_wrong_type_encrypted_and_late_calls(device: Esp32Si
     with pytest.raises(BackendError, match="must be unencrypted, writable NVS"):
         device.nvs({})
     device.process = Mock()
-    with pytest.raises(BackendError, match=r"write the flash before board.power_on\(\)"):
-        device.nvs({})
+    device._supply = True
+    for merge in (False, True):
+        with pytest.raises(BoardOff) as on:
+            device.nvs({}, partition="settings", merge=merge)
+        assert str(on.value) == (
+            "board.nvs: the board is on: call board.power_off() first, and write the flash while"
+            " it is off"
+        )
+
+
+def test_a_merge_before_power_on_keeps_the_build_s_keys_and_the_earlier_call_s(
+    device: Esp32Sim,
+) -> None:
+    built = device.app.flash_files[0].path.parent / "built-settings.bin"
+    built.write_bytes(
+        flash.nvs_image(
+            {"config": {"host": "built", "port": u16(1)}, "other": {"k": u8(1)}}, 0x6000
+        )
+    )
+    device.app = dataclasses.replace(
+        device.app, flash_files=(*device.app.flash_files, FlashFile(0x11000, built))
+    )
+    image = Path(device.dut.logfile).parent / "nvs-11000.bin"
+    device.nvs({"config": {"host": "test"}}, partition="settings", merge=True)
+    assert flash.nvs_values(image.read_bytes()) == {
+        "config": {"host": "test", "port": u16(1)},
+        "other": {"k": u8(1)},
+    }
+    # over the earlier call's image, which the runner would start with
+    device.nvs({"config": {"extra": "x"}, "new": {"n": u32(2)}}, partition="settings", merge=True)
+    assert flash.nvs_values(image.read_bytes()) == {
+        "config": {"host": "test", "port": u16(1), "extra": "x"},
+        "other": {"k": u8(1)},
+        "new": {"n": u32(2)},
+    }
+    device.nvs({"config": {"host": "alone"}}, partition="settings")
+    assert flash.nvs_values(image.read_bytes()) == {"config": {"host": "alone"}}
+    assert built.read_bytes() == flash.nvs_image(
+        {"config": {"host": "built", "port": u16(1)}, "other": {"k": u8(1)}}, 0x6000
+    )
+    assert "board.nvs(partition='settings', merge=True)" in device.report(run=True)
+
+
+def test_a_merge_before_power_on_of_a_partition_nothing_flashes_starts_empty(
+    device: Esp32Sim,
+) -> None:
+    device.nvs({"config": {"host": "test"}}, partition="settings", merge=True)
+    image = Path(device.dut.logfile).parent / "nvs-11000.bin"
+    assert flash.nvs_values(image.read_bytes()) == {"config": {"host": "test"}}
+
+
+def off_between_boots(device: Esp32Sim, contents: bytes) -> Mock:
+    """`device` as after a power-off, its runner's flash `contents`, the link held at 5 s: the
+    clock a mock that answers the dump and each write, and keeps what each write's file held."""
+    device.process = Mock()
+    device._flash_out = Path(device.dut.logfile).parent / "flash.bin"
+    hold = Mock(spec=HeldClock, now=5 * 10**9)
+    hold.written = []
+
+    def dump() -> FlashDumpAck:
+        device._flash_out.write_bytes(contents)
+        return FlashDumpAck(hold.now)
+
+    def write(offset: int, path: str) -> FlashWriteAck:
+        hold.written.append((offset, Path(path).read_bytes()))
+        return FlashWriteAck(hold.now)
+
+    hold.dump_flash.side_effect = dump
+    hold.write_flash.side_effect = write
+    device._hold = hold
+    return hold
+
+
+def test_a_merge_between_boots_keeps_what_the_firmware_wrote(device: Esp32Sim) -> None:
+    stored = flash.nvs_image({"app": {"boots": u32(2)}, "config": {"host": "fw"}}, 0x6000)
+    contents = b"\xff" * 0x11000 + stored + b"\xff" * 0x100
+    hold = off_between_boots(device, contents)
+    device.nvs({"config": {"port": u16(80)}}, partition="settings", merge=True)
+    ((offset, image),) = hold.written
+    assert offset == 0x11000 and len(image) == 0x6000
+    assert flash.nvs_values(image) == {
+        "app": {"boots": u32(2)},
+        "config": {"host": "fw", "port": u16(80)},
+    }
+    # the flash file of the dump is gone, as after a read of board.flash()
+    assert not device._flash_out.exists()
+    # a file of its own, by the board's time: no image the runner started with is touched
+    run = Path(device.dut.logfile).parent
+    assert (run / "nvs-11000-t5000000000.bin").read_bytes() == image
+    assert not (run / "nvs-11000.bin").exists()
+    hold.write_flash.assert_called_once()
+    assert device.set_up() == [], "the runner has the write: nothing waits for a run"
+    assert "board.nvs(partition='settings', merge=True)" in device.report(run=True)
+    # a second write in the same instant keeps the first one's image
+    device.nvs({"config": {"port": u16(81)}}, partition="settings")
+    assert (run / "nvs-11000-t5000000000.bin").read_bytes() == image
+    assert (run / "nvs-11000-t5000000000-2.bin").read_bytes() == hold.written[1][1]
+
+
+def test_a_merge_over_a_key_of_two_types_is_refused_unless_the_test_names_it(
+    device: Esp32Sim,
+) -> None:
+    port = [nvs_item(1, 0x02, "port", struct.pack("<H", 80)), *nvs_varlen(1, 0x21, "port", b"x\0")]
+    stored = nvs_page(0, [NS, *port]).ljust(0x6000, b"\xff")
+    hold = off_between_boots(device, b"\xff" * 0x11000 + stored)
+    with pytest.raises(BackendError) as refused:
+        device.nvs({"ns": {"other": u8(1)}}, partition="settings", merge=True)
+    assert str(refused.value) == (
+        "board.nvs: ns/port holds a u16 and a string in partition 'settings', which a merge cannot"
+        " keep both of: give ns/port a value in the test's keys, or write without merge"
+    )
+    hold.write_flash.assert_not_called()
+    device.nvs({"ns": {"port": u16(81)}}, partition="settings", merge=True)
+    ((_, image),) = hold.written
+    assert flash.nvs_values(image) == {"ns": {"port": u16(81)}}
+
+
+def test_a_write_between_boots_without_merge_replaces_the_partition(device: Esp32Sim) -> None:
+    stored = flash.nvs_image({"app": {"boots": u32(2)}}, 0x6000)
+    hold = off_between_boots(device, b"\xff" * 0x11000 + stored)
+    device.nvs({"config": {"port": u16(80)}}, partition="settings")
+    ((_, image),) = hold.written
+    assert flash.nvs_values(image) == {"config": {"port": u16(80)}}
+    hold.dump_flash.assert_not_called()
+
+
+def test_a_write_between_boots_says_why_the_runner_refused_it_and_when_the_run_ended(
+    device: Esp32Sim,
+) -> None:
+    hold = off_between_boots(device, b"")
+    hold.write_flash.side_effect = lambda offset, path: FlashWriteAck(hold.now, f"{path}: refused")
+    with pytest.raises(BackendError, match=r"^board.nvs: the runner cannot write the flash: .*nvs"):
+        device.nvs({}, partition="settings")
+    hold.dump_flash.side_effect = lambda: FlashDumpAck(hold.now, "no space")
+    with pytest.raises(BackendError) as refused:
+        device.nvs({}, partition="settings", merge=True)
+    assert str(refused.value) == (
+        "board.nvs: the runner cannot dump the flash to merge over it: no space"
+    )
+    hold.write_flash.side_effect = lambda offset, path: None
+    hold.check.side_effect = [None, RunEnded("the run ended at 5 s before board.nvs")]
+    with pytest.raises(RunEnded):
+        device.nvs({}, partition="settings")
 
 
 def test_nvs_preserves_previous_image_on_bad_replacement(device: Esp32Sim) -> None:
@@ -535,6 +683,14 @@ def test_pages_are_read_by_sequence_number_not_by_their_place_in_the_partition()
 def test_a_key_written_twice_reads_as_the_later_write() -> None:
     # as a power cut leaves it: the new value written, the old one not yet erased
     assert flash.nvs_values(nvs_page(0, [NS, boots(1), boots(2)])) == {"ns": {"boots": u32(2)}}
+
+
+def test_a_key_written_with_two_types_is_told_with_both_and_reads_as_the_later() -> None:
+    port = [nvs_item(1, 0x02, "port", struct.pack("<H", 80)), *nvs_varlen(1, 0x21, "port", b"x\0")]
+    image = nvs_page(0, [NS, *port, boots(1), boots(2)])
+    assert flash.nvs_values(image) == {"ns": {"port": "x", "boots": u32(2)}}
+    # a key written twice with one type is one value
+    assert flash.nvs_types(image) == {("ns", "port"): ("u16", "string")}
 
 
 def test_the_namespace_may_be_on_another_page_and_an_unknown_namespace_is_nothing() -> None:

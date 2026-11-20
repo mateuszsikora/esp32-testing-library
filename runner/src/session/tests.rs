@@ -112,6 +112,8 @@ struct FakeGuest {
     lags: Vec<u64>,
     /// The flash.
     flash: Vec<u8>,
+    /// The bus cycle of each `sync_flash`.
+    flash_syncs: Vec<u64>,
     /// With `--bt`: the guest's Bluetooth controller, and what each `Act::HciPoll` read of it,
     /// with the cycle.
     hci: Option<hci::Shared>,
@@ -167,6 +169,7 @@ impl FakeGuest {
             paced: Vec::new(),
             lags: Vec::new(),
             flash: vec![0xff; 16],
+            flash_syncs: Vec::new(),
             hci: None,
             hci_read: Vec::new(),
             sleep: None,
@@ -398,6 +401,14 @@ impl Guest for FakeGuest {
     }
     fn flash(&self) -> Cow<'_, [u8]> {
         Cow::Borrowed(&self.flash)
+    }
+    fn sync_flash(&mut self) {
+        self.flash_syncs.push(self.now);
+    }
+    fn write_flash(&mut self, offset: usize, data: &[u8]) -> Result<(), String> {
+        crate::chip::fits(self.flash.len(), offset, data.len())?;
+        self.flash[offset..offset + data.len()].copy_from_slice(data);
+        Ok(())
     }
     fn uptime(&mut self) -> Uptime {
         self.uptime
@@ -3830,6 +3841,142 @@ fn a_flash_dump_without_flash_out_is_a_protocol_error() {
         detail.contains("flash_dump without --flash-out"),
         "{detail}"
     );
+}
+
+/// A file for `flash_write`, in a directory of its own.
+fn flash_file(name: &str, bytes: &[u8]) -> FlashOut {
+    let file = FlashOut::new(name);
+    std::fs::write(&file.0, bytes).unwrap();
+    file
+}
+
+fn flash_write(offset: usize, path: &Path) -> String {
+    format!(
+        r#"{{"type":"flash_write","offset":{offset},"path":"{}"}}"#,
+        path.display()
+    )
+}
+
+#[test]
+fn a_flash_write_with_the_supply_off_is_in_the_flash_at_the_next_boot() {
+    let first = flash_file("off-first", b"ab");
+    let second = flash_file("off-second", b"cd");
+    let peer = FakePeer::new(
+        &[],
+        scripted(vec![
+            // in the turn the supply goes off in, before the switch has been applied
+            (MS, power(MS, false)),
+            (MS, flash_write(4, &first.0)),
+            // in a later one, with the supply off since
+            (3 * MS, flash_write(8, &second.0)),
+            (5 * MS, power(5 * MS, true)),
+        ]),
+    );
+    let r = run(0.01, FakeGuest::new(vec![]), peer);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    assert_eq!(
+        r.guest.flash,
+        flash_with(&[(4, b'a'), (5, b'b'), (8, b'c'), (9, b'd')])
+    );
+    let acks = r.peer.of("flash_write_ack");
+    assert_eq!(
+        acks.iter().map(|m| num(m, "t")).collect::<Vec<_>>(),
+        [MS, 3 * MS]
+    );
+    assert!(acks.iter().all(|m| m.get("error") == Some(&Json::Null)));
+    assert_eq!(r.guest.power_resets, [cycles(5 * MS)]);
+    assert_eq!(r.stats.turns, 4, "the writes took no turn of their own");
+}
+
+#[test]
+fn the_flash_is_synced_for_a_dump_or_a_write_only_with_the_supply_off_for_good() {
+    let out = FlashOut::new("sync");
+    let file = flash_file("sync-file", b"ab");
+    let peer = FakePeer::new(
+        &[],
+        scripted(vec![
+            // on: the guest runs on after the dump, so nothing of it is synced
+            (0, FLASH_DUMP.to_string()),
+            (MS, power(MS, false)),
+            (MS, FLASH_DUMP.to_string()),
+            (2 * MS, flash_write(0, &file.0)),
+        ]),
+    );
+    let r = run_with(
+        0.005,
+        FakeGuest::new(vec![]),
+        peer,
+        false,
+        None,
+        Some(out.0.as_path()),
+    );
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    assert_eq!(r.guest.flash_syncs.len(), 2, "{:?}", r.guest.flash_syncs);
+    assert!(r.guest.flash_syncs[0] >= cycles(MS));
+}
+
+#[test]
+fn a_flash_write_with_the_supply_on_is_a_protocol_error() {
+    let file = flash_file("on", b"ab");
+    let path = file.0.clone();
+    // on from the start, and on again in the turn it comes back in
+    for script in [
+        vec![(0, flash_write(0, &path))],
+        vec![
+            (MS, power(MS, false)),
+            (2 * MS, power(2 * MS, true)),
+            (2 * MS, flash_write(0, &path)),
+        ],
+    ] {
+        let r = run(
+            0.01,
+            FakeGuest::new(vec![]),
+            FakePeer::new(&[], scripted(script)),
+        );
+        let End::Protocol(detail) = &r.end else {
+            panic!("{:?}", r.end)
+        };
+        assert!(
+            detail.contains("flash_write with the supply on"),
+            "{detail}"
+        );
+        assert_eq!(r.guest.flash, vec![0xff; 16]);
+    }
+}
+
+#[test]
+fn a_flash_write_that_cannot_be_done_says_why_and_the_run_goes_on() {
+    let file = flash_file("refused", b"abc");
+    let missing = file.0.with_file_name("missing.bin");
+    let peer = FakePeer::new(
+        &[],
+        scripted(vec![
+            (0, power(0, false)),
+            (0, flash_write(0, &missing)),
+            (0, flash_write(14, &file.0)),
+        ]),
+    );
+    let r = run(0.01, FakeGuest::new(vec![]), peer);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let errors: Vec<&str> = r
+        .peer
+        .of("flash_write_ack")
+        .iter()
+        .map(|m| m.get("error").and_then(Json::as_str).unwrap())
+        .collect();
+    assert!(
+        errors[0].starts_with(&format!("{}: ", missing.display())),
+        "{}",
+        errors[0]
+    );
+    assert_eq!(
+        errors[1],
+        format!(
+            "{}: 3 bytes at 0xe end past the flash, of 16 bytes",
+            file.0.display()
+        )
+    );
+    assert_eq!(r.guest.flash, vec![0xff; 16], "nothing of either written");
 }
 
 /// A flash byte, then one of the ways a run can end, by its exit code.

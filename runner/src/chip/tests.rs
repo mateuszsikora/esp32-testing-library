@@ -567,3 +567,86 @@ fn esp32sim_forgets_the_c3_and_s31_reset_hint() {
     s31.m.reboot();
     assert_eq!(s31.m.bus.read32(esp32s31::RESET_HINT).unwrap(), 0);
 }
+
+/// `flash_write` (protocol 5.25): the bytes are in the flash the guest reads and `flash` gives;
+/// bytes that do not fit are refused whole, and say where.
+macro_rules! write_flash_test {
+    ($name:ident, $machine:ty) => {
+        #[test]
+        fn $name() {
+            let mut m = <$machine as Target>::new(4 << 20);
+            Guest::write_flash(&mut m, 0x9000, b"NVS!").unwrap();
+            assert_eq!(&Guest::flash(&m)[0x9000..0x9004], b"NVS!");
+            let before = Guest::flash(&m).into_owned();
+            assert_eq!(
+                Guest::write_flash(&mut m, (4 << 20) - 2, b"NVS!"),
+                Err("4 bytes at 0x3ffffe end past the flash, of 4194304 bytes".into())
+            );
+            assert_eq!(Guest::flash(&m), before, "nothing of it written");
+            assert!(Guest::write_flash(&mut m, usize::MAX, b"x").is_err());
+        }
+    };
+}
+write_flash_test!(the_esp32_writes_its_flash_for_the_peer, ::esp32::Machine);
+write_flash_test!(the_s3_writes_its_flash_for_the_peer, ::esp32s3::Machine);
+write_flash_test!(the_c3_writes_its_flash_for_the_peer, ::esp32c3::Machine);
+write_flash_test!(the_c6_writes_its_flash_for_the_peer, ::esp32c6::Machine);
+write_flash_test!(
+    the_p4_writes_its_flash_for_the_peer,
+    esp32p4::P4<::esp32p4::RevGe3>
+);
+write_flash_test!(the_s31_writes_its_flash_for_the_peer, esp32s31::S31);
+
+/// A write over esp32sim's Bluetooth trampoline goes into the code `reboot()` puts back too, so
+/// that the next boot, and the dump before it, find the peer's bytes.
+#[test]
+fn a_flash_write_over_the_trampoline_lasts_through_the_reboot() {
+    let mut m = <::esp32::Machine as Target>::new(4 << 20);
+    m.bus.flash[0x10000..0x10008].copy_from_slice(b"TRAMPOLI");
+    m.bus.ble.original_flash = Some((0x10000, b"original".to_vec()));
+    Guest::write_flash(&mut m, 0x0fffe, b"peer").unwrap();
+    assert_eq!(&Guest::flash(&m)[0x0fffe..0x10008], b"peeriginal");
+    assert_eq!(
+        m.bus.ble.original_flash,
+        Some((0x10000, b"eriginal".to_vec()))
+    );
+    // one that misses it leaves the copy alone
+    Guest::write_flash(&mut m, 0x10008, b"next").unwrap();
+    assert_eq!(&Guest::flash(&m)[0x0fffe..0x1000c], b"peeriginalnext");
+    m.reboot();
+    assert_eq!(m.bus.ble.original_flash, None);
+    assert_eq!(&m.bus.flash[0x0fffe..0x1000c], b"peeriginalnext");
+}
+
+/// On the S31 what the guest programs stays in esp32sim's cache NOR array until a reset: with the
+/// supply off, `sync_flash` has `flash` give it, and a `write_flash` beside it keeps it.
+#[test]
+fn the_s31_flash_has_what_the_guest_wrote_once_synced() {
+    let mut s = <esp32s31::S31 as Target>::new(4 << 20);
+    // what the guest's SPI1 program leaves in the cache's array, which the outer flash lacks
+    let mut nor = Guest::flash(&s).into_owned();
+    nor[0x11000..0x11004].copy_from_slice(b"FW!!");
+    s.m.bus.inner.cache.set_flash(&nor).unwrap();
+    assert_eq!(
+        &Guest::flash(&s)[0x11000..0x11004],
+        &[0xff; 4],
+        "esp32sim's outer copy"
+    );
+    Guest::sync_flash(&mut s);
+    assert_eq!(&Guest::flash(&s)[0x11000..0x11004], b"FW!!");
+    Guest::write_flash(&mut s, 0x9000, b"NVS!").unwrap();
+    let flash = Guest::flash(&s);
+    assert_eq!(&flash[0x9000..0x9004], b"NVS!");
+    assert_eq!(
+        &flash[0x11000..0x11004],
+        b"FW!!",
+        "the guest's bytes outside the write stay"
+    );
+    // and the next boot finds both
+    Guest::power_on_reset(&mut s, &[]);
+    let flash = Guest::flash(&s);
+    assert_eq!(
+        (&flash[0x9000..0x9004], &flash[0x11000..0x11004]),
+        (&b"NVS!"[..], &b"FW!!"[..])
+    );
+}

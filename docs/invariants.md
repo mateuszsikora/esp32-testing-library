@@ -1106,8 +1106,9 @@ that references to its number keep their meaning.
     `tests/test_nvs_reader.py::test_firmware_reads_typed_values`,
     `tests/test_flash.py::test_real_generator_preserves_string_bytes_and_has_exact_partition_size`,
     `tests/test_flash.py::test_nvs_names_do_not_change_values_or_add_keys`
-- **82.** NVS cannot be supplied after power-on. A passing test that supplies NVS without powering on
-    fails teardown; it ran no firmware.
+- **82.** ~~NVS cannot be supplied after power-on.~~ No longer holds since #278, which lets
+    `board.nvs` write while the board is off between two boots: see 274. A passing test that
+    supplies NVS without powering on fails teardown; it ran no firmware.
     `tests/test_flash.py::test_nvs_refuses_unknown_wrong_type_encrypted_and_late_calls`,
     `tests/test_pytest_plugin.py::test_nvs_without_power_on_fails_teardown`
 - **83.** Binary NVS values are limited by the format and partition capacity, not by a CSV field
@@ -1119,6 +1120,38 @@ that references to its number keep their meaning.
     `tests/test_flash.py::test_utf8_key_at_page_boundary_preserves_entries`,
     `tests/test_flash.py::test_utf8_namespace_at_page_boundary_preserves_entries`,
     `tests/test_flash.py::test_generator_output_must_match_partition_size`
+- **273.** `board.nvs(..., merge=True)` keeps every namespace and key of the partition the test does
+    not name, with its value and type, and gives the test's keys the test's values: before the first
+    power-on over the build's image and the test's earlier calls, after a power-off over what the
+    firmware left. Without `merge` the partition holds the test's keys alone, after a power-off too.
+    `tests/test_flash.py::test_a_merge_before_power_on_keeps_the_build_s_keys_and_the_earlier_call_s`,
+    `tests/test_flash.py::test_a_merge_between_boots_keeps_what_the_firmware_wrote`,
+    `tests/test_flash.py::test_a_write_between_boots_without_merge_replaces_the_partition`,
+    `tests/test_nvs_between_boots.py::test_a_merge_after_a_power_off_keeps_the_firmware_s_count_and_adds_the_test_s_key`,
+    `tests/test_nvs_between_boots.py::test_a_write_after_a_power_off_without_merge_replaces_the_partition`,
+    `tests/test_nvs_between_boots.py::test_a_merge_before_power_on_goes_over_the_test_s_earlier_keys`
+- **286.** A merge never drops a value the firmware wrote without the test naming its key: a key
+    NVS holds with two types refuses the merge before anything is written, unless the test gives
+    it a value. On the ESP32-S31, whose esp32sim model keeps the firmware's flash writes apart until
+    a reset, a dump or a write with the supply off works on them, and a write keeps the firmware's
+    bytes outside its range.
+    `tests/test_flash.py::test_a_merge_over_a_key_of_two_types_is_refused_unless_the_test_names_it`,
+    `tests/test_flash.py::test_a_key_written_with_two_types_is_told_with_both_and_reads_as_the_later`,
+    `runner/src/chip/tests.rs::the_s31_flash_has_what_the_guest_wrote_once_synced`,
+    `runner/src/session/tests.rs::the_flash_is_synced_for_a_dump_or_a_write_only_with_the_supply_off_for_good`,
+    `tests/test_boardlink.py::test_a_flash_dump_goes_out_after_the_board_s_switches_of_the_turn`
+- **274.** `board.nvs` writes the runner's flash only while the board's supply is off, in the turn
+    the test holds, and the firmware reads it at its next boot; the board's time does not move.
+    While the supply is on it raises `BoardOff` naming `board.power_off()`, and the runner refuses a
+    `flash_write` with the supply on as a protocol error, also in the turn the supply comes back in;
+    it accepts one in the turn of the `power` that switched it off.
+    `tests/test_nvs_between_boots.py::test_the_nvs_of_a_board_that_is_on_is_refused`,
+    `tests/test_nvs_between_boots.py::test_a_merge_while_the_board_stays_off_changes_a_setting_between_two_boots`,
+    `tests/test_flash.py::test_nvs_refuses_unknown_wrong_type_encrypted_and_late_calls`,
+    `runner/src/session/tests.rs::a_flash_write_with_the_supply_off_is_in_the_flash_at_the_next_boot`,
+    `runner/src/session/tests.rs::a_flash_write_with_the_supply_on_is_a_protocol_error`,
+    `tests/test_boardlink.py::test_a_flash_write_goes_out_after_the_board_s_switches_of_the_turn`,
+    `tests/test_clock.py::test_a_flash_write_is_answered_in_the_turn_the_link_is_held_at_and_moves_no_time`
 
 ## Request matching
 

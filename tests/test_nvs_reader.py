@@ -2,8 +2,9 @@
 
 import pytest
 
-from esp32tl.backends.esp32sim import BackendError, Esp32Sim
+from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.flash import i8, i16, i32, i64, u8, u16, u32, u64
+from esp32tl.interfaces import BoardOff
 from esp32tl.interfaces.console import Console
 
 pytestmark = pytest.mark.app_path("../firmware/nvs_reader")
@@ -39,5 +40,5 @@ def test_firmware_reads_typed_values(
         " offset=-9223372036854775808"
     )
     console.expect_exact(f"nvs_reader: blob={blob.hex()}")
-    with pytest.raises(BackendError, match=r"write the flash before board.power_on\(\)"):
+    with pytest.raises(BoardOff, match=r"call board.power_off\(\) first"):
         board.nvs({})

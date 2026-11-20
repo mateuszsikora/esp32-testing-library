@@ -405,19 +405,26 @@ CI's existing firmware glob includes its build in the cache.
 
 `firmware/persistence/main/main.c` depends on `nvs_flash`, `esp_timer`, `esp_driver_spi`, `fatfs`
 and `sdmmc`. `count_boot` calls `nvs_flash_init`, opens `persistence` with `NVS_READWRITE`, reads
-`boots` (absent is 0), writes it back one higher and commits. `next` keeps a count beside a marker
-word, `0x5e5510f1`, in `.rtc_noinit` (`RTC_NOINIT_ATTR`, RTC slow memory) and in `.noinit`
-(`__NOINIT_ATTR`, DRAM): a marker that is not there, as after a power-on, restarts the count at 1.
-`log_boot` mounts the card as `examples/sd_data_logger` does (`spi_bus_initialize` on
-`SDSPI_HOST_DEFAULT`, `esp_vfs_fat_sdspi_mount` at `/sdcard`, no formatting), appends a line to
-`BOOTS.TXT`, counts the newlines of the whole file, unmounts and frees the bus; a mount that fails
-frees the bus and gives -1. The image uses ESP-IDF's default `sdkconfig` and partition table:
-`nvs` at `0x9000`, size `0x6000`.
+`boots` (absent is 0), writes it back one higher and commits. `print_note`, after the boot's line,
+opens the namespace again with `NVS_READONLY`, asks `nvs_get_str` for the length of `note` with a
+`NULL` buffer, then reads it into a buffer of that length from `malloc`: `ESP_ERR_NVS_NOT_FOUND`
+prints nothing, any other error aborts through `ESP_ERROR_CHECK`, so a note of any length NVS holds
+prints whole.
+`next` keeps a count beside a marker word, `0x5e5510f1`, in `.rtc_noinit` (`RTC_NOINIT_ATTR`, RTC
+slow memory) and in `.noinit` (`__NOINIT_ATTR`, DRAM): a marker that is not there, as after a
+power-on, restarts the count at 1. `log_boot` mounts the card as `examples/sd_data_logger` does
+(`spi_bus_initialize` on `SDSPI_HOST_DEFAULT`, `esp_vfs_fat_sdspi_mount` at `/sdcard`, no
+formatting), appends a line to `BOOTS.TXT`, counts the newlines of the whole file, unmounts and
+frees the bus; a mount that fails frees the bus and gives -1. The image uses ESP-IDF's default
+`sdkconfig` and partition table: `nvs` at `0x9000`, size `0x6000`.
 
 What it proves on esp32sim, measured on the runs of `tests/test_power.py`: `esp_restart()` keeps
 both memory counts (2 on the second boot) and gives `reason=3 rom=12`; `board.reset()` and a power
 cycle give `reason=1 rom=1` with both counts back at 1, the NVS count and the card's lines going on,
-and `uptime_ms` under a second at the print after a reset, while `board.now` goes on.
+and `uptime_ms` under a second at the print after a reset, while `board.now` goes on. The runs of
+`tests/test_nvs_between_boots.py` show that a `board.nvs(...)` written while the board is off
+reaches the next boot: with `merge=True` the count goes on (`boot=3`) beside the test's `note`, and
+without it the count starts again (`boot=1`, then the restart).
 
 ## `ota_state`
 

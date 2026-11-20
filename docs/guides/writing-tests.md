@@ -143,9 +143,12 @@ the first `board.power_on()`:
 - A UART route's source (a model, a replay or a real device), the Wi-Fi access point and a bridge
   are given before it. One given later is refused with `SourceError`, and so is a second source on
   the same route.
-- `board.nvs(...)` is written before it too; after it, it raises
-  `BackendError: board.nvs: write the flash before board.power_on()`. A second call for the same
-  partition replaces the first.
+- `board.nvs(...)` is written before it too, or later while the board is off after
+  `board.power_off()`; while the board is on it raises
+  `BoardOff: board.nvs: the board is on: call board.power_off() first, and write the flash while it is off`.
+  A second call for the same partition replaces the first, or with `merge=True` goes over it and
+  over what the build or the firmware left ([flash
+  contents](../features/flash-contents-user.md#change-nvs-between-two-boots)).
 - A card in the SD card slot and the levels on the lines can be given before power-on, and changed
   at any time after it.
 

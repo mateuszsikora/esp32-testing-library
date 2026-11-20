@@ -547,7 +547,7 @@ class Serial(Board):
     def tap_console(self, path: str | Path) -> Tap:
         return self._console.tap(path)
 
-    def nvs(self, namespaces: Namespaces, partition: str = "nvs") -> None:
+    def nvs(self, namespaces: Namespaces, partition: str = "nvs", *, merge: bool = False) -> None:
         self._skip("serial: NVS contents cannot be configured on this backend")
 
     def flash(self) -> FlashSnapshot:
