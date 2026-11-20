@@ -1,12 +1,15 @@
 """esp-mqtt of the pinned ESP-IDF with CleanSession=0, against the broker's stored session."""
 
 from itertools import pairwise
+from typing import cast
 
 import pytest
 
 from esp32tl.backends.esp32sim import Esp32Sim
+from esp32tl.interfaces.condition import Condition
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.modem import Modem
+from esp32tl.net import Internet
 from esp32tl.net.mqtt import Broker, Message
 from esp32tl.units import Duration, about, kbit_s, ms, seconds
 
@@ -235,4 +238,76 @@ def test_sessions_work_across_a_long_path(
     client = board.wait_until(reconnected, within=seconds(30))
     assert client.session_present
     board.wait_until(again, within=seconds(5))
+    assert board.link.warnings == []
+
+
+def logged(network: Internet, text: str, start: int) -> Condition[dict[str, object] | None]:
+    """The first line of the network's transcript from event `start` on that contains `text`."""
+
+    def find() -> dict[str, object] | None:
+        return next((e for e in network.events[start:] if text in str(e.get("event", ""))), None)
+
+    return Condition(find, f"a network event with {text!r}")
+
+
+def test_a_black_hole_runs_out_the_keepalive_with_ppp_up_and_the_restore_answers_at_the_rtt(
+    board: Esp32Sim, modem: Modem, broker: Broker, console: Console
+) -> None:
+    network = modem.network()
+    connected(board, broker)
+    network.set_path(rtt=ms(200))
+    board.wait(seconds(1))
+    no_pingresp = console.line(r"mqtt_client: No PING_RESP, disconnected")
+    gone = console.line(r"mqtt_session: disconnected")
+    network.set_path(drop=True)
+    # esp-mqtt's keepalive of 60 s runs out: no PINGRESP came back; the PPP link never ended.
+    board.wait_until(no_pingresp, within=seconds(200))
+    board.wait_until(gone, within=seconds(1))
+    assert modem.data_mode and network.ppp.lcp_open and network.ppp.ipcp_open
+    lines = [str(e.get("event", "")) for e in network.events]
+    assert any(line.startswith("net: path dropped") for line in lines)
+    ends = ("ppp: the device ended the link", "ppp: the far end ended the link")
+    assert not [line for line in lines if line in ends]
+    start = len(network.events)
+    reconnected = broker.next_connection()
+    again = console.line(r"mqtt_session: connected session_present=1")
+    network.set_path(rtt=ms(200))
+    accepted = board.wait_until(
+        logged(network, "→ 10.64.0.1:1883 accepted", start), within=seconds(30)
+    )
+    client = board.wait_until(reconnected, within=seconds(5))
+    board.wait_until(again, within=seconds(5))
+    # Nothing waits ahead of the SYN on the path: the device's CONNECT, sent once the SYN-ACK
+    # came back, reaches the broker one RTT and some 7.5 ms of UART and firmware after the SYN.
+    assert client.at - Duration(cast(int, accepted["t_ns"])) == about(ms(207), within=ms(5))
+    assert board.link.warnings == []
+
+
+def test_a_blocked_broker_port_drops_or_refuses_while_dns_answers(
+    board: Esp32Sim, modem: Modem, broker: Broker, console: Console
+) -> None:
+    network = modem.network()
+    connected(board, broker)
+    board.wait(seconds(1))
+    gone = console.line(r"mqtt_session: disconnected")
+    network.block(1883, how="drop")
+    board.wait_until(gone, within=seconds(200))
+    asked = len(network.dns.asked)
+    start = len(network.events)
+    # Its next tries: DNS answers once lwIP's cache of the answer, whose TTL `Dns` gives as
+    # 60 s, is over; its SYNs go nowhere.
+    board.wait_until(
+        Condition(lambda: len(network.dns.asked) > asked or None, "a DNS question"),
+        within=seconds(120),
+    )
+    board.wait_until(logged(network, "dropped: port 1883 is blocked", start), within=seconds(30))
+    assert len(broker.connection_attempts) == 1
+    start = len(network.events)
+    network.block(1883, how="refuse")
+    board.wait_until(logged(network, "refused, port 1883 is blocked", start), within=seconds(30))
+    assert len(broker.connection_attempts) == 1
+    reconnected = broker.next_connection()
+    network.unblock(1883)
+    client = board.wait_until(reconnected, within=seconds(30))
+    assert client.connection_id == 2
     assert board.link.warnings == []

@@ -1,6 +1,7 @@
 """The simulated network behind a modem or either virtual Wi-Fi role, on the board's clock."""
 
 import math
+import struct
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -17,7 +18,17 @@ from esp32tl.net.dns import Dns
 from esp32tl.net.ethernet import Ethernet
 from esp32tl.net.http import HttpServer
 from esp32tl.net.http_client import HttpClient
-from esp32tl.net.ip import ACK, SYN, TCP, Connection, Fragmented, Network, StreamService, ipv4
+from esp32tl.net.ip import (
+    ACK,
+    SYN,
+    TCP,
+    UDP,
+    Connection,
+    Fragmented,
+    Network,
+    StreamService,
+    ipv4,
+)
 from esp32tl.net.mqtt import Broker
 from esp32tl.net.ntp import DEFAULT_UTC, Ntp
 from esp32tl.net.ppp import Ppp
@@ -68,6 +79,9 @@ class LinkChange:
     cause: LinkCause
 
 
+Block = Literal["drop", "refuse"]
+
+
 class _Direction:
     """One direction of the path: a FIFO of datagrams, each with the time it leaves. `rate` spaces
     them, one after another, then each takes `delay`; none leaves before the one ahead of it."""
@@ -102,9 +116,10 @@ class Internet:
     connection to the device with `connect`.
 
     Responses are stamped 1 ms after the request's UART chunk or Ethernet frame, or the path's RTT
-    after it (`set_path`). Public calls run while the board is held, and callbacks while it
-    advances: neither uses host time or sockets, but for a bridge's. `bridging` is called with the
-    call before a bridge is made, and refuses it by raising: the backend's say on the wall clock.
+    after it (`set_path`); the path may drop every datagram, and `block` one TCP port's. Public
+    calls run while the board is held, and callbacks while it advances: neither uses host time or
+    sockets, but for a bridge's. `bridging` is called with the call before a bridge is made, and
+    refuses it by raising: the backend's say on the wall clock.
 
     The end of the link, a modem's call or an access point off the air, loses the connections the
     test opened and leaves the device's open and silent, as the far end of a device that lost its
@@ -129,6 +144,7 @@ class Internet:
         self._mac = mac
         self._up = _Direction(0)
         self._down = _Direction(LATENCY_NS)
+        self._drop = False  # the path drops every datagram entering it: `set_path(drop=True)`
         self._datagram: int | None = None  # the size of the IPv4 datagram the link is sending
         self.events: list[dict[str, object]] = []
         self.ip = Network(self._downlink, self.log, mtu=self._mtu, carries=self._carries)
@@ -230,7 +246,10 @@ class Internet:
             self.ip.resume(self.lease.address)
 
     def _carries(self) -> bool:
-        """Whether the link carries IP now: on, and behind a station, with a lease."""
+        """Whether the link carries IP now: on, behind a station with a lease, and the path not
+        dropping every datagram. While it does not, what the network's TCP has to send waits."""
+        if self._drop:
+            return False
         return self.active and (not isinstance(self.link, Station) or self.lease is not None)
 
     def _forget_syns(self, address: str | None = None) -> None:
@@ -395,6 +414,11 @@ class Internet:
                 else "the modem has not dialled"
             )
             raise NotReachable(f"{call}: {down}: the network reaches no device")
+        if self._drop:
+            raise NotReachable(
+                f"{call}: the path drops every datagram (network.set_path(drop=True)):"
+                " the SYN would reach no device"
+            )
         if isinstance(self.link, Ppp):
             if self.device_address is None:
                 raise NotReachable(
@@ -454,11 +478,14 @@ class Internet:
         rtt: Duration = DEFAULT_RTT,
         downlink: Rate | None = None,
         uplink: Rate | None = None,
+        drop: bool = False,
     ) -> None:
         """The path between the link and the network, IPv4 only: what the device sends at `t` is
         answered at `t + rtt`, plus the time the datagrams take at `uplink` and `downlink`, `None`
-        being no limit. Each call states the whole path, and applies to datagrams entering after
-        it; none overtakes another. These are the test's parameters, not a model of an operator.
+        being no limit. With `drop`, the path drops every datagram entering it, either way, and
+        the network's TCP holds what it has to send until a call without it. Each call states the
+        whole path, and applies to datagrams entering after it; none overtakes another. These are
+        the test's parameters, not a model of an operator.
         """
         if not isinstance(rtt, Duration):
             raise TypeError(f"network.set_path: rtt is {rtt!r}, not a Duration, as ms(200)")
@@ -470,12 +497,68 @@ class Internet:
         for name, rate in (("downlink", downlink), ("uplink", uplink)):
             if rate is not None and not isinstance(rate, Rate):
                 raise TypeError(f"network.set_path: {name} is {rate!r}, not a Rate, as kbit_s(512)")
+        if not isinstance(drop, bool):
+            raise TypeError(f"network.set_path: drop is {drop!r}, not True or False")
+        if drop and (rtt != DEFAULT_RTT or downlink is not None or uplink is not None):
+            raise ValueError(
+                "network.set_path: drop=True drops every datagram: it takes no rtt, downlink or"
+                " uplink"
+            )
         # The floor stays on the way down, so that at the default a service takes a request at the
         # request's own time, and the rest is shared. The two always add up to `rtt`, exactly.
         self._up.delay = (rtt.ns - LATENCY_NS) // 2
         self._down.delay = rtt.ns - self._up.delay
         self._up.rate, self._down.rate = uplink, downlink
+        lifted, self._drop = self._drop and not drop, drop
+        if drop:
+            self.log("net: path: drop every datagram")
+            return
         self.log(f"net: path: rtt {rtt}, downlink {downlink or 'any'}, uplink {uplink or 'any'}")
+        if lifted:
+            # What the network's TCP held for the path goes now, onto it, and the ACKs and
+            # windows the device sent into the black hole are asked for again.
+            self.ip.resume(probe=True)
+
+    def block(self, port: int, *, how: Block) -> None:
+        """Block TCP `port` of the network, on every destination address, until `unblock`:
+        `"drop"` swallows the device's segments to it, an established connection seeing nothing
+        back, and its service's writes wait; `"refuse"` answers the device's SYN with RST, as when
+        nothing listens there, and leaves the connections already open as they are. UDP, DNS and
+        NTP included, is not affected. Blocking a blocked port again changes how."""
+        call = f"network.block({port!r}, how={how!r})"
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+            raise ValueError(f"{call}: the TCP port must be between 1 and 65535")
+        if how not in ("drop", "refuse"):
+            raise ValueError(f"{call}: how is 'drop' or 'refuse'")
+        self.log(f"net: block: TCP {port}, {how}")
+        self.ip.block(port, how)
+
+    def unblock(self, port: int) -> None:
+        """Lift `block` from TCP `port`: what its connections held goes now."""
+        call = f"network.unblock({port!r})"
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+            raise ValueError(f"{call}: the TCP port must be between 1 and 65535")
+        if port not in self.ip.blocked:
+            raise ValueError(f"{call}: TCP port {port} is not blocked")
+        self.log(f"net: unblock: TCP {port}")
+        self.ip.unblock(port)
+
+    def _dropped(self, datagram: bytes, way: str) -> None:
+        """Log a datagram the path dropped, going `way`, `up` or `down`."""
+        what = f"{len(datagram)} bytes"
+        try:
+            parsed = ipv4(datagram)
+        except Fragmented:
+            parsed = None
+        if parsed is not None:
+            protocol, src, dst, payload = parsed
+            if protocol in (TCP, UDP) and len(payload) >= 4:
+                sport, dport = struct.unpack(">HH", payload[:4])
+                name = "TCP" if protocol == TCP else "UDP"
+                what = f"{name} {src}:{sport} → {dst}:{dport}, {what}"
+            else:
+                what = f"IPv4 {src} → {dst}, {what}"
+        self.log(f"net: path dropped {what} going {way}")
 
     def _peer(self) -> Ppp | Ethernet | Station:
         def send(data: bytes) -> None:
@@ -530,6 +613,9 @@ class Internet:
         self._down.clear()
 
     def _uplink(self, datagram: bytes) -> None:
+        if self._drop:
+            self._dropped(datagram, "up")
+            return
         at = self.now()
         self._up.queue.append((self._up.leaves(at, len(datagram)), datagram))
         self._arrive(at)
@@ -547,6 +633,9 @@ class Internet:
     def _downlink(self, datagram: bytes) -> None:
         if not self.active:
             return  # what a service writes on a connection whose link has ended goes nowhere
+        if self._drop:
+            self._dropped(datagram, "down")
+            return
         self._datagram = len(datagram)
         try:
             self.link.send_ip(datagram)

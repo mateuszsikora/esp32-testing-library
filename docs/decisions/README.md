@@ -361,6 +361,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The broker keeps how each connection ended in connection_ends, not on MqttClient](harness.md#the-broker-keeps-how-each-connection-ended-in-connection_ends-not-on-mqttclient) | `harness.md` | decided (#274) |
 | [NTP and DNS keep a history of what the device asked, with board times](harness.md#ntp-and-dns-keep-a-history-of-what-the-device-asked-with-board-times) | `harness.md` | decided (#273) |
 | [Behind a Wi-Fi access point the network records no link changes](harness.md#behind-a-wi-fi-access-point-the-network-records-no-link-changes) | `harness.md` | decided (#275) |
+| [A black hole is a value of the path, and a port is blocked by dropping or refusing](harness.md#a-black-hole-is-a-value-of-the-path-and-a-port-is-blocked-by-dropping-or-refusing) | `harness.md` | decided (#277) |
 
 ## The runner crate and esp32sim
 

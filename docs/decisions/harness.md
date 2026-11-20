@@ -5082,3 +5082,52 @@ up across a reconnect, and the reconnect a test measures would have no up. Also 
 list behind the access point with conditions that wait without raising, because such a wait can
 only time out. A record of association needs a `wifi_link`-like event from the runner for the
 access point's side; it comes with a test that needs it.
+
+## A black hole is a value of the path, and a port is blocked by dropping or refusing
+
+Status: decided (#277)
+
+`network.set_path(drop=True)` makes the path drop every IPv4 datagram that enters it, either way,
+and `set_path()`, or a call with an RTT or rates, restores it. A black hole is one more value of the
+path, so it follows the rule the path already has: each call states the whole path, and what it
+leaves out goes back to its default. `drop=True` takes no `rtt`, `downlink` or `uplink`, since it
+delays nothing. A dropped datagram is gone: it takes no time at a rate and no place in the FIFO, so
+the first datagram after the restore leaves at the path's RTT. A long RTT could not do this: nothing
+overtakes the datagrams sent into it. LCP, IPCP, ARP and DHCP stay on the link, as they do for the
+RTT, so the link stays up and the device's link keepalives are still answered.
+
+The network's TCP has no retransmission, since the link it was written for loses nothing. A segment
+the network sends into the black hole would leave a gap that nothing fills, and the device's stream
+would stall after the restore. So while the path drops, what the network's TCP has to send waits, as
+it does while the link carries no IP, and goes at the restore: that is when a real stack's
+retransmission would get through. The other way, the device's ACKs and window updates that the
+black hole swallowed, the restore asks for again with one keepalive probe (RFC 9293, 3.8.4) on each
+connection with something unacknowledged or waiting, since with a full window nothing else would
+move it on; and a SYN-ACK lost in the black hole is sent again when the device's SYN comes again,
+as in SYN-RECEIVED. Both stand in for the retransmission timer this TCP does not have, at the one
+moment the harness knows something was lost. A connection the test opens would have its SYN dropped
+and never sent again, so `network.connect` raises `NotReachable` in a black hole.
+
+`network.block(port, how="drop" | "refuse")` and `network.unblock(port)` act on one TCP port of the
+network, on every address, where the device's segments arrive: what was on the path before the call
+is blocked too, as a firewall in front of the service would block it. `drop` swallows the device's
+segments and holds what the port's connections have to send, for the same reason as the black hole,
+and `unblock` probes them as the restore does. A probe goes only where something may have been
+swallowed: after a black hole or a `"drop"` block, not after `"refuse"`, and one due while the link
+carries no IP waits for it.
+`refuse` answers a SYN with RST, as when nothing listens, and leaves open connections alone, as a
+service that stopped accepting does. The test's own connections, whose network port is the one they
+come from, are not blocked.
+
+**Rejected:** a retransmission timer in the network's TCP, because the black hole and a dropped
+port are the only losses, and their end is known: a probe at that instant does what the timer
+would, with no timer to schedule, keep deterministic and show in `quiet_until`. Also rejected:
+`network.black_hole()` and `network.restore()`, because they would be path state that
+`set_path` does not state: a later `set_path(rtt=…)` would either keep the black hole, against the
+rule that each call states the whole path, or lift it unasked. Also rejected: sending the network's
+segments into the black hole, because with no retransmission the device's stream would have a gap
+after the restore that a real network does not leave. Also rejected: `refuse` answering every
+segment of an open connection with RST too, because that ends a connection the test did not ask to
+end; `drop`, then `unblock`, or the broker's `disconnect`, does that. Also rejected: blocking UDP
+ports, because what the scenarios need is a service on TCP that stops answering while DNS and NTP
+answer; a UDP block can come with a firmware that needs it.

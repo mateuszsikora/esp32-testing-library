@@ -111,6 +111,73 @@ paces bytes as it does (protocol, rule 5), and the rate is on top of that.
 Nothing here reads the host's clock, and the arithmetic is on integers but for the rate's division,
 so two runs give the same stamps (`tests/test_determinism.py::test_mqtt_session_on_a_path`).
 
+### The black hole
+
+`set_path(drop=True)` sets `Internet._drop`, and every other call clears it; the values of the two
+directions are set as for the default path, and the call logs `net: path: drop every datagram`.
+After the checks of `rtt` and the rates, `drop` not a `bool` raises `TypeError`, and `drop=True`
+with an `rtt` other than `DEFAULT_RTT` or a rate raises `ValueError`; a refusal changes nothing.
+While `_drop` is set, `_uplink` hands the datagram to `_dropped(datagram, "up")` instead of
+`_up.leaves`, and `_downlink` hands it to `_dropped(datagram, "down")` before the link sees it,
+after the check of `active`. A dropped datagram so touches neither `_free` nor `_last`, which is why
+the first datagram after the restore leaves at its own RTT. `_dropped` parses the datagram with
+`ipv4` for the log line, `net: path dropped <what> going <up|down>`; a fragment or a datagram that
+does not parse is `<n> bytes`. The link's own frames never pass through `_uplink` or `_downlink`:
+LCP, IPCP, ARP, DHCP and the virtual station's own DHCP go on as before.
+
+`_carries` is false while `_drop` is set, so `Network._flush` holds what a flow that is not orphaned
+has to send in `pending`, its FIN behind it, as it does while the link carries no IP; an orphaned
+flow's output reaches `_downlink` and is dropped, as it would reach no stack. The other segments
+`Network` sends are answers to the device's segments: in a black hole only to those that were on the
+uplink when the path began to drop, an ACK, a UDP answer or a SYN-ACK, which `_downlink` drops; and
+the SYN of `Network.connect`, which `Internet.connect` refuses first, with `NotReachable`. A lost
+SYN-ACK leaves a flow of the device's that is not `established`; the device's SYN again on that
+tuple, with `seq + 1 == rcv_nxt`, is answered with the SYN-ACK again, from `ISN`, and logged
+`net: TCP <src>:<sport> → <dst>:<dport> SYN again, answered again`, as SYN-RECEIVED does
+(RFC 9293, 3.10.7.4). The service's `accept` ran once, at the first SYN, and is not run again.
+
+A call that clears `_drop` after it was set calls `Network.resume(probe=True)` after logging the
+path, which flushes every flow onto the new path at the board's instant; `_flush` still checks
+`_carries`, so a link that is down or a station with no lease keeps holding. Then `resume` calls
+`Network.probe()`, `_probe` on every flow: the device's ACKs and window updates sent into the black
+hole are gone, so `snd_una` and `peer_window` may be stale, and with a full or a zero window
+`_flush` sends nothing and the device has nothing to send. For every established flow that is not
+orphaned nor on a `"drop"` port, the test's own included, with `snd_una < snd_nxt`, `pending`, or a
+FIN pending and not sent, `_probe` sends one ACK with no data from `snd_nxt - 1`, a keepalive's (RFC
+9293, 3.8.4). lwIP answers a segment outside its window at once with its ACK and window, and the ACK
+handling in `_tcp` then calls `_flush`. The path is a FIFO, so what was sent before the probe
+reaches the device before it. While `_carries` is false, as behind a virtual station with no lease,
+`_probe` sends nothing and sets `_owed`; the next `resume`, which `_station_changed` calls when the
+station has a lease again, probes every flow then and clears it. `forget_device` for the whole
+stack, at the end of a PPP link among others, clears it too: no flow it was owed to is left.
+`_link_ended` does not touch `_drop`: like the rest of the path's values it outlives a reset.
+
+### Blocked ports
+
+`Network.blocked` maps a TCP port of the network to `"drop"` or `"refuse"`.
+`Internet.block(port, how=)` checks the port as `bridge` does and `how`, logs
+`net: block: TCP <port>, <how>` and calls `Network.block`. `Internet.unblock(port)` checks the port
+the same way first, so `unblock(True)` does not reach port 1, raises unless the port is in
+`blocked`, logs `net: unblock: TCP <port>` and calls `Network.unblock`.
+
+Both end in `Network._release(port, probe=)`, which flushes every flow of the device's whose network
+port is `port`, so a change from `"drop"` sends what was held. Only when the port was `"drop"`
+before the call does it then call `_probe` with those flows, for the ACKs and windows the block
+swallowed: a `block(port, how="refuse")` of a port that was not blocked, or an `unblock` of a
+`"refuse"` port, swallowed nothing and sends no probe.
+
+`Network._tcp` looks the port up once the segment's flow is known, for a flow of the device's or no
+flow; a flow the test opened, whose network port is its ephemeral one, is never blocked. With
+`"drop"` it logs `net: TCP <src>:<sport> → <dst>:<dport> dropped: port <dport> is blocked` and
+returns, before any state changes; with `"refuse"`, a SYN that would make a new flow is answered as
+for a port with no service, RST|ACK from sequence 0 acknowledging the SYN, and logged
+`net: TCP <src>:<sport> → <dst>:<dport> refused, port <dport> is blocked`. Every other segment of
+`"refuse"` goes on as before, so the connections already open stay. `_flush` returns at once for a
+device's flow on a `"drop"` port, orphaned or not: what its service writes stays in `pending`, or is
+discarded by `_write` for an orphaned flow, as it is when the window has no room. The check is where
+the network takes the segment, after the path, so a segment already on its way when the port is
+blocked is blocked too.
+
 ## The bridge
 
 `esp32tl/net/bridge.py`. `Internet.bridge(port, to)` checks `port` (an `int` from 1 to 65535, else
@@ -529,7 +596,8 @@ connections, buffer in `pending` and `fin_pending` and leave `_flush` to send: i
 until `established`, then pieces no larger than the device's MSS, its window less what is in
 flight, and the MTU less 40 bytes, and for a client flow hands each piece to `on_sent` as it
 goes. A zero window leaves `pending` as it is until an ACK from the
-device raises `peer_window`; nothing probes it.
+device raises `peer_window`; nothing probes it, but the restore of the path after a black hole
+([The black hole](#the-black-hole)).
 
 In `_tcp`, a segment for a client flow that is not established is the device's answer to the SYN
 only when it carries ACK with `ISN + 1` (RFC 9293, 3.10.7.3); anything else is ignored. With RST
