@@ -425,7 +425,7 @@ class Broker:
 
     def next_message(
         self, topic: str = "#", payload: bytes | str | None = None, *, will: bool | None = None
-    ) -> Callable[[], Message | None]:
+    ) -> Condition[Message | None]:
         """A non-consuming condition for the first match appended after this call.
 
         `topic` accepts MQTT wildcards; `payload` is bytes or UTF-8 text. `will=True` keeps only
@@ -489,7 +489,7 @@ class Broker:
 
     def next_delivery(
         self, topic: str = "#", payload: bytes | str | None = None
-    ) -> Callable[[], Delivery | None]:
+    ) -> Condition[Delivery | None]:
         """A non-consuming condition for the first PUBLISH written to a client after this call,
         with the filters and the boundary of `next_message`."""
         start = len(self.deliveries)
@@ -508,7 +508,7 @@ class Broker:
         wanted = payload.encode() if isinstance(payload, str) else payload
         return _first(self.deliveries, topic, wanted)
 
-    def subscribed(self, topic: str) -> Callable[[], bool]:
+    def subscribed(self, topic: str) -> Condition[bool]:
         """A live condition: an active client currently subscribes to exactly `topic`."""
 
         def find() -> bool:
@@ -516,7 +516,7 @@ class Broker:
 
         return Condition(find, f"an active MQTT subscription to {topic!r}", "MQTT")
 
-    def next_connection(self) -> Callable[[], MqttClient | None]:
+    def next_connection(self) -> Condition[MqttClient | None]:
         """A non-consuming condition for the first CONNECT recorded after this call."""
         start = len(self.clients)
 
@@ -529,7 +529,7 @@ class Broker:
         """Return the first recorded CONNECT, even if it has closed, or None."""
         return self.clients[0] if self.clients else None
 
-    def next_connection_attempt(self) -> Callable[[], ConnectionAttempt | None]:
+    def next_connection_attempt(self) -> Condition[ConnectionAttempt | None]:
         """A non-consuming condition for the first CONNECT outcome recorded after this call,
         accepted or rejected."""
         start = len(self.connection_attempts)
@@ -545,7 +545,7 @@ class Broker:
         """How and when the connection `connection_id` ended, or None while it has not."""
         return next((e for e in self.connection_ends if e.connection_id == connection_id), None)
 
-    def next_end(self, client_id: str | None = None) -> Callable[[], ConnectionEnd | None]:
+    def next_end(self, client_id: str | None = None) -> Condition[ConnectionEnd | None]:
         """A non-consuming condition for the first connection end recorded after this call; with
         `client_id`, the first of a connection with that client ID."""
         find = FirstFrom(
@@ -558,7 +558,7 @@ class Broker:
         )
         return Condition(find, description, "MQTT")
 
-    def next_subscribe(self, filter: str | None = None) -> Callable[[], SubscribeRequest | None]:
+    def next_subscribe(self, filter: str | None = None) -> Condition[SubscribeRequest | None]:
         """A non-consuming condition for the first SUBSCRIBE recorded after this call; with
         `filter`, the first that names exactly that topic filter. UNSUBSCRIBE never matches."""
         find = FirstFrom(

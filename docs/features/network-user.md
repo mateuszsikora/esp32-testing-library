@@ -1463,10 +1463,10 @@ neither service and is not recorded.
 |---|---|
 | `network.ntp.exchanges` | Every NTP v3 or v4 client request, each an `NtpExchange` with `at` (a `Duration`) and `answered`, `False` for one that came while the server was silent; `True` says the server answered, not that the answer reached the device, which the end of the link can drop on the path |
 | `network.ntp.requests` | How many of `exchanges` were answered |
-| `network.ntp.next_exchange(*, answered=None)` | The first request recorded after the call; with `answered=True` or `False`, the first answered or the first not |
+| `network.ntp.next_exchange(*, answered=None)` | Condition returning the first request recorded after the call; with `answered=True` or `False`, the first answered or the first not |
 | `network.dns.questions` | Every question the server parsed, each a `DnsQuestion` with `at` (a `Duration`), `name` and `qtype` (1 for A, 28 for AAAA); every one is answered |
 | `network.dns.asked` | The names of `questions`, in order |
-| `network.dns.next_question(name=None)` | The first question recorded after the call; with `name`, the first for exactly that name |
+| `network.dns.next_question(name=None)` | Condition returning the first question recorded after the call; with `name`, the first for exactly that name |
 
 Datagrams that are not an NTP client request or a DNS query with one question are neither
 answered nor recorded. `name` is compared exactly, with the case the device sent and no final dot;
@@ -1721,13 +1721,14 @@ response = board.wait_until(exchange.response, within=seconds(2))
 assert response.status == 200
 ```
 
-`seconds` comes from `esp32tl.units`. `network.when_leased()` describes current state and returns
-`HostLease` while the host holds a lease. `network.lease` reads that same lease without waiting,
-or `None`. Its fields are `address`, `device_address`, `at` and `expires` (board-clock
-`Duration`s), `mask` and optional `router`. The default device address is the DHCP server
-identifier, option 54, not necessarily the router. `connect(port, address=...)` overrides the
-destination and uses the leased host address as its source. Raw TCP, HTTP, path configuration,
-transcripts and reports work as on the other links. ARP resolves a destination before sending IP.
+`seconds` comes from `esp32tl.units`. `network.when_leased()` is a `Condition[HostLease | None]`
+on current state: it returns the `HostLease` while the host holds a lease. `network.lease` reads
+that same lease without waiting, or `None`. Its fields are `address`, `device_address`, `at` and
+`expires` (board-clock `Duration`s), `mask` and optional `router`. The default device address is
+the DHCP server identifier, option 54, not necessarily the router. `connect(port, address=...)`
+overrides the destination and uses the leased host address as its source. Raw TCP, HTTP, path
+configuration, transcripts and reports work as on the other links. ARP resolves a destination
+before sending IP.
 
 Before a lease, even with `address=`, `connect` raises `NotReachable`:
 `network.connect(80): the device has leased no address to the station yet; wait for network.when_leased()`.

@@ -41,7 +41,7 @@ class Dns:
         """The names of `questions`, in order."""
         return [question.name for question in self.questions]
 
-    def next_question(self, name: str | None = None) -> Callable[[], DnsQuestion | None]:
+    def next_question(self, name: str | None = None) -> Condition[DnsQuestion | None]:
         """A non-consuming condition for the first question recorded after this call; with
         `name`, the first for exactly that name. The boundary is append order, even at equal
         times, and polling never moves it."""
