@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -141,6 +142,19 @@ def test_softap_leaves_and_rejoins(board: Esp32Sim, wifi: Wifi, password: str | 
     board.console.sendline("ap-on")
     second = board.wait_until(network.when_leased(), within=seconds(5))
     assert second.at > first.at
-    ready = [e["t_ns"] for e in network.events if e["event"] == "wifi station: ready"]
+    ready = [cast(int, e["t_ns"]) for e in network.events if e["event"] == "wifi station: ready"]
     discover = [e["t_ns"] for e in network.events if e["event"] == "dhcp station: DISCOVER"]
     assert ready == discover
+    # The station joined, left with the access point and joined again, at the data link's times.
+    assert [(c.up, c.cause) for c in network.link_changes] == [
+        (True, "station joined"),
+        (False, "station left"),
+        (True, "station joined"),
+    ]
+    disconnected = [
+        cast(int, e["t_ns"]) for e in network.events if e["event"] == "wifi station: disconnected"
+    ]
+    # A disconnected before the first join changes nothing: the link was not up.
+    left = next(t for t in disconnected if t > ready[0])
+    assert [c.at.ns for c in network.link_changes] == [ready[0], left, ready[1]]
+    assert first.at.ns >= ready[0] and ready[1] <= second.at.ns

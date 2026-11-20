@@ -3,11 +3,12 @@
 import math
 from collections import deque
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from ipaddress import IPv4Address
 from typing import Literal, cast, overload
 
-from esp32tl.interfaces.condition import Condition
+from esp32tl.interfaces.condition import Condition, FirstFrom
 from esp32tl.link.boardlink import Output
 from esp32tl.net.bridge import Bridge, address
 from esp32tl.net.client import NotReachable, TcpConnection
@@ -30,6 +31,41 @@ LOCAL = "10.64.0.1"  # the network's own address: its DNS, its router, the test'
 DEFAULT_RTT = Duration(LATENCY_NS)
 
 Link = Literal["ppp", "ethernet", "station"]
+# What brought the link up or ended it, as `LinkChange.cause` says.
+LinkCause = Literal[
+    "IPCP open",
+    "station joined",
+    "call ended",
+    "far end terminated",
+    "device terminated",
+    "device renegotiated LCP",
+    "device renegotiated IPCP",
+    "device left data mode",
+    "modem hung",
+    "coverage lost",
+    "modem off",
+    "modem lost power",
+    "modem restarted",
+    "station left",
+    "device reset",
+    "device lost its power",
+]
+
+
+@dataclass(frozen=True)
+class LinkChange:
+    """The link between the device and the network came up or went down, on the board's time.
+
+    Behind a modem the link is up from the instant IPCP opens; behind a virtual station, from the
+    instant the station has joined the device's access point. `cause` says what brought it up,
+    `IPCP open` or `station joined`, or what ended it: `call ended`, `far end terminated`,
+    `device terminated`, `device renegotiated LCP`, `device renegotiated IPCP`,
+    `device left data mode`, `modem hung`, `coverage lost`, `modem off`, `modem lost power`,
+    `modem restarted`, `station left`, `device reset` or `device lost its power`."""
+
+    at: Duration
+    up: bool
+    cause: LinkCause
 
 
 class _Direction:
@@ -115,6 +151,9 @@ class Internet:
         self._stale: int | None = None
         # Serves behind an access point only; its leases outlive the link's restarts.
         self.dhcp = Dhcp(self.now, self.log)
+        # Behind a modem or a station: each time the link came up or went down, in order.
+        self.link_changes: list[LinkChange] = []
+        self._link_up = False
         self.link: Ppp | Ethernet | Station = self._peer()
         self.active = False
 
@@ -148,6 +187,38 @@ class Internet:
         if not isinstance(self.link, Station):
             raise ValueError("network.when_leased requires wifi.station()")
         return Condition(lambda: self.lease, "the station has a DHCP lease", "DHCP station")
+
+    def next_link_up(self) -> Condition[LinkChange | None]:
+        """A described condition for the first time the link comes up after this call: IPCP
+        opening behind a modem, the station joining behind a virtual station. The boundary is the
+        changes there are now, `link_changes` at this call; the condition consumes nothing, and
+        returns the same change each time it is asked."""
+        return self._next_link(True, "network.next_link_up", "wait for network.dhcp.next_lease()")
+
+    def next_link_down(self) -> Condition[LinkChange | None]:
+        """A described condition for the first time the link goes down after this call, whatever
+        its cause. The boundary is the changes there are now, `link_changes` at this call; the
+        condition consumes nothing, and returns the same change each time it is asked."""
+        return self._next_link(
+            False, "network.next_link_down", "the test's own switches are in wifi.events"
+        )
+
+    def _next_link(self, up: bool, call: str, instead: str) -> Condition[LinkChange | None]:
+        if self._kind == "ethernet":
+            raise ValueError(
+                f"{call}: behind a Wi-Fi access point the network does not see the device join"
+                f" or leave; {instead}"
+            )
+        find = FirstFrom(lambda: self.link_changes, len(self.link_changes), lambda c: c.up is up)
+        return Condition(find, f"the next link {'up' if up else 'down'}", "network")
+
+    def _link_change(self, up: bool, cause: LinkCause) -> None:
+        """Record the link coming up or going down now; nothing when it already is so, or behind
+        an access point, where the network sees neither."""
+        if self._kind == "ethernet" or up is self._link_up:
+            return
+        self._link_up = up
+        self.link_changes.append(LinkChange(Duration(self.now()), up, cause))
 
     def _station_changed(self) -> None:
         if self.lease is None:
@@ -285,6 +356,7 @@ class Internet:
         previous = self._at
         self._at = t
         try:
+            self._link_change(False, "device lost its power" if "power" in why else "device reset")
             self.ip.forget_device(why)
             self._forget_syns()
             if isinstance(self.link, Ppp):
@@ -434,7 +506,17 @@ class Internet:
             )
         if self._kind == "ethernet":
             return Ethernet(send, self._uplink, self.dhcp, log=self.log, gave_up=self._gave_up)
-        return Ppp(send, self._uplink, log=self.log, ended=self._link_ended)
+        return Ppp(
+            send,
+            self._uplink,
+            log=self.log,
+            opened=lambda: self._link_change(True, "IPCP open"),
+            ended=self._ppp_ended,
+        )
+
+    def _ppp_ended(self, cause: LinkCause) -> None:
+        self._link_change(False, cause)
+        self._link_ended()
 
     def _gave_up(self, address: str) -> None:
         self.ip.forget_device("the device gave its address up", address=address)
@@ -498,16 +580,24 @@ class Internet:
         self._at = t
         try:
             self.log(f"wifi station: {'ready' if ready else 'disconnected'}")
+            # A ready while joined is a join counted again: the station left and joined within the
+            # runner's slice, so it is a down and an up at the same instant.
+            self._link_change(False, "station left")
             self.link.stop()
             if ready and self.active:
+                self._link_change(True, "station joined")
                 self.link.start()
         finally:
             self._at = None
 
-    def stop(self, at: int | None = None) -> None:
+    def stop(self, at: int | None = None, cause: LinkCause = "call ended") -> None:
+        """The link ends at `at`, the board's current instant unless given: a modem's call, or an
+        access point off the air. Behind a modem `link_changes` records `cause` when IPCP was
+        open."""
         previous = self._at
         self._at = self._now() if at is None else at
         try:
+            self._link_change(False, cause)
             self.active = False
             self._link_ended()
             self._out.clear()
@@ -523,6 +613,8 @@ class Internet:
         """What the far end sends at `t` to end the link behind a modem."""
         self._at = t
         try:
+            if self.ppp.lcp_open:
+                self._link_change(False, "far end terminated")
             self.ppp.terminate()
             return self._take()
         finally:

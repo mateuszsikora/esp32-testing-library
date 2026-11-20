@@ -120,6 +120,14 @@ drops its bytes before they reach the firmware, and a keepalive due then closes 
 expiry. Other data sources retain the immediate escape recognizer. See
 [network internals](network-technical.md).
 
+`_end_data(cause, at=None, link=None)` then calls `Internet.stop(at, link)`, `link` being the
+cause the network's `link_changes` records when PPP had opened IPCP
+([link changes](network-technical.md#link-changes)), `LINK_CAUSES[cause]` unless the caller gives
+one: `"drop"` is `call ended`, `"hang"` `modem hung`, `"registration"` `coverage lost` and
+`"escape"` `device left data mode`. `_set_power` gives its own for `"restart"`: `modem restarted`
+when the modem is powered again, `modem lost power` for a `supply` cause and `modem off`
+otherwise.
+
 `drop_call` runs in the test's thread, while the link is held. With `terminate`, it takes
 `Internet.terminate(t)`'s output, an LCP Terminate-Request stamped one latency later, before
 `_end_data` calls `Internet.stop`, which would clear it. It appends `NO CARRIER`, stamped the same,

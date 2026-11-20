@@ -223,7 +223,10 @@ modem.drop_call(terminate=True)  # first an LCP Terminate-Request
 `drop_call` ends a data call while the modem stays registered. It sends `NO CARRIER`, 1 ms after the
 test's instant, and returns to command mode. With `modem.network()`, PPP ends at that instant, as
 with any loss, the device's TCP connections waiting for their keepalive, and a new dial negotiates
-again. `lose_registration()` stays silent.
+again. `lose_registration()` stays silent. The network's `link_changes` record the link going down
+at that instant, cause `call ended`, or `far end terminated` with `terminate=True`, and coming up
+again when the redial opens IPCP; `network.next_link_up()` waits for it
+([the link's changes](network-user.md#when-the-link-comes-up-and-goes-down)).
 
 `terminate=True` offers an LCP Terminate-Request ([RFC 1661](https://www.rfc-editor.org/rfc/rfc1661),
 section 5.5) just before `NO CARRIER`. No vendor document says whether a carrier or SIMCom sends one,

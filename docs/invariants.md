@@ -2305,7 +2305,8 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_net_client.py::test_a_next_data_poll_searches_only_the_bytes_since_the_last_one`,
   `tests/test_ble_peer.py::test_a_next_advertisement_poll_reads_only_the_advertisements_since_the_last_one`,
   `tests/test_ble_peer.py::test_a_next_write_poll_reads_only_the_writes_since_the_last_one`,
-  `tests/test_lines.py::test_a_next_change_poll_reads_only_the_events_since_the_last_one`
+  `tests/test_lines.py::test_a_next_change_poll_reads_only_the_events_since_the_last_one`,
+  `tests/test_net_link_changes.py::test_a_next_link_poll_reads_only_the_changes_since_the_last_one`
 - **279.** A line's `next_change` matches only a change made after the call: a level that already
   holds does not satisfy it, it returns the same `LineEvent` at every poll, and a second
   `next_change` made after the first one matched returns the next change, a different event. A
@@ -2388,3 +2389,29 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_net_services.py::test_dns_next_question_is_a_described_condition_from_its_call`,
   `tests/test_net_path.py::test_a_stated_rtt_is_exact_from_the_request_to_the_answers_stamp`,
   `examples/position_tracker/tests/test_tracker.py::test_retries_ntp_further_apart_and_resolves_its_name_again`
+
+## The link's changes
+
+- **275.** `network.link_changes` records the link between the device and the network coming up and
+  going down, each at the board's instant: behind a modem up at each IPCP open and down at the
+  first way it ends, with a cause naming that way; behind a virtual station up when the station
+  joins and down when it leaves or the device resets. A change to what the link already is records
+  nothing, but for a station's join counted again while joined, which is a down and an up at its
+  instant, and behind a Wi-Fi access point nothing is recorded and `next_link_up` and
+  `next_link_down` raise `ValueError`. `modem.drop_call()` and `modem_recovery`'s redial give a
+  down, `call ended` (`far end terminated` with `terminate=True`), then an up, `IPCP open`, and
+  `arduino_shell`'s SoftAP leaving and coming back gives `station left` then `station joined`, at
+  the same times in two runs.
+  `tests/test_net_link_changes.py::test_ipcp_open_is_up_and_the_devices_terminate_request_is_down`,
+  `tests/test_net_link_changes.py::test_what_the_device_does_to_an_open_link_names_its_down`,
+  `tests/test_net_link_changes.py::test_a_link_that_never_opened_ipcp_records_nothing`,
+  `tests/test_net_link_changes.py::test_a_device_reset_is_down_and_its_renegotiation_no_second_one`,
+  `tests/test_net_link_changes.py::test_each_way_the_modem_ends_the_call_names_its_down`,
+  `tests/test_net_link_changes.py::test_a_dropped_call_and_a_redial_give_a_down_and_an_up`,
+  `tests/test_net_link_changes.py::test_a_station_joining_and_leaving_is_up_and_down`,
+  `tests/test_net_link_changes.py::test_behind_an_access_point_nothing_is_recorded_and_the_conditions_refuse`,
+  `tests/test_modem_recovery.py::test_redials_after_a_dropped_call`,
+  `tests/test_modem_recovery.py::test_recovers_a_hung_modem`,
+  `tests/test_arduino_softap.py::test_softap_leaves_and_rejoins`,
+  `tests/test_determinism.py::test_a_dropped_call_and_the_redial`,
+  `tests/test_determinism.py::test_device_softap_left_and_joined_again`

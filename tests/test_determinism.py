@@ -24,6 +24,7 @@ from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.modem import Modem
 from esp32tl.interfaces.wifi import Wifi
+from esp32tl.net import Internet
 from esp32tl.net.mqtt import Broker
 from esp32tl.net.tls import CertificateAuthority
 from esp32tl.report import board_time
@@ -82,6 +83,38 @@ def test_plain_mqtt(board: Esp32Sim, modem: Modem, broker: Broker, tmp_path: Pat
     message = board.wait_until(broker.next_message("/topic/esp-pppos"), within=seconds(60))
     assert message.text == "esp32-pppos"
     (tmp_path / "network.json").write_text(json.dumps(modem.network().transcript()))
+
+
+def write_link_changes(directory: Path, network: Internet) -> None:
+    """Writes `link_changes.txt` into `directory`: each time the link came up or went down, after
+    the board's time it did, and why."""
+    lines = (
+        f"{board_time(c.at.ns)}  {'up' if c.up else 'down'}  {c.cause}\n"
+        for c in network.link_changes
+    )
+    (directory / "link_changes.txt").write_text("".join(lines))
+
+
+@pytest.mark.app_path("../firmware/modem_recovery")
+@pytest.mark.board_profile("lilygo-t-a7670g-r2")
+def test_a_dropped_call_and_the_redial(
+    board: Esp32Sim, modem: Modem, console: Console, tmp_path: Path
+) -> None:
+    network = modem.network()
+    board.power_on()
+    board.wait_until(console.line("modem_recovery: connected"), within=seconds(60))
+    down, up = network.next_link_down(), network.next_link_up()
+    modem.drop_call()
+    assert down() is not None
+    board.wait_until(up, within=seconds(90))
+    board.wait(seconds(2))
+    write_console(tmp_path, console)
+    write_link_changes(tmp_path, network)
+    assert [(c.up, c.cause) for c in network.link_changes] == [
+        (True, "IPCP open"),
+        (False, "call ended"),
+        (True, "IPCP open"),
+    ]
 
 
 @pytest.mark.app_path("../firmware/mqtt_session")
@@ -200,3 +233,28 @@ def test_device_softap(
     write_console(tmp_path, console)
     (tmp_path / "network.json").write_text(json.dumps(network.transcript(), sort_keys=True))
     (tmp_path / "lease.txt").write_text(str(lease))
+
+
+@pytest.mark.app_path("../firmware/arduino_shell", build_dir=".pio/build/esp32dev")
+def test_device_softap_left_and_joined_again(
+    board: Esp32Sim, wifi: Wifi, console: Console, tmp_path: Path
+) -> None:
+    board.nvs({"shell": {"ap_ssid": "device-setup"}})
+    network = wifi.station("device-setup")
+    board.power_on()
+    board.wait_until(network.when_leased(), within=seconds(3))
+    left = network.next_link_down()
+    console.sendline("ap-off")
+    board.wait_until(left, within=seconds(5))
+    joined = network.next_link_up()
+    console.sendline("ap-on")
+    board.wait_until(joined, within=seconds(5))
+    board.wait_until(network.when_leased(), within=seconds(5))
+    board.wait(seconds(1))
+    write_console(tmp_path, console)
+    write_link_changes(tmp_path, network)
+    assert [(c.up, c.cause) for c in network.link_changes] == [
+        (True, "station joined"),
+        (False, "station left"),
+        (True, "station joined"),
+    ]

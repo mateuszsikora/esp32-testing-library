@@ -15,7 +15,7 @@ from esp32tl.boards import LineRoute
 from esp32tl.interfaces import SourceError
 from esp32tl.interfaces.uart import Source
 from esp32tl.link.boardlink import Output
-from esp32tl.net import Internet
+from esp32tl.net import Internet, LinkCause
 from esp32tl.net.ntp import DEFAULT_UTC
 from esp32tl.units import Duration, minutes, number, shown
 
@@ -58,6 +58,17 @@ class ModemRestart:
 
 Mode = Literal["command", "data"]
 ModeCause = Literal["dial", "escape", "no carrier", "drop", "hang", "registration", "restart"]
+# What the network's `link_changes` records for each way of leaving data mode; a restart names
+# whether the modem came back, went off or lost its power, and passes its own.
+LINK_CAUSES: dict[ModeCause, LinkCause] = {
+    "dial": "call ended",
+    "escape": "device left data mode",
+    "no carrier": "call ended",
+    "drop": "call ended",
+    "hang": "modem hung",
+    "registration": "coverage lost",
+    "restart": "modem restarted",
+}
 
 
 @dataclass(frozen=True)
@@ -307,7 +318,15 @@ class Modem:
         self._queued.clear()
         self.registered = powered and self._coverage
         self._function = 1
-        self._end_data("restart", t)
+        self._end_data(
+            "restart",
+            t,
+            "modem restarted"
+            if powered
+            else "modem lost power"
+            if cause == "supply"
+            else "modem off",
+        )
         self._echo = False
         self._registration = dict.fromkeys(self._registration, 0)
         self._format = 0
@@ -534,7 +553,12 @@ class Modem:
             latency = self.data.latency() if self.data_mode and self.data is not None else None
             return LATENCY_NS if latency is None else min(LATENCY_NS, latency)
 
-    def _end_data(self, cause: ModeCause, at: int | None = None) -> None:
+    def _end_data(
+        self, cause: ModeCause, at: int | None = None, link: LinkCause | None = None
+    ) -> None:
+        """Leave data mode at `at`, the current instant unless given, for `cause`; the network's
+        `link_changes` records `link`, or the link's cause for `cause`, when PPP had opened IPCP.
+        """
         if self.data_mode:
             t = self._now() if at is None else at
             self._mode_changes.append(ModeChange(Duration(t), "command", cause))
@@ -542,4 +566,4 @@ class Modem:
         self._pluses.clear()
         self._escape_at = None
         if isinstance(self.data, Internet):
-            self.data.stop(at)
+            self.data.stop(at, link or LINK_CAUSES[cause])
