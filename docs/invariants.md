@@ -1685,6 +1685,38 @@ that references to its number keep their meaning.
      `tests/test_net_client.py::test_a_device_that_resets_loses_the_tests_connections_and_its_address`,
      `tests/test_net_client.py::test_a_rst_to_the_syn_is_refused_in_the_condition_and_the_log`,
      `tests/test_http_server.py::test_a_reset_loses_the_tests_connections_until_the_device_listens_again`
+- **282.** With `set_path(drop=True)` every IPv4 datagram that enters the path, either way, is
+  dropped, while LCP is still answered and PPP stays open: esp-mqtt's keepalive runs out with the
+  modem in data mode. A dropped datagram leaves nothing behind it: after the restore, the device's
+  next datagram is answered at the path's RTT. `drop=True` takes no RTT or rate.
+  `tests/test_net_drop.py::test_a_black_hole_drops_every_datagram_up_and_ppp_control_still_answers`,
+  `tests/test_net_drop.py::test_an_answer_made_in_a_black_hole_is_dropped_going_down`,
+  `tests/test_net_drop.py::test_after_the_restore_the_next_datagram_is_answered_at_the_paths_rtt`,
+  `tests/test_net_drop.py::test_a_black_hole_takes_no_rtt_or_rate`,
+  `tests/test_mqtt_session.py::test_a_black_hole_runs_out_the_keepalive_with_ppp_up_and_the_restore_answers_at_the_rtt`
+- **283.** What the network's TCP has to send while the path drops, or on a port blocked with
+  `drop`, a FIN included, waits, and reaches the device in order once the path is restored or the
+  port unblocked, a full window included: the restore and `unblock` ask the device for the ACK and
+  window it sent into the black hole with a keepalive's probe. A SYN whose SYN-ACK the black hole
+  dropped is answered again when the device sends it again. A block or an unblock that swallowed
+  nothing sends no probe. The test cannot open a connection through a black hole.
+  `tests/test_net_drop.py::test_the_network_s_tcp_holds_what_it_has_to_send_until_the_restore`,
+  `tests/test_net_drop.py::test_a_full_window_moves_on_once_the_device_answers_the_probe`,
+  `tests/test_net_drop.py::test_a_probe_due_while_the_station_is_away_goes_when_it_has_a_lease_again`,
+  `tests/test_net_drop.py::test_a_block_or_unblock_with_nothing_dropped_sends_no_probe`,
+  `tests/test_net_drop.py::test_a_syn_whose_syn_ack_the_black_hole_dropped_is_answered_again_after_the_restore`,
+  `tests/test_net_drop.py::test_the_broker_s_keepalive_runs_out_in_a_black_hole_and_ppp_stays_open`,
+  `tests/test_net_drop.py::test_the_test_cannot_connect_through_a_black_hole`,
+  `tests/test_net_drop.py::test_a_dropped_port_holds_its_service_s_writes_until_unblock`,
+  `tests/test_net_drop.py::test_blocking_a_blocked_port_changes_how`
+- **284.** A TCP port blocked with `drop` answers none of the device's segments, a new SYN or one
+  of an established connection, while DNS and NTP answer; one blocked with `refuse` answers a SYN
+  with RST and leaves the connections already open as they are; `unblock` lets a new connection
+  through.
+  `tests/test_net_drop.py::test_a_port_blocked_with_drop_swallows_the_device_s_segments_and_dns_and_ntp_answer`,
+  `tests/test_net_drop.py::test_a_new_connection_to_a_dropped_port_gets_no_answer`,
+  `tests/test_net_drop.py::test_a_refused_port_answers_a_syn_with_rst_and_leaves_open_connections`,
+  `tests/test_mqtt_session.py::test_a_blocked_broker_port_drops_or_refuses_while_dns_answers`
 
 ## Explicit build selection
 

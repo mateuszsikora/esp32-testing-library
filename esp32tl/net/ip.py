@@ -7,7 +7,9 @@ opens connections to the device too (`Network.connect`). The link to the device 
 reorders bytes, so TCP needs no retransmission, no congestion control and no timers: a segment is
 acknowledged in the turn it arrives in, and a zero window waits for the device's update. While
 the link is down, the segments of a connection its end left open go nowhere, and the device's
-stack, which lost the connection too, never asks for them again.
+stack, which lost the connection too, never asks for them again. A port the test blocked
+(`Network.block`) drops the device's segments, or refuses its SYNs, and what a connection on a
+dropped port has to send waits for `unblock` rather than be lost.
 """
 
 import struct
@@ -174,6 +176,10 @@ class Network:
         self.tcp: dict[int, StreamService] = {}
         self.udp: dict[int, DatagramService] = {}
         self._flows: dict[tuple[str, int, str, int], _Flow] = {}
+        # The TCP ports of this network the test blocked, and how: `drop` or `refuse`.
+        self.blocked: dict[int, str] = {}
+        # A probe was due while the link carried no IP: it goes when `resume` brings the link back.
+        self._owed = False
         self._ident = 0
         # The next port the test connects from: never reused, so no TIME_WAIT is needed.
         self._port = EPHEMERAL
@@ -286,6 +292,10 @@ class Network:
         data = segment[header_length:]
         key = (src, sport, dst, dport)
         flow = self._flows.get(key)
+        how = self.blocked.get(dport) if flow is None or flow.client is None else None
+        if how == "drop":
+            self._log(f"net: TCP {src}:{sport} → {dst}:{dport} dropped: port {dport} is blocked")
+            return
         if flow is not None and flow.client is not None and not flow.established:
             # Our SYN is out: only the device's answer to it counts (RFC 9293, 3.10.7.3).
             if not flags & ACK or ack != (ISN + 1) & 0xFFFFFFFF:
@@ -324,20 +334,36 @@ class Network:
             # 3.10.7.4) would draw its RST, which resets the old connection, and its SYN again.
             self._drop(flow, "renewed")
             flow = None
+        if (
+            flags & SYN
+            and not flags & ACK
+            and flow is not None
+            and flow.client is None
+            and not flow.established
+            and (seq + 1) & 0xFFFFFFFF == flow.rcv_nxt
+        ):
+            # The device's SYN again, on a flow still waiting for the ACK of its SYN-ACK: that
+            # SYN-ACK was lost, as in a black hole. Answered again, as in SYN-RECEIVED (RFC 9293,
+            # 3.10.7.4); nothing else does, since this TCP sends nothing again by itself.
+            self._log(f"net: TCP {src}:{sport} → {dst}:{dport} SYN again, answered again")
+            flow.snd_nxt = ISN
+            self._segment(flow, SYN | ACK, options=struct.pack(">BBH", 2, 4, MSS))
+            return
         if flags & SYN and flow is None:
             mss = _mss(segment[20:header_length])
             if mss is None:
                 return
             flow = _Flow(key, (seq + 1) & 0xFFFFFFFF, ISN, ISN, window, max(1, min(mss, MSS)))
             service = self.tcp.get(dport)
-            if service is None:
-                self._log(f"net: TCP {src}:{sport} → {dst}:{dport} refused, nothing listens there")
+            if service is None or how == "refuse":
+                why = "nothing listens there" if how is None else f"port {dport} is blocked"
+                self._log(f"net: TCP {src}:{sport} → {dst}:{dport} refused, {why}")
                 flow.snd_nxt = 0
                 self._segment(flow, RST | ACK)
                 return
             self._flows[key] = flow
-            self._segment(flow, SYN | ACK, options=struct.pack(">BBH", 2, 4, MSS))
             self._log(f"net: TCP {src}:{sport} → {dst}:{dport} accepted")
+            self._segment(flow, SYN | ACK, options=struct.pack(">BBH", 2, 4, MSS))
             flow.connection = service.accept(
                 (src, sport), lambda out: self._write(flow, out), lambda: self._close(flow)
             )
@@ -409,9 +435,15 @@ class Network:
         flow.fin_pending = True
         self._flush(flow)
 
+    def _held(self, flow: _Flow) -> bool:
+        """Whether `flow` is a device's on a port blocked with `drop`."""
+        return flow.client is None and self.blocked.get(flow.key[3]) == "drop"
+
     def _flush(self, flow: _Flow) -> None:
         if not self._current(flow) or not flow.established:
             return
+        if self._held(flow):
+            return  # it waits for `unblock`, as what a real network loses is sent again
         if not flow.orphaned and not self._carries():
             return  # it waits for the link, in order, its FIN behind it
         while flow.pending:
@@ -467,6 +499,8 @@ class Network:
         one its service had closed. The rest stay open and silent, as no network on the
         internet hears of it, and orphaned: their service's close ends them at once, since no
         FIN would be answered."""
+        if address is None:
+            self._owed = False  # what it was owed to went with the device's stack
         for flow in list(self._flows.values()):
             if address is not None and flow.key[0] != address:
                 continue
@@ -491,14 +525,66 @@ class Network:
             return False
         return True
 
-    def resume(self, local: str | None = None) -> None:
+    def block(self, port: int, how: str) -> None:
+        """Block TCP `port` of this network: `drop` swallows every segment the device sends to it
+        and holds what its connections have to send; `refuse` answers each new SYN to it with a
+        RST, the connections already open going on. The test's own connections, from the ports
+        it connects from, are not affected."""
+        was = self.blocked.get(port)
+        self.blocked[port] = how
+        self._release(port, probe=was == "drop")
+
+    def unblock(self, port: int) -> None:
+        """Lift the block of `port`: what its connections held goes now, and after `drop`, a
+        probe asks for the ACKs and windows the block swallowed."""
+        was = self.blocked.pop(port)
+        self._release(port, probe=was == "drop")
+
+    def _release(self, port: int, *, probe: bool) -> None:
+        flows = [f for f in self._flows.values() if f.client is None and f.key[3] == port]
+        for flow in flows:
+            self._flush(flow)
+        if probe:
+            self._probe(flows)
+
+    def probe(self) -> None:
+        """`_probe` every flow."""
+        self._probe(None)
+
+    def _probe(self, flows: list[_Flow] | None) -> None:
+        """Ask the device for its ACK and window again on each flow, every flow unless `flows`
+        are given, that has bytes or a FIN unacknowledged or waiting: what the device sent while
+        the path dropped, or while its port was blocked, never came, and with a full or a zero
+        window nothing else moves the flow on. The probe is a keepalive's (RFC 9293, 3.8.4), an
+        ACK from `snd_nxt - 1` with no data, which the device answers with its ACK and window;
+        the answer's `_flush` sends what waited. While the link carries no IP, the probe is owed
+        to every flow, and `resume` sends it when the link carries IP again."""
+        if not self._carries():
+            self._owed = True
+            return
+        for flow in list(self._flows.values()) if flows is None else flows:
+            if not self._current(flow) or not flow.established or flow.orphaned:
+                continue
+            if self._held(flow):
+                continue
+            waiting = flow.pending or (flow.fin_pending and not flow.fin_sent)
+            if flow.snd_una < flow.snd_nxt or waiting:
+                flow.snd_nxt -= 1
+                self._segment(flow, ACK)
+                flow.snd_nxt += 1
+
+    def resume(self, local: str | None = None, *, probe: bool = False) -> None:
         """The link carries IP again: send what waited for it, on every flow from our `local`
-        address, when given; one from another, which that end no longer holds, is lost."""
+        address, when given; one from another, which that end no longer holds, is lost. Then
+        `probe` every flow, with `probe` or when a probe was owed."""
         for flow in list(self._flows.values()):
             if local is not None and flow.key[2] != local:
                 self._drop(flow, "lost")
             else:
                 self._flush(flow)
+        if probe or self._owed:
+            self._owed = False
+            self.probe()
 
     def lose_link(self, *, orphan: bool = True) -> None:
         """The link ended. With `orphan`, the device's stack went with it: `forget_device`.

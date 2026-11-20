@@ -573,6 +573,7 @@ an operator: no vendor source stands behind them.
 | `rtt` | `ms(1)`, the network without a path | From the device's request to the stamp of the answer. A `Duration`, 1 ms at the least |
 | `downlink` | `None`, no limit | A `Rate` towards the device: each datagram takes its size in bits at this rate, one after another |
 | `uplink` | `None`, no limit | The same from the device |
+| `drop` | `False` | `True` drops every datagram entering the path, either way ([Drop every datagram](#drop-every-datagram-and-restore-the-path)); it takes no `rtt`, `downlink` or `uplink` |
 
 `Rate`, `kbit_s` and `mbit_s` are [units](models-user.md#units). Each call states the whole path:
 what it leaves out goes back to its default. It works before power-on and between board advances,
@@ -582,8 +583,10 @@ a datagram behind one that left under a longer RTT leaves with it, not before it
 An RTT below the floor raises `ValueError`:
 `network.set_path: rtt is 0.5 ms; the network answers 1 ms after a request at the least`.
 Something else raises `TypeError`: `network.set_path: rtt is 200, not a Duration, as ms(200)`,
-`network.set_path: downlink is 512, not a Rate, as kbit_s(512)`. The transcript logs each call, as
-`net: path: rtt 0.2 s, downlink 512 kbit/s, uplink 128 kbit/s`, with `any` for no limit.
+`network.set_path: downlink is 512, not a Rate, as kbit_s(512)`,
+`network.set_path: drop is 1, not True or False`. The transcript logs each call, as
+`net: path: rtt 0.2 s, downlink 512 kbit/s, uplink 128 kbit/s`, with `any` for no limit, or
+`net: path: drop every datagram`.
 
 A broker's records have the times of the network's end: `message.at` is `t` plus what the datagram
 took going up, half of what the RTT has above 1 ms, and `puback_at`, `delivery.at` and the test's
@@ -621,6 +624,100 @@ the network answers each with an acknowledgement. Over a path whose rate is too 
 carries, a client's timeouts can fire before a message has got through: the path has no queue limit
 and loses nothing, so each retransmission only adds to what it has to carry. esp-mqtt's
 `network.timeout_ms` is 10 s by default.
+
+### Drop every datagram, and restore the path
+
+```python
+network.set_path(drop=True)  # The broker, DNS and NTP stop answering; PPP stays up.
+board.wait_until(console.line(r"disconnected"), within=seconds(200))  # The firmware's own line.
+network.set_path(rtt=ms(200))  # Or set_path(), the network without a path.
+```
+
+With `drop=True` the path drops every IPv4 datagram that enters it, either way, from that call to
+the next call without it: the device's requests reach no service, and what the services answer
+does not reach the device. LCP, IPCP, ARP and DHCP stay on the link, as they do for `rtt`: the link
+stays up, its LCP Echo-Requests are answered, and `modem.data_mode` stays true. A firmware's
+keepalive above IP, as esp-mqtt's, runs out. `drop=True` with an `rtt`, a `downlink` or an `uplink`
+raises `ValueError`:
+`network.set_path: drop=True drops every datagram: it takes no rtt, downlink or uplink`.
+
+A dropped datagram is gone: nothing queues behind it, so after the restore the device's next
+datagram is answered at the path's RTT, which a long RTT cannot give. Like `rtt`, `drop=True`
+applies to datagrams entering after it: those already on their way down still reach the device,
+those on their way up still reach the network, and what the network answers them is dropped. The
+transcript logs each datagram dropped, as
+`net: path dropped UDP 10.64.0.2:5000 → 203.0.113.153:123, 76 bytes going up`, with `TCP` or
+`UDP`, the addresses and ports, else `IPv4` and the addresses, and its size.
+
+What the network's own TCP has to send waits while the path drops, and goes at the restore: a
+PUBLISH from `broker.publish`, a bridged service's bytes, the FIN of a connection the broker's
+keepalive closed. That is what a real network's retransmission would deliver; this TCP sends
+nothing again by itself ([Open a TCP connection](#open-a-tcp-connection-to-the-device)). Two cases
+it would otherwise never get past are covered:
+
+- At the restore, each connection with bytes or a FIN unacknowledged or waiting gets one probe, a
+  keepalive's empty ACK from one byte back (RFC 9293, 3.8.4). The device answers it with its ACK
+  and its window, which the black hole may have swallowed, and what waited for room goes then.
+  Behind a virtual station with no lease at the restore, the probe goes once it has one again.
+- A SYN that was on its way up when the path began to drop is accepted, and its SYN-ACK dropped.
+  The device's SYN again on the same ports gets the SYN-ACK again, logged
+  `net: TCP 10.64.0.2:4001 → 203.0.113.153:1883 SYN again, answered again`.
+
+`network.connect` raises `NotReachable` in a black hole:
+`network.connect(80): the path drops every datagram (network.set_path(drop=True)): the SYN would
+reach no device`. The black hole outlives a reset of the link, as the path's other values do.
+
+### A delay until the link ends
+
+A long RTT holds the datagrams sent into it, and none sent later overtakes them, so `set_path` to a
+short RTT after `set_path(rtt=hours(1))` does not bring the network back: use `drop=True` for that.
+What a long RTT does give is a path that stays silent until the link ends. The end of the link, the
+modem leaving data mode or the virtual station leaving, empties the path, so the next link starts
+on a clean one:
+
+```python
+from esp32tl.units import hours
+
+network.set_path(rtt=hours(1))
+modem.lose_registration()
+board.wait_until(lambda: not modem.data_mode or None, within=seconds(60))
+network.set_path()  # The next PPP link has the network without a path.
+```
+
+Behind a virtual station, wait until `network.lease` is `None` instead.
+
+## Block a TCP port
+
+```python
+network.block(1883, how="drop")  # The broker stops answering; DNS and NTP still do.
+network.block(1883, how="refuse")  # The device's connect gets RST.
+network.unblock(1883)
+```
+
+`network.block(port, how=...)` blocks one TCP port of the network, on every destination address,
+whatever listens there: the broker, the HTTP server, a service from `listen`, a bridge, or nothing.
+It lasts until `network.unblock(port)`, through resets of the link. It acts where the device's
+segments reach the network, so a segment already on the path when the test blocks the port is
+blocked too. UDP, and so DNS and NTP, is not affected, and neither are the connections the test
+opens to the device.
+
+| `how` | What the device sees |
+|---|---|
+| `"drop"` | Nothing: its segments to the port are swallowed, a new SYN and those of an established connection alike, and what the port's service writes waits for `unblock`. A TLS server that took the connection never answers again |
+| `"refuse"` | A RST in answer to each SYN, as when nothing listens there. Connections already open go on |
+
+Each call is in the transcript, as `net: block: TCP 1883, drop` and `net: unblock: TCP 1883`, and
+each segment it stops, as
+`net: TCP 10.64.0.2:4000 → 203.0.113.153:1883 dropped: port 1883 is blocked` or
+`net: TCP 10.64.0.2:4001 → 203.0.113.153:1883 refused, port 1883 is blocked`. Blocking a blocked
+port changes how; going from `"drop"` to `"refuse"` sends what waited. `unblock` of a `"drop"`
+port, and a change from `"drop"`, send the same probe as the restore of the path; a block or an
+unblock that swallowed nothing sends none. A port outside 1 to 65535,
+`True` among them, raises `ValueError`:
+`network.block(0, how='drop'): the TCP port must be between 1 and 65535`; so does another `how`,
+`network.block(1883, how='reject'): how is 'drop' or 'refuse'`, `unblock` of such a port,
+`network.unblock(True): the TCP port must be between 1 and 65535`, and an `unblock` of a port that
+is not blocked, `network.unblock(1883): TCP port 1883 is not blocked`.
 
 ## Fetch a page behind a Wi-Fi access point
 
@@ -877,33 +974,33 @@ cannot reach the device yet, and `ValueError` for a port out of range
 | Behind the modem, before IPCP is open | `network.connect(80): the device has no address yet: PPP has not opened IPCP` |
 | Behind the modem, IPCP still open from before the device reset | `network.connect(80): the device has no address yet: PPP has not opened IPCP since the device reset` |
 | Behind the access point, no DHCP ACK on this link since the device's last reset or DHCP message | `network.connect(80): the device has no address yet: DHCP has acknowledged none on this link; wait for network.dhcp.next_lease(), or give address= for a static one`, with ` since the device last reset or gave its address up` after `this link` once DHCP has acknowledged an address on this link: not on a fresh one after `wifi.access_point_on()` |
+| The path drops every datagram (`set_path(drop=True)`) | `network.connect(80): the path drops every datagram (network.set_path(drop=True)): the SYN would reach no device` |
 | Behind the access point with `address=`, before the station sent a frame | `network.connect(80, address='10.64.0.9'): the station has sent no frame yet: the network has no MAC to send to` |
 
 The test's side is `10.64.0.1`, from ephemeral ports counted from 49152 and never reused in the
 network's life, and its initial sequence number is fixed, so runs repeat. It offers an MSS of 1400
 and no other option, takes the device's MSS up to 1400 (536 when it offers none), and respects the
 device's window: a zero window holds what the test wrote until the device announces room, and
-nothing probes it. It does not retransmit and keeps no timers, and has no TIME_WAIT. A segment
-from the device ahead of its stream, which a link that loses nothing cannot produce, fails the run:
-the transcript logs `net: TCP 10.64.0.1:49152 → 10.64.0.2:80: the device sent sequence 5, 4 bytes
-ahead of 1, which a link that loses nothing cannot produce`, and behind the access point the
-link's error is `wifi.receive raised OutOfOrder: ` and that line. Losing the link, as `wifi.access_point_off()` or
-the modem's loss of registration does, ends every connection as `lost`, and so does the device's
-chip reset, whatever caused it (`board.reset()`, its own restart, a wake from deep sleep), and
-`board.power_off()`: the device's TCP is gone, and nothing would tell the test otherwise until it
-wrote. These are the connections the test opened; the device's own [stay
-open](#a-lost-link-and-the-will). After `board.reset()` the device has no address until it takes one
-again, so wait for its
-server to listen again before connecting. Deep sleep ends them at the wake, the reset the
-runner reports, not when the chip goes to sleep: a `closed()` or `next_data()` waited for with a
-`within` shorter than the sleep times out. The connections the device opened are not ended by its
-reset, as no network would know of it, nor by the link's loss: they go on until a RST from the
-device's new stack, which answers what their service writes, or the service's end, as the broker's
-keepalive. A SYN the new stack sends from the same port to the same service resets the old
-connection, logged `reset: the device opened a new connection from its port`, and opens a new one,
-as the RST a challenge ACK draws from the new stack would (RFC 9293, 3.10.7.4). Why it is this
-TCP:
-[the test opens TCP connections to the
+nothing probes it but the restore of the path after a black hole ([Drop every
+datagram](#drop-every-datagram-and-restore-the-path)). It does not retransmit and keeps no timers,
+and has no TIME_WAIT. A segment from the device ahead of its stream, which a link that loses nothing
+cannot produce, fails the run: the transcript logs `net: TCP 10.64.0.1:49152 → 10.64.0.2:80: the
+device sent sequence 5, 4 bytes ahead of 1, which a link that loses nothing cannot produce`, and
+behind the access point the link's error is `wifi.receive raised OutOfOrder: ` and that line. Losing
+the link, as `wifi.access_point_off()` or the modem's loss of registration does, ends every
+connection as `lost`, and so does the device's chip reset, whatever caused it (`board.reset()`, its
+own restart, a wake from deep sleep), and `board.power_off()`: the device's TCP is gone, and nothing
+would tell the test otherwise until it wrote. These are the connections the test opened; the
+device's own [stay open](#a-lost-link-and-the-will). After `board.reset()` the device has no address
+until it takes one again, so wait for its server to listen again before connecting. Deep sleep ends
+them at the wake, the reset the runner reports, not when the chip goes to sleep: a `closed()` or
+`next_data()` waited for with a `within` shorter than the sleep times out. The connections the
+device opened are not ended by its reset, as no network would know of it, nor by the link's loss:
+they go on until a RST from the device's new stack, which answers what their service writes, or the
+service's end, as the broker's keepalive. A SYN the new stack sends from the same port to the same
+service resets the old connection, logged `reset: the device opened a new connection from its port`,
+and opens a new one, as the RST a challenge ACK draws from the new stack would (RFC 9293, 3.10.7.4).
+Why it is this TCP: [the test opens TCP connections to the
 device](../decisions/harness.md#the-test-opens-tcp-connections-to-the-device-on-the-same-tcp-with-no-timers).
 
 The transcript and the report carry the connection as they carry the device's: its bytes as stream
