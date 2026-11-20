@@ -231,6 +231,26 @@ pytest-timeout's options set another, which says only that something is stuck
 ([the test's timeout](../features/pytest-plugin-user.md#the-tests-timeout)). A run with a real
 source or a bridge to a real service runs on the wall clock instead.
 
+## Which shape a condition has
+
+Every condition esp32tl hands out takes its name and its shape from what it waits for, so a test
+can be written from memory:
+
+| It waits for | Name | Shape | For example |
+|---|---|---|---|
+| The next event, after the call | `next_<event>` | A method, with or without arguments: the call is where it starts looking | `broker.next_message(topic)`, `board.next_boot()`, `network.next_lease()`, `connection.next_data(until=b"\n")` |
+| A state that holds now, and can stop holding | `is_<state>` | A property; a method when the state takes an argument | `buzzer.is_on`, `peer.is_open`, `device.is_connected`, `network.is_leased`; `broker.is_subscribed(topic)`, `peripheral.is_subscribed(uuid)` |
+| What has happened, once and for good | Named for it, without `is_` | A property; a method when it takes an argument | `connection.established`, `.closed`, `.refused`, `.reset`, `.timed_out`, which return when it happened; `tls.handshake_completed` |
+| The outcome of an action | The action's name | The action's method, which acts at the call | `central.read(uuid)`, `central.disconnect()`, `network.accepting(port)`; `http_client.get(path).response` |
+
+An `is_` condition can be false again later, as `buzzer.is_on` is once the buzzer stops; a condition
+without `is_` cannot, as a connection is established once at most. A property hands out a new
+condition at each read, so pass it on as it is: `board.wait_until(connection.established,
+within=seconds(1))`, and call it, `connection.established()`, to ask it once.
+`console.line(pattern)` is the one condition for the next event without the prefix, beside
+pytest-embedded's `expect`
+([decision](../decisions/harness.md#a-conditions-shape-says-what-it-waits-for)).
+
 ## Units
 
 Every quantity a test states carries its unit, from `esp32tl.units`: `seconds(2.5)`, `ms(70)`,

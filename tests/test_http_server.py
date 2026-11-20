@@ -47,8 +47,8 @@ def test_answers_a_get_and_closes_when_asked(board: Esp32Sim, wifi: Wifi, consol
     connection = network.connect(80)
     assert (connection.address, connection.local_port) == ("10.64.0.2", 49152)
     connection.write(b"GET /status HTTP/1.1\r\nHost: device\r\nConnection: close\r\n\r\n")
-    established = board.wait_until(connection.established(), within=seconds(1))
-    closed = board.wait_until(connection.closed(), within=seconds(5))
+    established = board.wait_until(connection.established, within=seconds(1))
+    closed = board.wait_until(connection.closed, within=seconds(5))
     assert established < closed
     head, _, body = connection.received.partition(b"\r\n\r\n")
     assert head.startswith(b"HTTP/1.1 200 OK\r\n")
@@ -72,7 +72,7 @@ def test_echoes_json_on_a_connection_kept_open(
 ) -> None:
     network = listening(board, wifi, console)
     connection = network.connect(80)
-    board.wait_until(connection.established(), within=seconds(1))
+    board.wait_until(connection.established, within=seconds(1))
     # Over one MSS each way, under the firmware's 2048 bytes.
     body = json.dumps({"id": 7, "text": "x" * 1800}).encode()
     connection.write(
@@ -91,17 +91,17 @@ def test_echoes_json_on_a_connection_kept_open(
     assert status == b"HTTP/1.1 400 Bad Request"
     assert json.loads(answer) == {"error": "invalid JSON"}
     connection.close()
-    board.wait_until(connection.closed(), within=seconds(5))
+    board.wait_until(connection.closed, within=seconds(5))
     assert board.link.warnings == [] and board.link.error is None
 
 
 def test_a_port_nobody_listens_on_refuses(board: Esp32Sim, wifi: Wifi, console: Console) -> None:
     network = listening(board, wifi, console)
     connection = network.connect(8080)
-    board.wait_until(connection.refused(), within=seconds(1))
+    board.wait_until(connection.refused, within=seconds(1))
     assert connection.state == "refused"
     with pytest.raises(ConnectionEnded, match=r"refused by the device before it was established"):
-        connection.established()()
+        connection.established()
     assert "net: TCP 10.64.0.1:49152 → 10.64.0.2:8080 refused by the device" in [
         e.get("event") for e in network.events
     ]
@@ -143,8 +143,8 @@ def test_a_reset_loses_the_tests_connections_until_the_device_listens_again(
 ) -> None:
     network = listening(board, wifi, console)
     before = network.connect(80)
-    board.wait_until(before.established(), within=seconds(1))
-    closed = before.closed()
+    board.wait_until(before.established, within=seconds(1))
+    closed = before.closed
     if how == "reset":
         board.reset()
     else:
@@ -160,7 +160,7 @@ def test_a_reset_loses_the_tests_connections_until_the_device_listens_again(
     board.wait_until(listens, within=seconds(30))
     after = network.connect(80)
     after.write(b"GET /status HTTP/1.1\r\nHost: device\r\nConnection: close\r\n\r\n")
-    board.wait_until(after.closed(), within=seconds(5))
+    board.wait_until(after.closed, within=seconds(5))
     assert (
         after.local_port == 49153
         and json.loads(after.text.partition("\r\n\r\n")[2])["requests"] == 1
@@ -247,6 +247,6 @@ def test_a_syn_to_a_port_nobody_listens_on_is_refused_once_the_device_has_its_ad
     board.power_on()
     board.wait_until(lease, within=seconds(15))
     connection = network.connect(8080)
-    refused = board.wait_until(connection.refused(), within=seconds(3))
+    refused = board.wait_until(connection.refused, within=seconds(3))
     # Dropped before the address, as on port 80; a RST once the device has it.
     assert len(connection.syns) == 2 and refused > connection.syns[1]

@@ -87,7 +87,7 @@ def tls_exchange() -> dict[str, object]:
     assert client.read() == b"\x30\x09\0\x03a/btest"
     client.write(b"\xe0\0")
     server.on_data(outgoing.read())
-    assert closed == [True] and not net.broker.subscribed("a/#")()
+    assert closed == [True] and not net.broker.is_subscribed("a/#")()
     assert all(
         "data" not in e or "4d515454" in str(e["data"]) or len(str(e["data"])) < 40
         for e in net.events

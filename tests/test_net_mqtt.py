@@ -32,7 +32,7 @@ def test_split_connect_subscribe_qos_one_retained_and_unsubscribe() -> None:
     assert connected() is not None and connected().client_id == "c"  # type: ignore[union-attr]
     assert connected().keepalive == 10  # type: ignore[union-attr]
     session.on_data(SUBSCRIBE)
-    assert broker.subscribed("a/#")()
+    assert broker.is_subscribed("a/#")()
     assert sent[-2:] == [b"\x90\x03\0\x01\x01", b"\x33\x0a\0\x03a/b\0\x01old"]
     session.on_data(b"\x40\x02\0\x01")
     assert not session.unacked
@@ -45,7 +45,7 @@ def test_split_connect_subscribe_qos_one_retained_and_unsubscribe() -> None:
     assert sent[-2][0] == 0x32  # RETAIN cleared for an established subscription
     session.on_data(b"\xa2\x07\0\x02\0\x03a/#")
     assert sent[-1] == b"\xb0\x02\0\x02"
-    assert not broker.subscribed("a/#")()
+    assert not broker.is_subscribed("a/#")()
     broker.publish("a/b", b"", retain=True)
     assert not broker.retained
     session.on_data(b"\xc0\0\xe0\0")
@@ -292,7 +292,7 @@ def test_find_messages_refuses_a_mark_from_another_broker_and_an_index() -> None
 
 def test_subscription_condition_tracks_current_state_without_latching() -> None:
     broker = Broker(lambda: 0)
-    subscribed = broker.subscribed("a/#")
+    subscribed = broker.is_subscribed("a/#")
     session = broker.accept(("10.64.0.2", 4000), lambda data: None, lambda: None)
     assert not subscribed()
     session.on_data(CONNECT + SUBSCRIBE)
@@ -312,7 +312,7 @@ def test_subscription_condition_tracks_current_state_without_latching() -> None:
         ("next_message", (), "the next MQTT message on '#'"),
         ("next_connection", (), "the next MQTT client connection"),
         ("next_connection_attempt", (), "the next MQTT connection attempt"),
-        ("subscribed", ("a/#",), "an active MQTT subscription to 'a/#'"),
+        ("is_subscribed", ("a/#",), "an active MQTT subscription to 'a/#'"),
         ("next_subscribe", (), "the next MQTT SUBSCRIBE"),
         ("next_subscribe", ("a/#",), "the next MQTT SUBSCRIBE to 'a/#'"),
     ],

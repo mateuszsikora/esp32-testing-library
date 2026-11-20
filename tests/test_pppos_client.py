@@ -35,7 +35,7 @@ def test_publishes_its_test_message(board: Esp32Sim, modem: Modem, broker: Broke
 
 def test_shows_what_the_cloud_sends_it(board: Esp32Sim, broker: Broker, console: Console) -> None:
     board.power_on()
-    board.wait_until(broker.subscribed("/topic/esp-pppos"), within=seconds(60))
+    board.wait_until(broker.is_subscribed("/topic/esp-pppos"), within=seconds(60))
     broker.publish("/topic/esp-pppos", "hello from the test")
     board.wait_until(console.line(r"DATA=hello from the test"), within=seconds(5))
     assert board.link.warnings == []

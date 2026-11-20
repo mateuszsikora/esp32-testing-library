@@ -35,7 +35,7 @@ def test_publishes(board, broker):
 
 def test_receives(board, broker, console):
     board.power_on()
-    board.wait_until(broker.subscribed("/topic/esp-pppos"), within=seconds(60))
+    board.wait_until(broker.is_subscribed("/topic/esp-pppos"), within=seconds(60))
     broker.publish("/topic/esp-pppos", "hello from the test")
     board.wait_until(console.line(r"DATA=hello from the test"), within=seconds(5))
 ```
@@ -51,7 +51,7 @@ silent; an AT-only model still works without PPP. The network's broker is `modem
 | `find_message(topic="#", payload=None, *, will=None)` | Immediate history query returning the first recorded match, or `None`; the same filters as `next_message` |
 | `mark()` | A `Mark`: an opaque position at the end of `messages` now, for `find_messages(since=...)` ([every message since a point](#every-message-since-a-point)) |
 | `find_messages(topic="#", payload=None, *, since=None, client=None, will=None)` | Immediate history query returning a new list of every recorded match after `since` (from the start when `None`), in append order; `client` keeps one client ID's messages, `will` filters as in `next_message` |
-| `subscribed(topic)` | Condition true while an active client has this exact subscription filter, including an existing subscription |
+| `is_subscribed(topic)` | Condition true while an active client has this exact subscription filter, including an existing subscription |
 | `next_connection()` | Condition returning the first accepted MQTT CONNECT recorded **after this method call** |
 | `find_connection()` | Immediate history query returning the first accepted CONNECT, or `None`, even if that connection has closed |
 | `next_connection_attempt()` | Condition returning the first accepted or rejected CONNECT outcome recorded **after this method call** |
@@ -198,21 +198,25 @@ calls and waits return the same first match; construct a new `next_*` condition 
 A `next_*` condition looks, at each poll, only at what was recorded since its last poll, and once it
 has its match at nothing else, so a long wait on a busy broker costs no more per poll than a short
 one: an hour of the board's time with a message a second is 3 600 messages looked at, once each.
-`subscribed` instead reads current state each time: unsubscribe or connection closure can make
+`is_subscribed` instead reads current state each time: unsubscribe or connection closure can make
 a previously true condition false.
 
-The names say which is which, on every service of the network: a condition that sees only what
-happens after the call that makes it is `next_*` (`next_message`, `next_connection`,
+The names say which is which, on every service of the network, by the rule of [writing
+tests](../guides/writing-tests.md#which-shape-a-condition-has): a condition that sees only what
+happens after the call that makes it is a `next_*` method (`next_message`, `next_connection`,
 `next_connection_attempt`, `next_end`, `next_delivery`, `next_subscribe`, HTTP's
-`next_request`, DHCP's `next_lease`, TLS's `next_handshake_started` and
-`next_handshake_completed`, NTP's `next_exchange`, DNS's `next_question`, a TCP connection's
+`next_request`, DHCP's `next_lease`, the station's `next_lease`, TLS's `next_handshake_started`
+and `next_handshake_completed`, NTP's `next_exchange`, DNS's `next_question`, a TCP connection's
 `next_data`); `find_*` reads the history now and returns a record or `None`; a plural attribute
 (`messages`, `clients`, `connection_ends`, `subscribe_requests`, `leases`, NTP's `exchanges`, DNS's
-`questions`) is the history itself; and a condition named for a state (`subscribed`, TLS's
-`handshake_started` and `handshake_completed`, a TCP connection's `established`, `closed`,
-`refused`, `reset` and `timed_out`) is true while that state holds, or once it has. The network's
-`accepting(port)` is a state too, the port accepting a connection, but it acts: it opens
-connections until the device accepts one.
+`questions`) is the history itself; a condition for a state that holds now, and can stop holding,
+is `is_<state>` (`is_subscribed(topic)`, the station's `is_leased`), true while it holds; and one
+for what has happened once and for good is named for it without `is_` (TLS's `handshake_started`
+and `handshake_completed`, a TCP connection's `established`, `closed`, `refused`, `reset` and
+`timed_out`), true from then on. A state condition with no argument is a property,
+`connection.established`; with one, a method, `broker.is_subscribed(topic)`. The network's
+`accepting(port)` is an action: it opens connections until the device accepts one, and returns
+the condition for that.
 
 All MQTT conditions have timeout representations such as `the next MQTT message on 'a/+' saying
 b'new'`, `the next MQTT client connection`, `the next MQTT connection attempt`, `the next MQTT
@@ -220,7 +224,7 @@ connection end of 'logger-1'`, `the next MQTT delivery on 'a/+' saying b'new'`, 
 SUBSCRIBE to 'a/#'` and `an active MQTT subscription to 'a/#'`. Call a condition with `()` or pass
 it to `board.wait_until`. Boolean coercion of any MQTT condition, including those from
 `next_message`, `next_connection`, `next_connection_attempt`, `next_end`, `next_delivery`,
-`next_subscribe` and `subscribed`, raises `TypeError("call the MQTT condition with (), or pass it
+`next_subscribe` and `is_subscribed`, raises `TypeError("call the MQTT condition with (), or pass it
 to board.wait_until")`, before and after a match, so an unevaluated `assert
 broker.next_connection()` fails. Use `assert broker.find_connection() is not None` to inspect past
 connections.
@@ -285,7 +289,7 @@ device's FIN or RST that follows adds no second end.
 ### Every SUBSCRIBE and UNSUBSCRIBE
 
 The broker grants every filter it is asked for, so whether the device asks for no more than a
-production broker's ACL would grant is for the test to check. `subscribed(topic)` and
+production broker's ACL would grant is for the test to check. `is_subscribed(topic)` and
 `session(client_id).subscriptions` say what holds now; `subscribe_requests` keeps every SUBSCRIBE
 and UNSUBSCRIBE packet the broker accepted, in the order they arrived, also after the filter is
 unsubscribed, the connection closes, a CleanSession=1 CONNECT discards the stored session, the
@@ -326,7 +330,7 @@ imported from `esp32tl`.
 
 `next_subscribe()` returns the first SUBSCRIBE appended after the call, with the boundary of the
 other `next_*` conditions; `next_subscribe(filter)` the first that names exactly that filter, as
-`subscribed(topic)` compares it, not by wildcard matching, so `next_subscribe("a/#")` does not
+`is_subscribed(topic)` compares it, not by wildcard matching, so `next_subscribe("a/#")` does not
 match a SUBSCRIBE to `a/b`. An UNSUBSCRIBE never matches it. To wait for the device to subscribe
 again after a reconnect, make the condition before the action that disconnects it:
 
@@ -446,7 +450,7 @@ pytestmark = [
 
 def test_receives_what_was_published_while_it_was_offline(board, broker, console):
     board.power_on()
-    board.wait_until(broker.subscribed("session/commands"), within=seconds(60))
+    board.wait_until(broker.is_subscribed("session/commands"), within=seconds(60))
     reconnected = broker.next_connection()
     received = console.line(r"data dup=0 qos=1 .* payload=while offline")
     broker.disconnect("session-client")
@@ -490,8 +494,8 @@ While a client with a stored session is offline:
   at once: see [below](#a-client-with-no-free-packet-id);
 - a QoS 0 publication is dropped, logged as
   `mqtt: session-client is offline: dropped a QoS 0 message on session/commands`;
-- `subscribed` is false: it speaks of active clients. It is true again from the CONNECT on, without
-  a SUBSCRIBE.
+- `is_subscribed` is false: it speaks of active clients. It is true again from the CONNECT on,
+  without a SUBSCRIBE.
 
 A queued message goes with RETAIN 0, since it matches an established subscription (MQTT-3.3.1-9),
 and DUP 0, since it is a first attempt (MQTT-3.3.1-3). A retained message that a SUBSCRIBE matched
@@ -893,7 +897,7 @@ def test_answers_a_get(board, wifi, console):
     board.wait_until(listening, within=seconds(30))
     connection = network.connect(80)
     connection.write(b"GET /status HTTP/1.1\r\nHost: device\r\nConnection: close\r\n\r\n")
-    board.wait_until(connection.closed(), within=seconds(5))
+    board.wait_until(connection.closed, within=seconds(5))
     head, _, body = connection.received.partition(b"\r\n\r\n")
     assert head.startswith(b"HTTP/1.1 200 OK\r\n")
     assert json.loads(body)["status"] == "ok"
@@ -995,30 +999,31 @@ writes before the device accepts a connection waits for the handshake.
 | `state` | `"connecting"`, `"established"`, then `"closed"` (both ends closed), `"refused"` (a RST answered the SYN), `"reset"` (a RST later), `"lost"` (the link went down, or the device's chip reset or lost its power) or `"timed out"` (none of its 7 SYNs got an answer, 127 s after the first) |
 | `syns` | When each SYN went, a list of `Duration`: the first at `connect`, then each one sent again, until the device answered or the connection ended |
 | `unanswered()` | While the connection is `"connecting"`, what its SYNs got: each one sent again got no answer in its RTO, and the last has had none so far, as `the SYN at 1.032 s has had no answer in 0.5 s (no SYN-ACK, no RST)`, `the SYN at 1.032 s got no answer (no SYN-ACK, no RST), and the SYN at 2.032 s has had none in 0.25 s`, or `..., and the SYN at 2.032 s has just gone` at the instant it went; `None` once the device answered or the connection ended |
-| `established()` | Condition returning when the device accepted the connection, a `Duration` |
-| `closed()` | Condition returning when the device closed its end (its FIN), whoever closed first |
-| `refused()` | Condition returning when the device answered the SYN with a RST |
-| `reset()` | Condition returning when the device reset the established connection |
-| `timed_out()` | Condition returning when the connection timed out with no answer to any of its SYNs |
+| `established` | Condition returning when the device accepted the connection, a `Duration` |
+| `closed` | Condition returning when the device closed its end (its FIN), whoever closed first |
+| `refused` | Condition returning when the device answered the SYN with a RST |
+| `reset` | Condition returning when the device reset the established connection |
+| `timed_out` | Condition returning when the connection timed out with no answer to any of its SYNs |
 | `next_data(until=None, *, size=None, start=None)` | Condition on the bytes the device sends after `start`, an offset into `received`, which is where `received` ends at the call unless given: with `until` (bytes or text), returns them up to and including the first `until` among them; with `size`, the first `size` of them; with neither, whatever has arrived, once anything has |
 | `address`, `port`, `local`, `local_port` | The device's address and port, and the test's: `10.64.0.1` and the connection's ephemeral port |
 | `at`, `established_at`, `closed_at`, `ended_at` | When the test connected, the device accepted, the device closed its end and the connection ended, each a `Duration` or `None` |
 | `identity` | `device:<port>/<n>`, the connection's stream in the transcript |
 
 A connection is established, closed, refused, reset or timed out once at most, so those five
-conditions read its state: one returns its event's time however long ago it happened. `next_data` is a next-event
+conditions read its state, and are properties: one returns its event's time however long ago it
+happened. `next_data` is a next-event
 condition, with the boundary and polling of the [MQTT next-event
 conditions](#history-next-events-and-current-state) at `start`. Every condition fails loudly: once it
 can no longer hold, it raises `ConnectionEnded` (an `AssertionError`, from `esp32tl`)
-instead of waiting out its time. Waiting for `established()` on a connection the device refused
+instead of waiting out its time. Waiting for `established` on a connection the device refused
 raises `TCP 10.64.0.1:49152 → 10.64.0.2:8080 was refused by the device before it was established`;
-`closed()` on a reset one, `... was reset by the device, not closed by the device`; `refused()` on
+`closed` on a reset one, `... was reset by the device, not closed by the device`; `refused` on
 an accepted one, `... was established, not refused by the device`; `next_data(until=b"!")` once
 the device closed without sending it, `... was closed by the device before the device sent b'!'`;
 and once the connection is lost, `... was lost with the link`, `... was lost when the device
 reset` or `... was lost when the device lost its power`, then what can no longer happen, as
-`before it was established`. Once its SYNs time out, `established()` raises `... was timed out with
-no answer to its 7 SYNs before it was established`, and `timed_out()` on an accepted connection
+`before it was established`. Once its SYNs time out, `established` raises `... was timed out with
+no answer to its 7 SYNs before it was established`, and `timed_out` on an accepted connection
 raises `... was established, not timed out with no answer to its 7 SYNs`. A timeout names the
 condition: `TCP 10.64.0.1:49152 → 10.64.0.2:80 established did not happen within 1 s`, and for
 `next_data`, `the next data on TCP 10.64.0.1:49152 → 10.64.0.2:80 up to b'\r\n\r\n'`, with
@@ -1085,7 +1090,7 @@ own restart, a wake from deep sleep), and `board.power_off()`: the device's TCP 
 would tell the test otherwise until it wrote. These are the connections the test opened; the
 device's own [stay open](#a-lost-link-and-the-will). After `board.reset()` the device has no address
 until it takes one again, so wait for its server to listen again before connecting. Deep sleep ends
-them at the wake, the reset the runner reports, not when the chip goes to sleep: a `closed()` or
+them at the wake, the reset the runner reports, not when the chip goes to sleep: a `closed` or
 `next_data()` waited for with a `within` shorter than the sleep times out. The connections the
 device opened are not ended by its reset, as no network would know of it, nor by the link's loss:
 they go on until a RST from the device's new stack, which answers what their service writes, or the
@@ -1224,7 +1229,7 @@ from esp32tl.units import seconds
 
 def test_the_will_goes_at_the_keepalive(board, broker):  # keepalive 60 s
     board.power_on()
-    board.wait_until(broker.subscribed("session/commands"), within=seconds(60))
+    board.wait_until(broker.is_subscribed("session/commands"), within=seconds(60))
     board.power_off()
     assert broker.find_message("session/status", "offline") is None
     will = board.wait_until(broker.next_message("session/status", "offline"), within=seconds(100))
@@ -1714,16 +1719,17 @@ DHCP server assigns its address:
 ```python
 network = wifi.station("device-setup", password="provisioning")
 board.power_on()
-lease = board.wait_until(network.when_leased(), within=seconds(3))
+lease = board.wait_until(network.is_leased, within=seconds(3))
 assert lease.device_address == "192.168.4.1"
 exchange = network.http_client.get("/status")
 response = board.wait_until(exchange.response, within=seconds(2))
 assert response.status == 200
 ```
 
-`seconds` comes from `esp32tl.units`. `network.when_leased()` is a `Condition[HostLease | None]`
-on current state: it returns the `HostLease` while the host holds a lease. `network.lease` reads
-that same lease without waiting, or `None`. Its fields are `address`, `device_address`, `at` and
+`seconds` comes from `esp32tl.units`. `network.is_leased`, a property, is a
+`Condition[HostLease | None]` on current state: it returns the `HostLease` while the host holds a
+lease, and `None` before one and once the host lost it. `network.lease` reads that same lease
+without waiting, or `None`. Its fields are `address`, `device_address`, `at` and
 `expires` (board-clock `Duration`s), `mask` and optional `router`. The default device address is
 the DHCP server identifier, option 54, not necessarily the router. `connect(port, address=...)`
 overrides the destination and uses the leased host address as its source. Raw TCP, HTTP, path
@@ -1731,7 +1737,7 @@ configuration, transcripts and reports work as on the other links. ARP resolves 
 before sending IP.
 
 Before a lease, even with `address=`, `connect` raises `NotReachable`:
-`network.connect(80): the device has leased no address to the station yet; wait for network.when_leased()`.
+`network.connect(80): the device has leased no address to the station yet; wait for network.is_leased`.
 A wrong Wi-Fi password leaves this condition unsatisfied; its timeout says
 `the station has a DHCP lease did not happen within 3 s`. The runner remains usable.
 
@@ -1740,19 +1746,32 @@ host address**. Firmware in AP mode must explicitly contact that address to use 
 with the host's address. The host answers ARP only for its own address and drops IPv4 addressed
 elsewhere. Unsupported EtherTypes, including IPv6, are counted and dropped. This network has no
 PPP link; `network.dhcp` is the existing access-point DHCP server and does not issue this host's
-lease: use `network.lease` and `when_leased()` here.
+lease: use `network.lease` and `is_leased` here.
+
+The station's side of DHCP has the names of the access point's side, on `network` rather than on
+`network.dhcp`, which is the harness's server: `network.leases` lists every `HostLease` the device
+acknowledged to the host, in order, the fresh ones after a reset, a rejoin or an expiry included;
+`network.next_lease()` is a condition returning the first lease recorded **after this method
+call**, with the boundary and polling of the [MQTT next-event
+conditions](#history-next-events-and-current-state), whose timeout names `the station's next DHCP
+lease`; and `network.find_lease()` returns the first lease, or `None`. Behind the modem or an
+access point, where the harness takes no lease, `is_leased`, `leases`, `next_lease()` and
+`find_lease()` raise `ValueError`, `network.next_lease() requires wifi.station()`, and behind an
+access point it goes on with `; behind an access point the harness leases the device its address:
+network.dhcp.next_lease()`, naming the member of the same name there (`next_lease()` for
+`is_leased`).
 
 DHCP retries after 4, 8, 16, 32 and then 64 seconds between attempts, on the board's clock.
 The first attempt starts at data-link readiness; no retry deadline runs before association.
 Device reset loses connections, clears the lease and ARP cache, and waits for data-link readiness before starting DHCP again.
-`board.reset()` queues the reset; the current lease remains until the runner reports it. To wait
-for a fresh lease after a reset, first observe the new boot:
+`board.reset()` queues the reset; the current lease remains until the runner reports it, so
+`is_leased` still holds just after the call. To wait for the fresh lease after a reset, make a
+`next_lease()` condition before it:
 
 ```python
-boot = board.boot.number
+fresh = network.next_lease()
 board.reset()
-board.wait_until(lambda: board.boot.number > boot, within=seconds(1))
-lease = board.wait_until(network.when_leased(), within=seconds(3))
+lease = board.wait_until(fresh, within=seconds(4))
 ```
 
 Not yet: renewal at T1. At expiry the host loses its connections and acquires a fresh lease;

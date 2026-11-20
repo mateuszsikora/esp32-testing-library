@@ -1,10 +1,12 @@
 """The public API is closed: every type a public method, property or attribute of an exported
 class takes or returns can be imported from `esp32tl`, or from the public `esp32tl.units` and
 `esp32tl.recording` modules (issue #247); and a public method that hands out a function of no
-arguments says it is a `Condition` (issue #285)."""
+arguments says it is a `Condition` (issue #285); and every condition has the shape its kind
+gives it (issue #292)."""
 
 import ast
 import contextlib
+import functools
 import inspect
 import sys
 import textwrap
@@ -206,3 +208,122 @@ def test_a_public_method_returning_a_function_of_no_arguments_says_condition() -
     assert not callables, "annotate these as returning Condition[...]: " + ", ".join(
         sorted(set(callables))
     )
+
+
+# The conditions for an action's outcome: a method that does something at the call, named for it,
+# and returns the condition for what came of it.
+ACTIONS = {
+    (esp32tl.BleCentral, "connect"),
+    (esp32tl.BleCentral, "disconnect"),
+    (esp32tl.BleCentral, "discover"),
+    (esp32tl.BleCentral, "pair"),
+    (esp32tl.BleCentral, "read"),
+    (esp32tl.BleCentral, "subscribe"),
+    (esp32tl.BleCentral, "write"),
+    (esp32tl.BlePeripheral, "indicate"),
+    (esp32tl.BlePeripheral, "notify"),
+    # It connects at the call, and again after each refusal.
+    (esp32tl.Internet, "accepting"),
+}
+# The conditions for what has happened, once and for good: named for it without `is_`, as a past
+# participle; true, or its time, however long ago it happened.
+HAPPENED = {
+    (esp32tl.TcpConnection, "established"),
+    (esp32tl.TcpConnection, "closed"),
+    (esp32tl.TcpConnection, "refused"),
+    (esp32tl.TcpConnection, "reset"),
+    (esp32tl.TcpConnection, "timed_out"),
+    (esp32tl.Tls, "handshake_started"),
+    (esp32tl.Tls, "handshake_completed"),
+}
+# Named for what they return: the console's next line keeps `line` beside pytest-embedded's
+# `expect` (#200); an HTTP exchange's `response` is the outcome of the request that made it.
+NAMED_FOR_IT = {
+    (esp32tl.Console, "line"),
+    (esp32tl.HttpExchange, "response"),
+}
+
+
+def conditions() -> Iterator[tuple[type, str, str, list[str]]]:
+    """Every public condition of an exported class, once, on the class that defines it: the class,
+    the name, `"method"`, `"property"` or `"attribute"`, and a method's parameters."""
+
+    def is_condition(annotation: object) -> bool:
+        origin = typing.get_origin(annotation) or annotation
+        return inspect.isclass(origin) and issubclass(
+            origin, (esp32tl.Condition, esp32tl.LineCondition)
+        )
+
+    seen: set[tuple[type, str]] = set()
+    for exported in esp32tl.__all__:
+        cls = getattr(esp32tl, exported)
+        if not inspect.isclass(cls) or not cls.__module__.startswith("esp32tl"):
+            continue
+        for owner in cls.__mro__:
+            if not owner.__module__.startswith("esp32tl") or owner is object:
+                continue
+            found: list[tuple[str, str, object, list[str]]] = []
+            for name, member in vars(owner).items():
+                if name.startswith("_"):
+                    continue
+                kind = (
+                    "property"
+                    if isinstance(member, (property, functools.cached_property))
+                    else "method"
+                )
+                if isinstance(member, (staticmethod, classmethod)):
+                    member = member.__func__
+                if isinstance(member, property):
+                    member = member.fget
+                member = getattr(member, "func", member)  # a functools.cached_property
+                if inspect.isfunction(member):
+                    parameters = list(inspect.signature(member).parameters)[1:]
+                    returned = typing.get_type_hints(member).get("return")
+                    found.append((name, kind, returned, parameters))
+            for name, annotation in inspect.get_annotations(owner, eval_str=True).items():
+                if not name.startswith("_"):
+                    found.append((name, "attribute", annotation, []))
+            for name, annotation in assigned_attributes(owner):
+                found.append((name, "attribute", annotation, []))
+            for name, kind, annotation, parameters in found:
+                if is_condition(annotation) and (owner, name) not in seen:
+                    seen.add((owner, name))
+                    yield owner, name, kind, parameters
+
+
+def test_every_condition_has_the_shape_of_its_kind() -> None:
+    """A condition for the next event is a `next_*` method, as the call is where it starts
+    looking; one for an action's outcome is the action's method; one for a state is named
+    `is_<state>` when it holds now and can stop holding, and for what has happened without
+    `is_`; and a state condition is a property with no argument, a method with one
+    (docs/guides/writing-tests.md#which-shape-a-condition-has)."""
+    found = list(conditions())
+    listed = ACTIONS | HAPPENED | NAMED_FOR_IT
+    stale = listed - {(cls, name) for cls, name, _, _ in found}
+    assert not stale, "not conditions: " + ", ".join(
+        sorted(f"{cls.__qualname__}.{name}" for cls, name in stale)
+    )
+    wrong: list[str] = []
+    for cls, name, kind, parameters in found:
+        where = f"{cls.__qualname__}.{name}, a {kind}"
+        if name.startswith("next_"):
+            if kind != "method":
+                wrong.append(f"{where}: a next_* condition is a method")
+        elif (cls, name) in ACTIONS:
+            if kind != "method":
+                wrong.append(f"{where}: an action is a method")
+        elif (cls, name) in NAMED_FOR_IT:
+            continue
+        else:
+            if parameters and kind != "method":
+                wrong.append(f"{where}: a state condition with an argument is a method")
+            if not parameters and kind == "method":
+                wrong.append(f"{where}: a state condition with no argument is a property")
+            if (cls, name) in HAPPENED and name.startswith("is_"):
+                wrong.append(f"{where}: what has happened is named without is_")
+            if (cls, name) not in HAPPENED and not name.startswith("is_"):
+                wrong.append(
+                    f"{where}: a state that holds now is named is_<state>; what has happened"
+                    " once and for good goes in HAPPENED, an action in ACTIONS"
+                )
+    assert not wrong, "\n".join(sorted(wrong))

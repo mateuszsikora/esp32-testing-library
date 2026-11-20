@@ -508,7 +508,7 @@ class Broker:
         wanted = payload.encode() if isinstance(payload, str) else payload
         return _first(self.deliveries, topic, wanted)
 
-    def subscribed(self, topic: str) -> Condition[bool]:
+    def is_subscribed(self, topic: str) -> Condition[bool]:
         """A live condition: an active client currently subscribes to exactly `topic`."""
 
         def find() -> bool:

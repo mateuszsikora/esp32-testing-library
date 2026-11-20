@@ -80,7 +80,7 @@ def test_first_clean_session_zero_has_no_session_and_the_second_does(broker: Bro
 
 def test_subscriptions_survive_but_subscribed_speaks_of_active_clients(broker: Broker) -> None:
     Wire(broker, KEEP, SUBSCRIBE_QOS1)
-    live = broker.subscribed("a/#")
+    live = broker.is_subscribed("a/#")
     assert live()
     broker.disconnect("c")
     assert not live()
@@ -185,7 +185,7 @@ def test_clean_session_discards_a_stored_session_at_connect(broker: Broker) -> N
     broker.publish("a/b", "queued", qos=1)
     clean = Wire(broker, CLEAN)
     assert clean.take() == [NO_SESSION]
-    assert not broker.subscribed("a/#")()
+    assert not broker.is_subscribed("a/#")()
     broker.publish("a/b", "not routed", qos=1)
     assert clean.take() == []
     state = broker.session("c")
@@ -239,7 +239,7 @@ def test_taking_over_a_clean_connection_finds_no_session(broker: Broker) -> None
     new = Wire(broker, KEEP)
     assert old.closed
     assert new.take() == [NO_SESSION]
-    assert not broker.subscribed("a/#")()
+    assert not broker.is_subscribed("a/#")()
 
 
 def test_a_will_matching_the_clients_own_subscription_waits_for_it(broker: Broker) -> None:
@@ -522,7 +522,7 @@ def test_session_reports_a_copy_and_none_for_an_unknown_client(broker: Broker) -
     assert state.queued == ()
     assert [d.payload for d in state.unacknowledged] == [b"x"]
     state.subscriptions.clear()
-    assert broker.subscribed("a/#")()
+    assert broker.is_subscribed("a/#")()
 
 
 def test_forget_session(broker: Broker) -> None:
@@ -642,9 +642,9 @@ def test_a_stored_session_outlives_a_lost_link_and_its_keepalive() -> None:
     assert peer.read() == NO_SESSION + SUBACK_QOS1
     wire.net.stop()
     # Half-open: the connection is the broker's until its keepalive of 10 s runs out.
-    assert broker.subscribed("a/#")()
+    assert broker.is_subscribed("a/#")()
     wire.net.arrive(15 * S)
-    assert not broker.subscribed("a/#")()
+    assert not broker.is_subscribed("a/#")()
     broker.publish("a/b", "x", qos=1)
     state = broker.session("c")
     assert state is not None and not state.connected
