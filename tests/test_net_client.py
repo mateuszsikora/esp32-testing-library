@@ -664,3 +664,262 @@ def test_a_next_data_poll_searches_only_the_bytes_since_the_last_one(device: Dev
     connection.on_data(b"\nnext")
     assert line() == chunk * n + b"\n" and line() == chunk * n + b"\n"
     assert received.searched <= (n + 3) * (len(chunk) + 1)
+
+
+S = 1000 * MS
+
+
+def test_an_unanswered_syn_goes_again_on_a_doubling_rto_then_times_out(device: Device) -> None:
+    connection = device.net.connect(80)
+    [first] = device.poll()
+    established, timed_out = connection.established(), connection.timed_out()
+    assert connection.unanswered() == "the SYN at 0.001 s has just gone"
+    device.now = 501 * MS
+    assert connection.unanswered() == (
+        "the SYN at 0.001 s has had no answer in 0.5 s (no SYN-ACK, no RST)"
+    )
+    assert established.waiting is not None and established.waiting() == connection.unanswered()
+    # 1 s after the first, then each time twice as long after the last: 6 times, as Linux does.
+    sent = [MS]
+    for gap in (1, 2, 4, 8, 16, 32):
+        due = sent[-1] + gap * S
+        assert device.net.quiet_until() == due
+        device.now = due - 1
+        assert device.poll() == []
+        device.now = due
+        [again] = device.poll()
+        assert (again.sport, again.seq, again.flags, again.options) == (
+            first.sport,
+            ISN,
+            SYN,
+            mss(1400),
+        )
+        sent.append(due)
+    assert connection.syns == [Duration(t) for t in sent]
+    assert connection.unanswered() == (
+        "the SYNs at 0.001 s, 1.001 s, 3.001 s, 7.001 s, 15.001 s and 31.001 s got no answer (no"
+        " SYN-ACK, no RST), and the SYN at 63.001 s has just gone"
+    )
+    device.now = 64 * S + MS
+    assert str(connection.unanswered()).endswith("and the SYN at 63.001 s has had none in 1 s")
+    # 64 s after the last, 127 s after the first, the connection times out, with no SYN more.
+    assert device.net.quiet_until() == 127 * S + MS
+    device.now = 127 * S + MS
+    assert device.poll() == []
+    assert connection.state == "timed out" and connection.unanswered() is None
+    assert timed_out() == Duration(127 * S + MS) == connection.ended_at
+    assert device.net.quiet_until() is None
+    with pytest.raises(ConnectionEnded) as error:
+        established()
+    assert str(error.value) == (
+        "TCP 10.64.0.1:49152 → 10.64.0.2:80 was timed out with no answer to its 7 SYNs before it"
+        " was established"
+    )
+    with pytest.raises(ConnectionEnded, match=r"timed out with no answer to its 7 SYNs: nothing"):
+        connection.write(b"late")
+    name = "net: TCP 10.64.0.1:49152 → 10.64.0.2:80"
+    assert [e for e in device.events() if isinstance(e, str) and e.startswith(name)] == [
+        f"{name} connecting",
+        *(f"{name} SYN again, {n} of 7" for n in range(2, 8)),
+        f"{name} timed out: no answer to 7 SYNs",
+    ]
+    assert device.net.report()[-2:] == [
+        "TCP connections the test opened:",
+        "  device:80/1  TCP 10.64.0.1:49152 → 10.64.0.2:80  timed out at 127.001 s",
+    ]
+
+
+def test_the_devices_answer_to_a_syn_sent_again_ends_its_timer(device: Device) -> None:
+    accepted, refused = device.net.connect(80), device.net.connect(81)
+    device.poll()
+    device.now = S + MS
+    syns = device.poll()
+    assert [(s.sport, s.flags) for s in syns] == [(49152, SYN), (49153, SYN)]
+    report = device.net.report()
+    assert report[-2:] == [
+        "  device:80/1  TCP 10.64.0.1:49152 → 10.64.0.2:80  connecting: the SYN at 0.001 s got no"
+        " answer (no SYN-ACK, no RST), and the SYN at 1.001 s has just gone",
+        "  device:81/1  TCP 10.64.0.1:49153 → 10.64.0.2:81  connecting: the SYN at 0.001 s got no"
+        " answer (no SYN-ACK, no RST), and the SYN at 1.001 s has just gone",
+    ]
+    device.now += MS
+    [ack] = device.send(80, 49152, 1000, ISN + 1, SYN | ACK)
+    assert ack.ack == 1001 and accepted.state == "established"
+    assert accepted.established()() == Duration(S + 2 * MS) and accepted.unanswered() is None
+    assert device.send(81, 49153, 0, ISN + 1, RST | ACK) == []
+    assert refused.refused()() == Duration(S + 2 * MS) and refused.unanswered() is None
+    with pytest.raises(ConnectionEnded, match=r"was refused by the device, not timed out"):
+        refused.timed_out()()
+    with pytest.raises(ConnectionEnded, match=r"was established, not timed out"):
+        accepted.timed_out()()
+    # No timer is left, and nothing goes again.
+    assert device.net.quiet_until() is None
+    device.now = 10 * S
+    assert device.poll() == []
+    assert device.net.report()[-1] == (
+        "  device:81/1  TCP 10.64.0.1:49153 → 10.64.0.2:81  refused at 1.002 s"
+    )
+
+
+def test_a_connection_lost_while_connecting_keeps_no_timer() -> None:
+    device = Device("ppp").up()
+    connection = device.net.connect(80)
+    device.poll()
+    device.net.device_reset(MS, "the device reset")
+    assert connection.state == "lost" and connection.unanswered() is None
+    assert device.net.ip.quiet_until() is None
+
+
+def test_a_http_response_waited_for_before_the_syn_is_answered_says_so(device: Device) -> None:
+    exchange = device.net.http_client.get("/status")
+    device.poll()
+    device.now = S + MS
+    device.poll()
+    assert exchange.response.waiting is not None
+    device.now = S + 251 * MS
+    assert exchange.response.waiting() == (
+        "the SYN at 0.001 s got no answer (no SYN-ACK, no RST), and the SYN at 1.001 s has had"
+        " none in 0.25 s"
+    )
+    while (due := device.net.quiet_until()) is not None:
+        device.now = due
+        device.poll()
+    assert exchange.connection.state == "timed out"
+    assert exchange.connection.ended_at == Duration(127 * S + MS)
+    with pytest.raises(ConnectionEnded) as error:
+        exchange.response()
+    assert str(error.value) == (
+        "HTTP GET /status: TCP 10.64.0.1:49152 → 10.64.0.2:80: timed out before HTTP response"
+        " completed"
+    )
+
+
+def test_accepting_connects_again_a_second_after_each_refusal(device: Device) -> None:
+    accepting = device.net.accepting(80)
+    assert repr(accepting) == "TCP 10.64.0.2:80 accepting a connection"
+    [first] = device.poll()
+    assert accepting() is None and accepting.waiting is not None
+    device.now = 2 * MS
+    assert device.send(80, first.sport, 0, ISN + 1, RST | ACK) == []
+    assert accepting() is None
+    assert accepting.waiting() == (
+        "the device refused 1 connection, the last at 0.002 s; the next goes at 1.002 s"
+    )
+    assert device.net.quiet_until() == S + 2 * MS
+    device.now = S + 2 * MS - 1
+    assert device.poll() == []
+    device.now = S + 2 * MS
+    [second] = device.poll()
+    assert (second.sport, second.flags) == (49153, SYN)
+    assert accepting.waiting() == (
+        "the device refused 1 connection, the last at 0.002 s; the SYN at 1.002 s has just gone"
+    )
+    device.now += MS
+    [ack] = device.send(80, second.sport, 1000, ISN + 1, SYN | ACK)
+    assert ack.flags == ACK
+    connection = accepting()
+    assert connection is not None and connection.local_port == 49153
+    assert connection.state == "established" and accepting() is connection
+    assert [c.identity for c in device.net.connections] == ["device:80/1", "device:80/2"]
+    assert [c.state for c in device.net.connections] == ["refused", "established"]
+    # Done: nothing more goes, and the connection is the test's to use.
+    assert device.net.quiet_until() is None
+    device.now = 5 * S
+    assert device.poll() == []
+    connection.write(b"hi")
+    [data] = device.poll()
+    assert data.data == b"hi"
+
+
+def test_accepting_gives_up_after_30_refusals(device: Device) -> None:
+    accepting = device.net.accepting(80)
+    for n in range(30):
+        [syn] = device.poll()
+        assert syn.sport == 49152 + n
+        device.send(80, syn.sport, 0, ISN + 1, RST | ACK)
+        if n < 29:
+            due = device.net.quiet_until()
+            assert due == device.now + S
+            device.now = due
+    assert device.net.quiet_until() is None
+    with pytest.raises(ConnectionEnded) as error:
+        accepting()
+    assert str(error.value) == (
+        "TCP 10.64.0.2:80 accepting a connection: the device refused 30 connections, the last at"
+        " 29.001 s, and no more go"
+    )
+
+
+def test_accepting_raises_for_a_lost_connection_and_an_unreachable_device() -> None:
+    lost = Device("ppp").up()
+    accepting = lost.net.accepting(80)
+    lost.poll()
+    lost.net.device_reset(MS, "the device reset")
+    with pytest.raises(ConnectionEnded, match=r"was lost when the device reset before it was"):
+        accepting()
+    gone = Device("ethernet").up()
+    accepting = gone.net.accepting(8080)
+    [syn] = gone.poll()
+    gone.send(8080, syn.sport, 0, ISN + 1, RST | ACK)
+    gone.net.stop(MS)
+    # The retry is due with the link down, and says so.
+    assert gone.net.quiet_until() == S + MS
+    gone.now = S + MS
+    gone.net.poll(gone.now)
+    with pytest.raises(NotReachable) as error:
+        accepting()
+    assert str(error.value) == (
+        "network.accepting(8080): the access point is off the air: the network reaches no device"
+    )
+    assert gone.net.quiet_until() is None
+    with pytest.raises(NotReachable, match=r"^network\.accepting\(80\): the access point"):
+        gone.net.accepting(80)
+
+
+def test_a_syn_ack_slower_than_the_rto_meets_the_syn_sent_again_once(device: Device) -> None:
+    # 1.5 s each way and back: the SYN goes again at 1 s, before the device's SYN-ACK arrives.
+    device.net.set_path(rtt=Duration(1500 * MS))
+    connection = device.net.connect(80)
+    sent: list[tuple[int, int]] = []
+
+    def until(t: int) -> None:
+        while (due := device.net.quiet_until()) is not None and due <= t:
+            device.now = due
+            sent.extend((device.now, s.flags) for s in device.poll())
+        device.now = t
+        sent.extend((device.now, s.flags) for s in device.poll())
+
+    until(1501 * MS // 2)  # the SYN reaches the device at 751.5 ms
+    device.now = 1503 * MS // 2
+    assert device.send(80, 49152, 1000, ISN + 1, SYN | ACK) == []
+    until(1501 * MS)
+    assert connection.established_at == Duration(1501 * MS)
+    until(3503 * MS // 2)  # the SYN sent again at 1.001 s reaches it at 1.7515 s
+    assert device.send(80, 49152, 1000, ISN + 1, SYN | ACK) == []
+    until(4 * S)
+    # The second SYN-ACK, at 2.501 s, changes nothing and draws nothing.
+    assert [flags for _, flags in sent] == [SYN, SYN, ACK]
+    assert connection.state == "established" and connection.established_at == Duration(1501 * MS)
+    assert len(connection.syns) == 2 and device.net.quiet_until() is None
+
+
+def test_accepting_refuses_a_connection_that_ended_before_it_was_seen(device: Device) -> None:
+    accepting = device.net.accepting(80)
+    device.poll()
+    # Accepted and reset by the device in one turn, before any poll of the condition.
+    device.send(80, 49152, 1000, ISN + 1, SYN | ACK)
+    device.send(80, 49152, 1001, ISN + 1, RST | ACK)
+    with pytest.raises(ConnectionEnded) as error:
+        accepting()
+    assert str(error.value) == (
+        "TCP 10.64.0.1:49152 → 10.64.0.2:80 was accepted, then reset by the device, before TCP"
+        " 10.64.0.2:80 accepting a connection returned it"
+    )
+    # One the condition returned stays returned, whatever the device does to it later.
+    later = device.net.accepting(81)
+    device.poll()
+    device.send(81, 49153, 1000, ISN + 1, SYN | ACK)
+    connection = later()
+    assert connection is not None
+    device.send(81, 49153, 1001, ISN + 1, FIN | ACK)
+    assert connection.closed_at is not None and later() is connection

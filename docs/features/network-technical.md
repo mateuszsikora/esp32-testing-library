@@ -9,8 +9,9 @@ There are no sockets, worker threads or host-clock timers, but for a bridge's
 or Ethernet frame's timestamp inside receive callbacks and the held board time for test calls.
 Responses carry a 1,000,000 ns latency (`LATENCY_NS`), the path's RTT when the test sets one; the
 modem starts PPP after CONNECT, so LCP follows the AT response. `arrive`, before the test holds the
-turn, takes what has come up the path and evaluates broker keepalive and PUBACK deadlines; `poll`,
-after the hold, drains queued replies; `quiet_until` bounds the next turn by the earliest of those
+turn, takes what has come up the path and evaluates broker keepalive and PUBACK deadlines and the
+SYN timers of the connections the test opened (`Network.poll`); `poll`, after the hold, does the
+same and drains queued replies; `quiet_until` bounds the next turn by the earliest of those
 deadlines and the path's next datagram.
 
 ## The link
@@ -249,7 +250,8 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   UDP replies are checked against MRU (including 28 header bytes) before packing; an oversized
   reply is dropped and logged without fragmentation. TCP also handles
   receive sequence wrap, duplicate-data acknowledgments, FIN and reset. It opens connections
-  only for the test ([below](#connections-the-test-opens)), and never retransmits. Unbound TCP
+  only for the test ([below](#connections-the-test-opens)), and sends nothing again but the
+  SYN of such a connection. Unbound TCP
   ports return RST; unbound UDP is logged and dropped.
   Connections receive `on_close` once, also on RST, PPP loss and `Internet.stop`. There is no
   ICMP or IPv6. The UDP limit's log line names it `peer MRU` behind the access point too.
@@ -588,16 +590,59 @@ that has returned does it count the connection in `_opened` and append it to `co
 and only goes up: `Network.reset` leaves it, and past 65535 it raises `RuntimeError`. It makes a
 `_Flow` keyed `(device, port, ours, local)` like the device's flows, with `snd_nxt = snd_una = ISN`,
 `rcv_nxt = 0`, `peer_window = 0`, `mss = 536`, and `client` and `connection` both the
-`TcpConnection`, which is the `TcpClient` protocol of `esp32tl/net/ip.py` (`on_established`,
-`on_sent`, `on_data`, `on_close`, `on_end`), logs `net: TCP <ours>:<local> → <device>:<port> connecting`, sends a SYN with the
-MSS option (`MSS`, 1400), and returns the local port with the flow's `write` and `close`, which
-`TcpConnection._opened` keeps. Both go through `_write` and `_close`, which, as for the device's
+`TcpConnection`, which is the `TcpClient` protocol of `esp32tl/net/ip.py` (`on_syn`,
+`on_established`, `on_sent`, `on_data`, `on_close`, `on_end`), logs `net: TCP <ours>:<local> →
+<device>:<port> connecting`, sends a SYN with the MSS option (`MSS`, 1400) through `_syn`, and
+returns the local port with the flow's `write` and `close`, which `TcpConnection._opened` keeps.
+Both go through `_write` and `_close`, which, as for the device's
 connections, buffer in `pending` and `fin_pending` and leave `_flush` to send: it sends nothing
 until `established`, then pieces no larger than the device's MSS, its window less what is in
 flight, and the MTU less 40 bytes, and for a client flow hands each piece to `on_sent` as it
 goes. A zero window leaves `pending` as it is until an ACK from the
 device raises `peer_window`; nothing probes it, but the restore of the path after a black hole
 ([The black hole](#the-black-hole)).
+
+`_syn` sets `snd_nxt` back to `ISN`, so every SYN is the same segment, counts it in the flow's
+`syns` and keeps its time, `now()`, in `syn_at`, sends it and calls `on_syn`: the
+`TcpConnection` keeps the times of them all. `Network` takes `now` from `Internet.now`, the
+segment's or the held turn's time.
+
+The SYN is the one segment this TCP sends again, because the device's stack, not the link, drops
+it: lwIP's `ip4_input` drops a segment to an address its netif has not taken yet, and ESP-IDF's
+DHCP client takes a leased address only after its ARP check, about 1 s after the ACK. While a
+client flow is not `established`, `_syn_due(flow)` is `syn_at` plus `SYN_RTO_NS` (1 s, RFC 6298,
+2.1) shifted left by `syns - 1`: 1, 2, 4, 8, 16, 32 and, after the seventh SYN, 64 s.
+`Network.quiet_until()` is the earliest `_syn_due` of the flows `_connecting` returns, `None` when
+there is none, and `Internet.quiet_until` takes it while the link is active. `Network.poll()`,
+which `Internet.arrive` and `Internet.poll` call after `_arrive`, so that a SYN-ACK arriving at
+the instant of a `_syn_due` is taken first, sends the SYN again on each flow whose `_syn_due` has
+come, logging `net: TCP <ours>:<local> → <device>:<port> SYN again, <n> of 7`, until `syns`
+exceeds `SYN_RETRIES` (6, Linux's `tcp_syn_retries`), and then drops the flow as `"timed out"`,
+127 s after the first SYN. The device's answer to any of them is taken as the answer to the
+first, as all are the same segment. A flow that is established, refused or lost leaves
+`_connecting`, and with it the timer. With a path RTT over 1 s, the SYN goes again before the
+device's SYN-ACK arrives, as a real client's does; a second SYN-ACK on an established flow draws
+nothing and changes nothing, as
+`tests/test_net_client.py::test_a_syn_ack_slower_than_the_rto_meets_the_syn_sent_again_once`
+checks with an RTT of 1.5 s.
+
+`Internet.accepting(port, *, address=None)` makes an `_Accepting`, which opens its first connection
+at once through `Internet._open`, the body of `connect`, its errors naming
+`network.accepting(<port!r>)`, and appends it to `_accepting`. `_Accepting.due()` is the last
+connection's `ended_at` plus `ACCEPT_RETRY_NS` (1 s) while that connection is `refused`, fewer than
+`ACCEPT_ATTEMPTS` (30) were opened and none raised, else `None`. `Internet._retry()`, called in
+`arrive` and `poll` after `Network.poll`, opens the next connection for each one due and lets go of
+one that is done: its last connection not `connecting` and no more due, or a `NotReachable` kept
+from `_open`. `Internet.quiet_until` takes every `due()`, with the link up or down, so that a retry
+due while the link is down raises then, kept for the condition. The condition's `find` returns the
+last connection once it is established and, the first time, still open: one the device already
+reset, or closed its end of, raises `ConnectionEnded` instead; `returned` then keeps it returning
+that connection whatever becomes of it. Otherwise `find` raises the kept `NotReachable`, raises
+`ConnectionEnded` when all 30 were refused, and otherwise reads the last connection's
+`established()`, which raises for a lost or timed-out one. Its description is `TCP <address>:<port>
+accepting a connection`, and its `waiting` is the refusals so far, `the device refused <n>
+connection(s), the last at <t>`, with `; the next goes at <t>` while one is due, or `; ` and the
+last connection's `unanswered()` while its SYN is out.
 
 In `_tcp`, a segment for a client flow that is not established is the device's answer to the SYN
 only when it carries ACK with `ISN + 1` (RFC 9293, 3.10.7.3); anything else is ignored. With RST
@@ -617,12 +662,13 @@ ends. The device's own flows keep acknowledging such a segment again, as before.
 
 `_drop(flow, kind, why=None)` takes `"closed"`, `"refused"`, `"reset"`, `"lost"` (`Network.reset`,
 which no link calls and the unit tests use as a transport loss, and
-`Network.forget_device(why=None, *, address=None)`), or, for a device flow only, `"abandoned"`
+`Network.forget_device(why=None, *, address=None)`), for a client flow only `"timed out"`
+(`Network.poll`), or, for a device flow only, `"abandoned"`
 (`Network._close` on an orphaned flow, and `Network._unfinished`) and `"unanswered"`
 (`Network._unfinished`), and logs it
 through `_ENDS`: `closed`, `refused by the device`, `reset by the device`, `link lost`, `closed by
-its service with no device to answer`, `lost before the device answered its SYN-ACK`, or
-`lost: <why>` when `why` is given. `_drop` removes the flow from `_flows` only while it is the one
+its service with no device to answer`, `lost before the device answered its SYN-ACK`, `timed out:
+no answer to 7 SYNs`, or `lost: <why>` when `why` is given. `_drop` removes the flow from `_flows` only while it is the one
 there for its key, and `_write`, `_close` and `_flush` do nothing for a flow that is not
 (`_current`): a service may call the `close` of a flow that has ended after the device opened
 another on the same addresses and ports, and that must not end the new one. A client flow's line
@@ -649,14 +695,23 @@ challenge ACK (RFC 9293, 3.10.7.4) would come to: the new stack answers it with 
 the old connection, and sends its SYN again. A flow that is not orphaned takes only ACK, data and
 FIN, and drops such a SYN without an answer, as before.
 
-`TcpConnection` keeps `received` in a `bytearray`, `established_at`, `closed_at` and `ended_at` as
-`Duration`s from `now()` at the callback, which is the segment's own time, `_end`, the kind, and
-`_why`, a loss's reason, which `_how` turns into `lost when <why>`, else takes `_HOW`'s sentence
-for the kind. `write` hands the bytes on; `on_sent` records `in`, at the time the piece goes, and
-`on_data` records `out`. Its conditions are
-`Condition(find, description, "TCP")`; each `find` returns the time or bytes it is after, `None`
-while it may still come, and raises `ConnectionEnded` once `_end` (or, for `closed` and
-`next_data`, `closed_at`) rules it out, its message built from `_how`. `next_data` validates its
+`TcpConnection` keeps `received` in a `bytearray`, `syns`, `established_at`, `closed_at` and
+`ended_at` as `Duration`s from `now()` at the callback, which is the segment's own time, `_end`,
+the kind, and `_why`, a loss's reason, which `_how` turns into `lost when <why>`, else takes
+`_HOW`'s sentence for the kind (`timed out with no answer to its 7 SYNs` for `"timed out"`).
+`write` hands the bytes on; `on_syn` appends to `syns`, `on_sent` records `in`, at the time the
+piece goes, and `on_data` records `out`. `unanswered()` is `None` unless `state` is
+`"connecting"`. Otherwise it splits `syns` into the ones sent again after, each of which got no
+answer in its RTO, and the last, whose age is `now()` less its time: `the SYN at <t> has had no
+answer in <age> (no SYN-ACK, no RST)` for one SYN, and for more `the SYN(s) at <t>, … and <t> got
+no answer (no SYN-ACK, no RST), and the SYN at <t> has had none in <age>`; an age of 0, a SYN
+sent at that instant, reads `has just gone`. Its conditions are
+`Condition(find, description, "TCP", self.unanswered)`, so that `board.wait_until` puts that
+clause in a timeout's `NeverHappened` ([the backend](esp32sim-backend-technical.md));
+each `find` returns the time or bytes it is after, `None` while it may still come, and raises
+`ConnectionEnded` once `_end` (or, for `closed` and `next_data`, `closed_at`) rules it out, its
+message built from `_how`; `refused()` and `timed_out()` raise it once `established_at` is set
+too. `next_data` validates its
 arguments at the call and captures `start`, `len(received)` unless given; each poll searches the
 `bytearray` in place (`find(until, searched)`, or its length) and copies only what it returns, so it
 consumes nothing, a repeated poll returns the same bytes, and a long stream is not copied at every
@@ -786,7 +841,11 @@ independently of the rolling wire log. JUnit stores it in the existing `esp32sim
 `Wifi` is not lossless: Ethernet frames go on the link as messages, not through a UART FIFO.
 `Wifi.report()` gives the access point, the networks around and `Internet.report()`; the backend
 appends it when an access point was given, and `Wifi.properties()` puts the transcript in the
-`wifi` property's `network`.
+`wifi` property's `network`. `Internet.report()` is `network events:` and a line per event, then,
+when `connections` is not empty, `TCP connections the test opened:` and a line per connection:
+`  <identity>  <name>  <state>`, with ` at <ended_at or established_at>` when either is set and
+`: <unanswered()>` while it is connecting. The transcript has no such lines: its events already
+hold every SYN and end.
 
 `Internet.transcript()` is `{"esp32tl_network": 1, "events": [...]}`. Events have `t_ns` and either
 `event` text or `stream`, `direction` (`in` to the device, `out` from it), and hex `data`. A stream
@@ -931,14 +990,24 @@ independently: the SYN and its MSS, data written before the handshake going in M
 both ways, a retransmission received once, both orders of closing, refused (with nothing of what
 was written in the transcript), reset, a zero window and its updates, a segment ahead of the
 stream, ports counting up across a lost link, the conditions' names and refusals, text written as
-UTF-8 and decoded with replacement, `device_reset` for a reset and a power loss (the test's
+UTF-8 and decoded with replacement, the SYN sent again on its schedule and then timed out, a
+SYN-ACK and a RST to a SYN sent again ending its timer, a SYN-ACK slower than the RTO, the
+clauses of `unanswered()` and the report's connection lines, `accepting` connecting again after a
+refusal, giving up after 30 and raising for a lost connection and an unreachable device, `device_reset` for a reset and a power loss (the test's
 connections lost, the device's own kept, the address gone until IPCP or DHCP gives it again), a
 RELEASE giving the address up, and `NotReachable` before IPCP, before a DHCP ACK, after an OFFER
 alone, without a frame from the station and off the air. `tests/test_http_server.py` runs the
 `http_server` image behind the access point: a `GET` with `Connection: close`, two `POST`s on one
 connection read by their `Content-Length`, a body over the firmware's limit, a refused port,
 connecting before the lease, and a connection lost at `board.reset()` and at `board.power_off()`,
-then a new one once the server listens again. Not
+then a new one once the server listens again; and, with no wait for a console line, a `GET` sent
+when the lease holds, whose SYN gets no answer and is accepted when sent again 1 s later, a wait on
+it that times out before then naming the SYN, with the report's connection lines the user guide
+quotes, and a port nothing listens on, refused at the SYN sent again.
+`tests/test_arduino_shell.py` does the same on Arduino-ESP32's `WebServer`: a `GET` sent at the
+lease answered after the SYN sent again, and, with `listen_delay_ms` 200, that `GET` refused and
+`accepting(80)` refused once, then accepted, before a `GET` that is answered. `tests/test_clock.py::test_a_tcp_wait_that_times_out_names_the_syns_sent_again_on_the_clock`
+checks that the held clock takes a turn at each `_syn_due` and the `NeverHappened` message. Not
 covered: a connection to real firmware behind the modem; `test_net_client.py` covers PPP with
 segments.
 
@@ -960,7 +1029,9 @@ segments.
   [a bridge relays a TCP port to a real service, on the wall
   clock](../decisions/harness.md#a-bridge-relays-a-tcp-port-to-a-real-service-and-puts-the-run-on-the-wall-clock),
   [the test opens TCP connections to the device, with no
-  timers](../decisions/harness.md#the-test-opens-tcp-connections-to-the-device-on-the-same-tcp-with-no-timers).
+  timers](../decisions/harness.md#the-test-opens-tcp-connections-to-the-device-on-the-same-tcp-with-no-timers),
+  [the test's TCP sends an unanswered SYN
+  again](../decisions/harness.md#the-tests-tcp-sends-a-syn-the-device-does-not-answer-again-on-the-boards-clock).
 
 ## HTTP client
 
@@ -970,7 +1041,10 @@ TCP stream identities and lifecycle errors are shared with raw connections. `Tcp
 notifies internal observers after received bytes, peer FIN and terminal state updates. The
 exchange incrementally parses the TCP receive buffer on those notifications, caches a response
 or error, logs once, and closes its end on completion or parsing failure. Its `response`, a `Condition[ClientResponse | None]`, only reads the
-cached outcome; polling has no network effects.
+cached outcome; polling has no network effects. Its `waiting` is the connection's `unanswered`, so a
+timed-out wait names the SYNs that got no answer. A connection whose `state` is `refused`,
+`reset`, `lost`, `closed` or `timed out` before the response completed caches `ConnectionEnded`
+(`<connection name>: <state> before HTTP response completed`).
 
 The parser accepts HTTP/1.0 and HTTP/1.1 responses to HTTP/1.1 requests, skips informational
 heads except 101, validates status/header syntax and framing, decodes chunked bodies (including

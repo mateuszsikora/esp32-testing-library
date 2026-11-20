@@ -153,6 +153,12 @@ def test_console_reset_clock_tap_and_autoflash(
                 board.wait_until(described, within=seconds(.01))
             with pytest.raises(TypeError, match="call the condition 'a trip/end"):
                 bool(described)
+            said = esp32tl.condition(lambda: None, "an answer", waiting=lambda: "nothing asked")
+            with pytest.raises(
+                NeverHappened,
+                match="^an answer did not happen within 0.01 s: nothing asked; waited from ",
+            ):
+                board.wait_until(said, within=seconds(.01))
             with pytest.raises(NeverHappened):
                 console.expect("missing", timeout=.01)
             with pytest.raises(BoardOff):

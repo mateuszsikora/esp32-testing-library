@@ -740,14 +740,17 @@ the build flags
 opens the namespace `shell` read-only with `preferences.begin("shell", true)`, so that the sketch
 writes nothing to NVS. On a flash without the namespace `nvs_open` fails, the core logs
 `begin(): nvs_open failed: NOT_FOUND`, and `getString` returns its default, `""`, for `greeting`,
-`ssid` and `password`. With an `ssid`, `WiFi.mode(WIFI_STA)` and
+`ssid` and `password`, and `getUInt` its default, 0, for `listen_delay_ms`, kept in
+`listen_delay`. With an `ssid`, `WiFi.mode(WIFI_STA)` and
 `WiFi.begin(ssid, password)`; `WiFi`'s auto-reconnect, on by default, is left as it is, and no
 test takes the access point away. Every line goes through `Serial.print` and
 `Serial.println`.
 
 `loop()` feeds every byte `Serial` has to `take`, which ends a line at `\n`, drops a `\r` before it,
 and keeps at most `MAX_LINE` (64) bytes of a line, then hands it to `run`; an empty line prints
-nothing. Once `WiFi.status()` is `WL_CONNECTED` it registers `status` for `GET /status` on a
+nothing. Once `WiFi.status()` is `WL_CONNECTED`, and, when `listen_delay` is not 0, after printing
+`connected at <WiFi.localIP()>` and `delay(listen_delay)`, which holds `loop()` and with it the
+console, it registers `status` for `GET /status` on a
 `WebServer` on port 80, calls `server.begin()` and prints the `listening on` line, once; from then on
 every `loop()` calls `server.handleClient()`, then `delay(1)`. `status` counts the request in
 `requests` and sends `200` with `application/json`; `uptime_ms` is `millis()`, which is emulated

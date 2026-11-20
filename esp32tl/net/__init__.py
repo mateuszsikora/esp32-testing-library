@@ -12,7 +12,7 @@ from typing import Literal, cast, overload
 from esp32tl.interfaces.condition import Condition, FirstFrom
 from esp32tl.link.boardlink import Output
 from esp32tl.net.bridge import Bridge, address
-from esp32tl.net.client import NotReachable, TcpConnection
+from esp32tl.net.client import ConnectionEnded, NotReachable, TcpConnection
 from esp32tl.net.dhcp import Dhcp
 from esp32tl.net.dns import Dns
 from esp32tl.net.ethernet import Ethernet
@@ -38,6 +38,10 @@ from esp32tl.report import board_time
 from esp32tl.units import NS_PER_S, Duration, Rate, shown
 
 LATENCY_NS = 1_000_000
+# How long `accepting` waits after a refusal before it connects again, and how many connections
+# it opens at most.
+ACCEPT_RETRY_NS = 1_000_000_000
+ACCEPT_ATTEMPTS = 30
 LOCAL = "10.64.0.1"  # the network's own address: its DNS, its router, the test's side of TCP
 DEFAULT_RTT = Duration(LATENCY_NS)
 
@@ -147,7 +151,9 @@ class Internet:
         self._drop = False  # the path drops every datagram entering it: `set_path(drop=True)`
         self._datagram: int | None = None  # the size of the IPv4 datagram the link is sending
         self.events: list[dict[str, object]] = []
-        self.ip = Network(self._downlink, self.log, mtu=self._mtu, carries=self._carries)
+        self.ip = Network(
+            self._downlink, self.log, mtu=self._mtu, carries=self._carries, now=self.now
+        )
         self.dns = Dns("10.64.0.1", self.now, self.log)
         self.ntp = Ntp(self.now, world, self.log)
         self.ip.udp.update({53: self.dns, 123: self.ntp})
@@ -162,6 +168,8 @@ class Internet:
         # The connections the test opened, in order, and how many it opened to each port.
         self.connections: list[TcpConnection] = []
         self._opened: dict[int, int] = {}
+        # The `accepting` conditions, each connecting again after a refusal.
+        self._accepting: list[_Accepting] = []
         # Behind the modem: how many times IPCP had opened when the device last reset, which the
         # address it gave is from; `None` when the link is newer than the reset.
         self._stale: int | None = None
@@ -293,6 +301,16 @@ class Internet:
             if detail is None:
                 detail = f"stream {event['stream']} {event['direction']} {event['data']} (hex)"
             lines.append(f"  {board_time(cast(int, event['t_ns']))}  {detail}")
+        if self.connections:
+            lines.append("TCP connections the test opened:")
+        for connection in self.connections:
+            at = connection.ended_at or connection.established_at
+            state = connection.state + (f" at {at}" if at is not None else "")
+            why = connection.unanswered()
+            lines.append(
+                f"  {connection.identity}  {connection.name}  {state}"
+                + (f": {why}" if why is not None else "")
+            )
         return lines
 
     @overload
@@ -391,11 +409,29 @@ class Internet:
     def connect(self, port: int, *, address: str | None = None) -> TcpConnection:
         """Open TCP to the device, from the station's leased address or otherwise `10.64.0.1`.
         The SYN enters the network's path at the board's current instant, and reaches the device
-        after the path's way down. `address` is the device's, `device_address` unless given, as
+        after the path's way down; while the device answers none, it goes again on the board's
+        clock (`Network.poll`). `address` is the device's, `device_address` unless given, as
         for a device with a static address behind the access point. Returns the `TcpConnection`.
         Raises `NotReachable` while the link is down, before the device has an address, and
         behind the access point before the station has sent a frame."""
-        call = f"network.connect({port!r}" + (
+        return self._open(port, address, "connect")
+
+    def accepting(
+        self, port: int, *, address: str | None = None
+    ) -> Condition[TcpConnection | None]:
+        """A condition returning the first connection the device accepts on `port`: it connects
+        now, as `connect` does, and again `ACCEPT_RETRY_NS` (1 s) after each refusal, on the
+        board's clock, up to `ACCEPT_ATTEMPTS` (30) connections. Each is in `connections`, and
+        the one returned is open: the test uses it or closes it. Raises `ConnectionEnded` once a
+        connection ended otherwise (lost, timed out) or the device refused all 30, and
+        `NotReachable`, at the call as `connect` does, or from the condition when a connection
+        again finds the device out of reach."""
+        accepting = _Accepting(self, port, address)
+        self._accepting.append(accepting)
+        return Condition(accepting.find, accepting.description, "TCP", accepting.waiting)
+
+    def _open(self, port: int, address: str | None, name: str) -> TcpConnection:
+        call = f"network.{name}({port!r}" + (
             f", address={address!r})" if address is not None else ")"
         )
         if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
@@ -722,16 +758,19 @@ class Internet:
             self._at = None
 
     def arrive(self, now: int) -> None:
-        """Take in what has come up the path by `now`, then run the broker's deadlines due by it
-        and hand over what bridged services sent, before the test looks at the turn at `now`: a
-        record stamped `now`, a PUBACK or an expiry due at `now`, is there when `board.now` says
-        it. What this answers goes out in `poll`. With the link down the broker's deadlines run
-        all the same, and `poll` has nothing to send."""
+        """Take in what has come up the path by `now`, then run the broker's deadlines and the
+        test's SYN timers due by it and hand over what bridged services sent, before the test
+        looks at the turn at `now`: a record stamped `now`, a PUBACK, an expiry or a SYN sent
+        again at `now`, is there when `board.now` says it. What this answers goes out in `poll`.
+        With the link down the broker's deadlines run all the same, and `poll` has nothing to
+        send."""
         self._at = now
         try:
             if self.active and isinstance(self.link, Station):
                 self.link.poll()
             self._arrive(now)
+            self.ip.poll()
+            self._retry()
             self.broker.poll()
             self._pump()
         finally:
@@ -745,11 +784,25 @@ class Internet:
             if self.active and isinstance(self.link, Station):
                 self.link.poll()
             self._arrive(now)
+            self.ip.poll()
+            self._retry()
             self.broker.poll()
             self._pump()
             return self._take()
         finally:
             self._at = None
+
+    def _retry(self) -> None:
+        """Connect again for each `accepting` condition whose last connection was refused
+        `ACCEPT_RETRY_NS` ago or more; one that has done with connecting is let go."""
+        now = self.now()
+        for accepting in list(self._accepting):
+            due = accepting.due()
+            if due is None:
+                if accepting.done():
+                    self._accepting.remove(accepting)
+            elif due <= now:
+                accepting.again()
 
     def _take(self) -> list[Output]:
         self._release()
@@ -757,25 +810,104 @@ class Internet:
         return out
 
     def quiet_until(self) -> int | None:
-        """The earliest of the broker's deadlines, the path's next datagram, either way, and the
-        next whole millisecond while a bridged connection is open; with the link down, the
+        """The earliest of the broker's deadlines, the next SYN timer of a connection the test
+        opened, the path's next datagram, either way, and the next whole millisecond while a
+        bridged connection is open; with the link down, the
         broker's and the bridges', as its keepalive still ends the connections the link's end
         left open, and a bridged service may still send or close."""
         bridged = (bridge.quiet_until(self._now()) for bridge in self.bridges.values())
+        # A retry is due whether the link is up or not: one that finds it down says so.
+        retries = (accepting.due() for accepting in self._accepting)
         if not self.active:
-            deadlines = (self.broker.quiet_until(), *bridged)
+            deadlines = (self.broker.quiet_until(), *bridged, *retries)
             return min((bound for bound in deadlines if bound is not None), default=None)
         bounds = (
             self.link.quiet_until() if isinstance(self.link, Station) else None,
             self.broker.quiet_until(),
+            self.ip.quiet_until(),
             self._up.head(),
             self._down.head(),
             *bridged,
+            *retries,
         )
         return min((bound for bound in bounds if bound is not None), default=None)
 
     def latency(self) -> int:
         return LATENCY_NS
+
+
+class _Accepting:
+    """What `Internet.accepting` returns the condition of: the connections it opened to one port,
+    the last of which is the one that counts, and the `NotReachable` a connection again raised."""
+
+    def __init__(self, network: Internet, port: int, address: str | None) -> None:
+        self.network, self.port, self.address = network, port, address
+        self.attempts = [network._open(port, address, "accepting")]
+        self.error: NotReachable | None = None
+        # Whether `find` has returned the accepted connection: from then on it returns it whatever
+        # becomes of it, as the test's to use or close.
+        self.returned = False
+        self.description = f"TCP {self.attempts[0].address}:{port} accepting a connection"
+
+    def due(self) -> int | None:
+        """When the next connection goes: `ACCEPT_RETRY_NS` after the last was refused, while
+        fewer than `ACCEPT_ATTEMPTS` went and none raised; else `None`."""
+        last = self.attempts[-1]
+        if self.error is not None or last.state != "refused" or last.ended_at is None:
+            return None
+        if len(self.attempts) >= ACCEPT_ATTEMPTS:
+            return None
+        return last.ended_at.ns + ACCEPT_RETRY_NS
+
+    def done(self) -> bool:
+        """Whether no connection will go again: one was not refused, or the last raised, or all
+        were refused."""
+        return self.attempts[-1].state != "connecting" or self.error is not None
+
+    def again(self) -> None:
+        try:
+            self.attempts.append(self.network._open(self.port, self.address, "accepting"))
+        except NotReachable as error:
+            self.error = error
+
+    def _refusals(self) -> str:
+        refused = [c for c in self.attempts if c.state == "refused"]
+        if not refused:
+            return ""
+        last = refused[-1].ended_at
+        count = "1 connection" if len(refused) == 1 else f"{len(refused)} connections"
+        return f"the device refused {count}, the last at {last}"
+
+    def find(self) -> TcpConnection | None:
+        last = self.attempts[-1]
+        if last.established_at is not None:
+            if not self.returned and (last.state != "established" or last.closed_at is not None):
+                # Accepted, then ended or closed by the device before a poll saw it: not open.
+                how = last._how if last.state != "established" else "closed by the device"
+                raise ConnectionEnded(
+                    f"{last.name} was accepted, then {how}, before {self.description} returned it"
+                )
+            self.returned = True
+            return last
+        if self.error is not None:
+            raise self.error
+        if last.state == "refused":
+            if len(self.attempts) >= ACCEPT_ATTEMPTS:
+                raise ConnectionEnded(f"{self.description}: {self._refusals()}, and no more go")
+            return None
+        # Lost or timed out: it raises as `established()` does.
+        return None if last.established()() is None else last
+
+    def waiting(self) -> str | None:
+        last = self.attempts[-1]
+        refused = self._refusals()
+        if last.state == "refused":
+            due = self.due()
+            return refused + (f"; the next goes at {Duration(due)}" if due is not None else "")
+        unanswered = last.unanswered()
+        if unanswered is None:
+            return refused or None
+        return f"{refused}; {unanswered}" if refused else unanswered
 
 
 class _Traced:

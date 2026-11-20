@@ -12,6 +12,7 @@ from typing import Any, TypeVar
 
 import pexpect
 import pytest
+from test_net_ethernet import dhcp
 from test_net_ip import packet
 
 from esp32tl import boards, recording
@@ -52,7 +53,7 @@ class Run:
     `(t, cause)`, the chip's resets, each an event, and a runner thread that ends the run at
     `end` ns, as --max-seconds does, then ends the clock as the backend does once the runner has
     exited, with the end's time when `stats` says it. `syncs` are the block points it took turns
-    at, and `latencies` the `latency` of each `wait`."""
+    at, `latencies` the `latency` of each `wait`, and `sent` what the interfaces sent at them."""
 
     def __init__(
         self,
@@ -81,6 +82,7 @@ class Run:
         self.dump_error: str | None = None
         self.writes: list[tuple[int, FlashWrite]] = []
         self.stopped = False
+        self.sent: list[object] = []
         self.runner = threading.Thread(target=self._run, daemon=True)
         self.runner.start()
 
@@ -89,7 +91,9 @@ class Run:
         t = 0
         while True:
             self.syncs.append(t)
-            (reply,) = self.link.receive(Sync(t))
+            # What an interface sends at the turn comes before the turn's answer.
+            *sent, reply = self.link.receive(Sync(t))
+            self.sent += sent
             while isinstance(reply, FlashDump | FlashWrite):
                 if isinstance(reply, FlashWrite):
                     self.writes.append((t, reply))
@@ -441,6 +445,31 @@ def test_a_condition_that_never_holds_raises_never_happened_naming_it_and_the_wi
     assert isinstance(raised.value, AssertionError)
     # The window's end is a turn of its own, not a step past it.
     assert run.clock.now == 1500 * MS
+
+
+def test_a_tcp_wait_that_times_out_names_the_syns_sent_again_on_the_clock() -> None:
+    clock = HeldClock()
+    wifi = Wifi(now=lambda: clock.now, asked=lambda request: None)
+    network = wifi.access_point("myssid", password="mypassword")
+    network.receive(0, dhcp(1))
+    network.receive(0, dhcp(3, options=bytes([50, 4, 10, 64, 0, 2])))
+    run = Run(clock=clock, interfaces=[wifi])
+    try:
+        run.clock.wait(S)
+        connection = network.connect(80)
+        with pytest.raises(NeverHappened) as raised:
+            run.clock.wait_until(connection.established(), 3 * S, repr(connection.established()))
+        # The SYN went again at the turns its RTO ran out at, the last at the wait's end.
+        assert connection.syns == [Duration(S), Duration(2 * S), Duration(4 * S)]
+        assert str(raised.value) == (
+            "TCP 10.64.0.1:49152 → 10.64.0.2:80 established did not happen within 3 s: the SYNs"
+            " at 1 s and 2 s got no answer (no SYN-ACK, no RST), and the SYN at 4 s has just gone;"
+            " waited from 1 s to 4 s of the board's time"
+        )
+        assert raised.value.why == connection.unanswered()
+    finally:
+        run.clock.stop()
+        run.runner.join(5)
 
 
 def test_a_condition_that_raises_raises_in_the_test_and_leaves_the_link_held() -> None:

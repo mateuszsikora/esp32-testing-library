@@ -5,6 +5,8 @@
  * The settings are in the Preferences namespace "shell", read once at boot: `greeting`, printed
  * after the banner, and `ssid` and `password`, the network to join. Without an `ssid` the sketch
  * starts a SoftAP when `ap_ssid` is set (`ap_password` optional), otherwise stays off the air.
+ * As a station it starts `WebServer` once `WiFi.status()` is `WL_CONNECTED`, `listen_delay_ms`
+ * (default 0) after it, as a sketch that does more setup between the two would.
  * A line on `Serial` is a command: `help`, `greeting`, `uptime`, `wifi`, `ap-off` or `ap-on`.
  * Every line the sketch prints starts with "arduino_shell: " and ends with println's "\r\n". */
 #include <Arduino.h>
@@ -22,6 +24,7 @@ static String greeting;
 static bool joining;
 static bool serving;
 static bool access_point;
+static unsigned long listen_delay;
 static unsigned long requests;
 static char line[MAX_LINE + 1];
 static size_t length;
@@ -97,6 +100,7 @@ void setup() {
     String ap_ssid = preferences.getString("ap_ssid", "");
     String ap_password = preferences.getString("ap_password", "");
     unsigned long ap_delay = preferences.getUInt("ap_delay_ms", 0);
+    listen_delay = preferences.getUInt("listen_delay_ms", 0);
     preferences.end();
     Serial.print(PREFIX "greeting=");
     Serial.println(greeting);
@@ -140,6 +144,11 @@ void setup() {
 void loop() {
     while (Serial.available() > 0) take(Serial.read());
     if (joining && !serving && WiFi.status() == WL_CONNECTED) {
+        if (listen_delay > 0) {
+            Serial.print(PREFIX "connected at ");
+            Serial.println(WiFi.localIP());
+            delay(listen_delay);
+        }
         server.on("/status", HTTP_GET, status);
         server.begin();
         serving = true;

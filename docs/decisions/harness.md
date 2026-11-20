@@ -1028,6 +1028,9 @@ broker such as mosquitto as the default, which brings wall time back.
 
 Status: decided (#196)
 
+*Superseded in part by [the test's TCP sends a SYN the device does not answer again](#the-tests-tcp-sends-a-syn-the-device-does-not-answer-again-on-the-boards-clock)
+(#289): for the SYN only. The rest of this decision stands.*
+
 Firmware that serves HTTP, WebSocket or a protocol of its own is tested from its client's side:
 `network.connect(port, *, address=None)` opens a connection to the device behind the modem and
 behind the access point alike, and returns a `TcpConnection` that writes, closes and keeps what the
@@ -1037,7 +1040,8 @@ holds about a link that loses and reorders nothing holds here too, and decides w
 side supports:
 
 - no retransmission and no timers: the link loses nothing, and a segment is acknowledged in the
-  turn it arrives in;
+  turn it arrives in; since #289 the SYN is the exception, [sent again](#the-tests-tcp-sends-a-syn-the-device-does-not-answer-again-on-the-boards-clock) because the
+  device's stack drops it;
 - the device's window is respected, and a zero window waits for the device's window update, with no
   persist timer;
 - only the MSS option, 1400 offered and the device's taken up to 1400; no window scaling, SACK or
@@ -1081,7 +1085,8 @@ be established among them, so that a RST shows in the wait at once, not as a tim
 
 **Rejected:** a host socket the test connects to, relayed to the device, because it brings wall time
 back as a bridge does; retransmission and a persist timer, because the link loses nothing and
-timers would add turns that change nothing; a client that opens from another address per
+timers would add turns that change nothing (for the SYN, #289 found that the device drops it, and
+superseded this); a client that opens from another address per
 connection, because one address and fresh ports already keep connections apart. Also rejected:
 conditions that return `None` for ever once their event cannot happen, which turn a refused
 connection into a timeout that names the wrong cause.
@@ -1102,6 +1107,56 @@ segment brought with it are already in `received` when the head's condition retu
 condition's boundary would leave them out. `start` is an offset into the bytes received, the
 stream's own coordinate, not the `since=` on `next_message` that #182 rejected: a message list has
 no positions a test should count, a byte stream has nothing else.
+
+## The test's TCP sends a SYN the device does not answer again, on the board's clock
+
+Status: decided (#289)
+
+A connection the test opened when `network.dhcp.next_lease()` held stayed `connecting` for good. The
+decision of #196 assumed that a link that loses nothing needs no retransmission. The device's stack
+drops the SYN, though, not the link. ESP-IDF's DHCP client takes a leased address only after its ARP
+check (`CONFIG_LWIP_DHCP_DOES_ARP_CHECK`, the default). Until then lwIP's `ip4_input` drops a
+segment to that address without answering. Measured on `http_server` (ESP-IDF v5.3.6, the esp32sim
+pin of the time): DHCP acknowledged at 1.031 s, the station took the address at 2.027 s and the
+server listened 0.6 ms later. A SYN at 1.032 s and SYNs up to 1.832 s got nothing, on port 80 and on
+a port nothing listens on. From 2.032 s on, port 80 answered with a SYN-ACK and the other port with
+a RST. Arduino-ESP32 3.3's `WebServer`, in `arduino_shell`, behaves the same: ACK at 0.956 s,
+address taken and `WebServer` listening between 1.938 and 1.943 s. So the SYN of a connection the
+test opened goes again, as a real client's does: 1 s after the first (RFC 6298's initial RTO), each
+time twice as long after the last, 6 times (Linux's default `tcp_syn_retries`). 64 s after the
+seventh SYN, 127 s after the first, the connection ends in a state of its own, `"timed out"`, with
+the condition `timed_out()`. The name is apart from `"unanswered"`, which is the end of a device
+connection whose SYN-ACK got no ACK. While the connection is still connecting, a wait on any of its
+conditions that times out says so, as `the SYNs at 1 s and 2 s got no answer (no SYN-ACK, no RST),
+and the SYN at 4 s has just gone`: a SYN sent again says that the one before got no answer in its
+RTO, while the last one has only had no answer so far, and may have just gone. The waits of the HTTP
+client say so too, through the `waiting` of `Condition`, and the run report lists every connection
+the test opened with its state. Data segments, FINs and the device's own connections keep #196's
+rules: nothing sends them again.
+
+**Rejected:** a shorter limit than Linux's, because a test bounds its own wait with `within=`, and
+a limit of the test's TCP that ends a connection sooner than a real client would only make a
+second deadline. Also rejected: sending the SYN again only while the device has no address, as
+the harness sees from DHCP, because the harness cannot see when the device's stack takes the
+address. A real client does not know either.
+
+Sending the SYN again covers the time before the device has its address, not the time between
+the address and the server's `listen()`: a SYN then draws a RST, as a real client's does. The
+firmware of #289 started its `WebServer` about 0.2 s after its address, so its SYN sent again 1 s
+after the lease most likely came in that gap. For such firmware `network.accepting(port)` is a
+condition for the port accepting a connection: it connects now, and again 1 s after each refusal,
+on the board's clock, up to 30 connections, and returns the first one the device accepts, open,
+for the test to use or close. `arduino_shell` with `listen_delay_ms` reproduces the case.
+
+**Rejected:** connecting again after a refusal in every connection, `connect` and the HTTP
+client's included, because a refusal is an answer the test may be waiting for (`refused()`), and a
+real client does not connect again either. Also rejected: waiting for the firmware's console line
+as the only way, because it ties the test to a line the firmware may not print, and the test
+then waits on what the firmware says rather than on what its server does; and connecting again
+when the test polls the condition, because polling must not act, so the retries are timers of
+the network, due whether a wait polls or not. The limit of 30 connections, one a second, keeps a
+condition the test stopped waiting on from connecting for the rest of the run; the connection
+such a condition gets is left open, documented, rather than closed by another timer.
 
 ## A bridge from the simulated network to a real service is postponed
 
@@ -2730,7 +2785,8 @@ test sees a step late, against the rule that a record is there when `board.now` 
 Status: postponed (#130)
 
 The path loses nothing. Losing downlink datagrams needs retransmission timers in
-`esp32tl/net/ip.py`, whose TCP never retransmits because the link never loses a byte, and losing
+`esp32tl/net/ip.py`, whose TCP sends nothing again but the test's SYN (#289) because the link never
+loses a byte, and losing
 uplink only would be half a model: the firmware's retransmission would be exercised and the network's
 never. It waits for a test that needs it.
 

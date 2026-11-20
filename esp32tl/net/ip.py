@@ -5,9 +5,13 @@ destination port, a UDP datagram to the one on its port, whatever the address: t
 the names and addresses it was built with, and the test decides what answers there. The test
 opens connections to the device too (`Network.connect`). The link to the device never loses or
 reorders bytes, so TCP needs no retransmission, no congestion control and no timers: a segment is
-acknowledged in the turn it arrives in, and a zero window waits for the device's update. While
-the link is down, the segments of a connection its end left open go nowhere, and the device's
-stack, which lost the connection too, never asks for them again. A port the test blocked
+acknowledged in the turn it arrives in, and a zero window waits for the device's update. The one
+timer is the SYN of a connection the test opened: the device's stack drops a SYN to an address it
+has not taken yet, silently, so the SYN goes again on the board's clock, 1 s after the first and
+each time twice as long after the last (RFC 6298's initial RTO doubling), 6 times as Linux's
+`tcp_syn_retries` does, and the connection times out 64 s after the last, 127 s after the first.
+While the link is down, the segments of a connection its end left open go nowhere, and the
+device's stack, which lost the connection too, never asks for them again. A port the test blocked
 (`Network.block`) drops the device's segments, or refuses its SYNs, and what a connection on a
 dropped port has to send waits for `unblock` rather than be lost.
 """
@@ -23,6 +27,8 @@ WINDOW = 8192
 ISN = 0x10000  # our initial sequence number: fixed, so runs repeat
 MSS = 1400  # what we offer, and the most we take from the device's offer
 EPHEMERAL = 49152  # the first port of the connections the test opens (RFC 6335)
+SYN_RTO_NS = 1_000_000_000  # how long the first SYN waits for an answer (RFC 6298, 2.1)
+SYN_RETRIES = 6  # how many times a SYN goes again before the connection times out (Linux's)
 
 
 def checksum(data: bytes) -> int:
@@ -100,10 +106,13 @@ class DatagramService(Protocol):
 
 
 class TcpClient(Protocol):
-    """The test's side of a connection it opened: told when the device accepts it, each piece of
-    what the test wrote as it goes onto the link (`on_sent`), each in-order byte the device sends,
-    the device's FIN (`on_close`), and the connection's end, once, with its kind, `"closed"`,
-    `"refused"`, `"reset"` or `"lost"`, and for `"lost"` why, as `the link went down`."""
+    """The test's side of a connection it opened: told of each SYN as it goes onto the link
+    (`on_syn`), when the device accepts it, each piece of what the test wrote as it goes onto the
+    link (`on_sent`), each in-order byte the device sends, the device's FIN (`on_close`), and the
+    connection's end, once, with its kind, `"closed"`, `"refused"`, `"reset"`, `"lost"` or
+    `"timed out"`, and for `"lost"` why, as `the link went down`."""
+
+    def on_syn(self) -> None: ...
 
     def on_established(self) -> None: ...
 
@@ -130,6 +139,7 @@ _ENDS = {
     "unanswered": "lost before the device answered its SYN-ACK",
     "renewed": "reset: the device opened a new connection from its port",
     "gapped": "lost with what it had on its way when the link went",
+    "timed out": f"timed out: no answer to {1 + SYN_RETRIES} SYNs",
 }
 
 
@@ -149,6 +159,9 @@ class _Flow:
     established: bool = False
     notified: bool = False
     client: TcpClient | None = None  # set on a connection the test opened
+    # How many SYNs a client's flow has sent, and when the last went: its client keeps them all.
+    syns: int = 0
+    syn_at: int = 0
     # The device's stack that held it is gone, by a chip reset or the link's end: no FIN to it
     # would ever be answered.
     orphaned: bool = False
@@ -166,8 +179,10 @@ class Network:
         *,
         mtu: Callable[[], int] = lambda: 1500,
         carries: Callable[[], bool] = lambda: True,
+        now: Callable[[], int] = lambda: 0,
     ) -> None:
         self._send_ip = send_ip
+        self._now = now
         self._mtu = mtu
         # Whether the link carries IP to the device now: while it does not, what a flow that is
         # not orphaned has to send waits for it, since nothing would send it again.
@@ -281,8 +296,47 @@ class Network:
         flow.client = client
         self._flows[flow.key] = flow
         self._log(f"net: TCP {ours}:{local} → {device}:{port} connecting")
-        self._segment(flow, SYN, options=struct.pack(">BBH", 2, 4, MSS))
+        self._syn(flow)
         return local, lambda out: self._write(flow, out), lambda: self._close(flow)
+
+    def _syn(self, flow: _Flow) -> None:
+        """Send a client's SYN, the first or again: the same segment each time."""
+        assert flow.client is not None
+        flow.snd_nxt = ISN
+        flow.syns += 1
+        flow.syn_at = self._now()
+        self._segment(flow, SYN, options=struct.pack(">BBH", 2, 4, MSS))
+        flow.client.on_syn()
+
+    @staticmethod
+    def _syn_due(flow: _Flow) -> int:
+        """When a client's SYN goes again, or after the last, when its connection times out: one
+        RTO after the last SYN, the RTO doubling from `SYN_RTO_NS` with each one sent."""
+        return flow.syn_at + (SYN_RTO_NS << (flow.syns - 1))
+
+    def _connecting(self) -> list[_Flow]:
+        return [f for f in self._flows.values() if f.client is not None and not f.established]
+
+    def poll(self) -> None:
+        """Send again each SYN of the test's whose RTO has run out by now, and time out the
+        connection whose last one has."""
+        now = self._now()
+        for flow in self._connecting():
+            if self._syn_due(flow) > now:
+                continue
+            device, dport, ours, oport = flow.key
+            if flow.syns > SYN_RETRIES:
+                self._drop(flow, "timed out")
+                continue
+            self._log(
+                f"net: TCP {ours}:{oport} → {device}:{dport} SYN again,"
+                f" {flow.syns + 1} of {1 + SYN_RETRIES}"
+            )
+            self._syn(flow)
+
+    def quiet_until(self) -> int | None:
+        """When the next SYN of the test's goes again, or its connection times out."""
+        return min((self._syn_due(flow) for flow in self._connecting()), default=None)
 
     def _tcp(self, src: str, dst: str, segment: bytes) -> None:
         sport, dport, seq, ack, offset, flags, window = struct.unpack(">HHIIBBH", segment[:16])
@@ -466,8 +520,8 @@ class Network:
 
     def _drop(self, flow: _Flow, kind: str, why: str | None = None) -> None:
         """End `flow`: `kind` is `"closed"`, `"refused"`, `"reset"` or `"lost"`, and for a client's
-        lost flow `why` says why, the link going down unless given; `"abandoned"` and
-        `"unanswered"` are for the device's flows only."""
+        lost flow `why` says why, the link going down unless given; `"timed out"` is for the
+        test's flows only, and `"abandoned"` and `"unanswered"` for the device's only."""
         if self._current(flow):
             del self._flows[flow.key]
         device, dport, ours, oport = flow.key

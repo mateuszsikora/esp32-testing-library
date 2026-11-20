@@ -156,7 +156,9 @@ Conditions run in the test thread, polled at intervals of up to 10 ms plus host 
 Console lines and tap batches are stamped after the reader polls the port, at a nominal 10 ms
 interval. Times include polling, USB, driver and host scheduling delays; they are neither exact
 wire-arrival times nor firmware-write times. A lost port raises `RunEnded` while waiting; a
-condition that times out raises `NeverHappened`, including the actual start/end time interval.
+condition that times out raises `NeverHappened`, including the actual start/end time interval,
+and before it what a [described condition](pytest-plugin-user.md#described-conditions)'s
+`waiting=` says, when it says anything.
 
 `console.tap(path)` before power-on captures console output as a version 1 recording, written
 at teardown even after a failed assertion: `interface: console`, `source: real`, `clock: wall`,

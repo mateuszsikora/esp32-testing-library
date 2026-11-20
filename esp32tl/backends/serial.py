@@ -36,6 +36,7 @@ from esp32tl.flash import FlashSnapshot, Namespaces
 from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
 from esp32tl.interfaces.bluetooth import Bluetooth
 from esp32tl.interfaces.board import Board, Boot
+from esp32tl.interfaces.condition import waiting
 from esp32tl.interfaces.console import ConsoleLines
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
@@ -434,10 +435,14 @@ class Serial(Board):
                 raise RunEnded(self._error or "serial: the run is closed")
             remaining = deadline - now
             if remaining <= 0:
-                self.log.test(now, f"{description}: did not happen within {seconds(ns)}")
+                why = waiting(condition)
+                because = f": {why}" if why is not None else ""
+                self.log.test(now, f"{description}: did not happen within {seconds(ns)}{because}")
                 raise NeverHappened(
-                    f"{description} did not happen within {seconds(ns)}: waited from"
-                    f" {seconds(start)} to {seconds(now)} of wall time"
+                    f"{description} did not happen within {seconds(ns)}: "
+                    + (f"{why}; " if why is not None else "")
+                    + f"waited from {seconds(start)} to {seconds(now)} of wall time",
+                    why,
                 )
             time.sleep(min(POLL_SECONDS, remaining / 1e9))
 

@@ -108,8 +108,9 @@ the same indirect parametrisation. See [the user contract](serial-backend-user.m
    `the run ended while the test waited` on `RunEnded`, matching esp32sim. `wait_until` uses
    `board.wait_until: within` in duration validation errors. `wait_on_clock` logs
    `waits up to {within} for {description}` and the result, `{description}: happened`,
-   `{description}: did not happen within {within}`, or `{description}: the run ended first`.
-   The timeout reports the actual monotonic start/end interval.
+   `{description}: did not happen within {within}`, with `: {why}` when the condition's
+   `waiting` returns `why`, or `{description}: the run ended first`. The timeout reports the
+   actual monotonic start/end interval, after `{why}; ` when there is one.
 9. Close sets the stop event, waits at most `READER_STOP_SECONDS` (1 s) for its reader, drains the
    queue, fixes the final elapsed time and writes the tap. A stuck reader is a `BackendError`;
    its daemon thread discards any bytes returned after the stop event. Redirection restarts only
@@ -219,7 +220,7 @@ from pytest-embedded propagate with their original messages.
 | `the board is off; call board.power_on() first` | `BoardOff` when waiting/reading time before successful power-on |
 | `the board is on already: power it on once` | `BoardOff` on repeated power-on or power-on after close |
 | `serial: power_on cannot set the real board's UTC; omit utc` | `ValueError` for supplied UTC |
-| `{description} did not happen within {within}: waited from {start} to {end} of wall time` | `NeverHappened`; times are formatted seconds, e.g. `0.01 s` |
+| `{description} did not happen within {within}: waited from {start} to {end} of wall time`, or `{description} did not happen within {within}: {why}; waited from …` when the condition's `waiting` returns `why` | `NeverHappened`; times are formatted seconds, e.g. `0.01 s` |
 | `serial: console connection lost: {error}` | `RunEnded` while waiting, or a teardown failure if not already reported |
 | `serial: the run is closed` | `RunEnded` when waiting on a closed capture without a connection error |
 | `serial: console reader did not stop within 1 s` | Bounded join expired; teardown failure, no redirect restart |

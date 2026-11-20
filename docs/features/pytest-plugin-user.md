@@ -385,6 +385,17 @@ end = board.wait_until(trip_end(broker, "car-1"), within=minutes(3))
   instead of passing on the truth of a function. The optional `service=` names it there instead
   of the description: `condition(find, "the next MQTT message", service="MQTT")` raises
   `TypeError: call the MQTT condition with (), or pass it to board.wait_until`.
+- The optional `waiting=`, a function of no arguments, says why the event has not happened yet.
+  It is called once, when a wait on the condition times out, on both backends, in the test's
+  thread, as `find` is. On esp32sim the board is held while it runs; the serial backend's board
+  keeps running, so what it reads may change meanwhile. What it returns, unless `None`, goes after the
+  window's length, followed by `; `, and is the exception's `why`. With
+  `waiting=lambda: None if broker.messages else "the broker has no message"`, the wait above times
+  out as `NeverHappened: a trip/end from car-1 did not happen within 180 s: the broker has no
+  message; waited from …`, and the run report has `: the broker has no message` after `did not
+  happen within 180 s`. The TCP and HTTP
+  conditions of the network use it to name the SYNs the device has not answered
+  ([network](network-user.md#open-a-tcp-connection-to-the-device)).
 - It is a frozen `esp32tl.Condition`, generic in what `find` returns, for annotating helpers.
   The conditions of the network's services, of TLS, of `lines.output(...).is_on`, `.is_off`
   and `.next_change()`, `lines.next_change()`, and `board.next_boot()` are the same type.

@@ -18,4 +18,9 @@ class RunEnded(Exception):
 
 class NeverHappened(AssertionError):
     """What the test waited for did not happen within the board's time it gave: a `wait_until`
-    condition that never held, a console pattern that never appeared."""
+    condition that never held, a console pattern that never appeared. `why` is what the
+    condition's `waiting` said when the wait gave up, in the message too, or `None`."""
+
+    def __init__(self, message: str, why: str | None = None) -> None:
+        super().__init__(message)
+        self.why = why

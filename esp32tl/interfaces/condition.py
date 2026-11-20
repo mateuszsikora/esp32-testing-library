@@ -1,6 +1,7 @@
 """A described condition for `board.wait_until`: called, it returns what it finds or `None`; its
-`repr` is its description, which a wait names in `NeverHappened` and in the run report; and it
-refuses to be read as a boolean, so `assert broker.next_message(topic)` cannot pass unasked."""
+`repr` is its description, which a wait names in `NeverHappened` and in the run report, with what
+it still waits for when it says (`waiting`); and it refuses to be read as a boolean, so
+`assert broker.next_message(topic)` cannot pass unasked."""
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -13,11 +14,14 @@ T = TypeVar("T")
 class Condition(Generic[T]):
     """`find`, called with no arguments, is the condition; `description` names the event, as
     `a trip/end from the device`; `service`, when given, names the condition in the `TypeError`
-    of `bool()` in place of the description, as `MQTT`."""
+    of `bool()` in place of the description, as `MQTT`; `waiting`, when given, is called when a
+    wait on the condition times out, and returns why the event has not happened, in a clause, as
+    `the SYN at 0.957 s got no answer (no SYN-ACK, no RST)`, or `None` for nothing to add."""
 
     find: Callable[[], T]
     description: str
     service: str | None = None
+    waiting: Callable[[], str | None] | None = None
 
     def __post_init__(self) -> None:
         if not callable(self.find):
@@ -28,6 +32,10 @@ class Condition(Generic[T]):
             )
         if self.service is not None and (not isinstance(self.service, str) or not self.service):
             raise TypeError(f"condition: service is {self.service!r}, not text naming it")
+        if self.waiting is not None and not callable(self.waiting):
+            raise TypeError(
+                f"condition: waiting is {self.waiting!r}, not a function of no arguments"
+            )
 
     def __call__(self) -> T:
         return self.find()
@@ -44,14 +52,26 @@ class Condition(Generic[T]):
         raise TypeError(f"call {named} with (), or pass it to board.wait_until")
 
 
+def waiting(condition: object) -> str | None:
+    """Why `condition`'s event has not happened, from its `waiting`, for a wait that timed out;
+    `None` for a condition that does not say, or any other callable."""
+    why = condition.waiting if isinstance(condition, Condition) else None
+    return why() if why is not None else None
+
+
 def condition(
-    find: Callable[[], T], description: str, *, service: str | None = None
+    find: Callable[[], T],
+    description: str,
+    *,
+    service: str | None = None,
+    waiting: Callable[[], str | None] | None = None,
 ) -> Condition[T]:
     """A condition for `board.wait_until` that calls `find` and is named by `description`:
     `board.wait_until(condition(find, "a trip/end from the device"), within=minutes(3))` times out
-    as `a trip/end from the device did not happen within 180 s`, and `bool()` of it raises
-    `TypeError`, before and after a match."""
-    return Condition(find, description, service)
+    as `a trip/end from the device did not happen within 180 s`, followed by `: ` and what
+    `waiting` returns, when given and not `None`, and `bool()` of it raises `TypeError`, before
+    and after a match."""
+    return Condition(find, description, service, waiting)
 
 
 class FirstFrom(Generic[T]):
