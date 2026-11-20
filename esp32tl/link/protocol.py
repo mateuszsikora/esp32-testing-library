@@ -199,6 +199,16 @@ class FlashDumpAck:
 
 
 @dataclass(frozen=True)
+class FlashWriteAck:
+    """The flash holds the file of the harness's `flash_write` from the turn at `t` on, unless
+    `error` says why it does not (5.25). Not an event: the turn it answers is still going on."""
+
+    TYPE: ClassVar[str] = "flash_write_ack"
+    t: int
+    error: str | None = None
+
+
+@dataclass(frozen=True)
 class Sync:
     """The end of the runner's turn at the block point `t` (5.6)."""
 
@@ -410,6 +420,16 @@ class FlashDump:
 
 
 @dataclass(frozen=True)
+class FlashWrite:
+    """The bytes of the file `path` into the flash at `offset`, now, in this turn, with the board's
+    supply off (5.25): the runner answers with `flash_write_ack`, and the turn goes on."""
+
+    TYPE: ClassVar[str] = "flash_write"
+    offset: int
+    path: str
+
+
+@dataclass(frozen=True)
 class Wait:
     """The end of the peer's turn (5.13); `None` is no bound."""
 
@@ -428,7 +448,17 @@ class Stop:
 
 Event = WifiLink | UartTx | UartCfg | GpioOut | Reset | EthTx | HciTx
 RunnerMessage = (
-    RunnerHello | Event | Sync | Console | Warn | SdCardAck | SdOp | FlashDumpAck | Uptime | Stats
+    RunnerHello
+    | Event
+    | Sync
+    | Console
+    | Warn
+    | SdCardAck
+    | SdOp
+    | FlashDumpAck
+    | FlashWriteAck
+    | Uptime
+    | Stats
 )
 Input = (
     UartRx
@@ -445,7 +475,7 @@ Input = (
     | SdFault
     | SdClear
 )
-HarnessMessage = HarnessHello | Input | FlashDump | Wait | Stop
+HarnessMessage = HarnessHello | Input | FlashDump | FlashWrite | Wait | Stop
 Message = RunnerMessage | HarnessMessage
 
 # The fields whose JSON name is not the attribute's.
@@ -815,6 +845,7 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
             f.integer("t"), f.opt_string("image"), f.opt_string("error")
         ),
         "flash_dump_ack": lambda f: FlashDumpAck(f.integer("t"), f.opt_string("error")),
+        "flash_write_ack": lambda f: FlashWriteAck(f.integer("t"), f.opt_string("error")),
         "uptime": _uptime,
         "stats": _stats,
     },
@@ -839,6 +870,7 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
             f.integer("ack"), f.opt_integer("quiet_until"), f.opt_integer("latency")
         ),
         "flash_dump": lambda f: FlashDump(),
+        "flash_write": lambda f: FlashWrite(f.integer("offset"), f.string("path")),
         "stop": lambda f: Stop(),
     },
 }

@@ -20,6 +20,8 @@ from esp32tl.link.protocol import (
     EthTx,
     FlashDump,
     FlashDumpAck,
+    FlashWrite,
+    FlashWriteAck,
     GpioIn,
     GpioOut,
     HarnessHello,
@@ -405,7 +407,7 @@ def test_arrivals_come_before_the_hold_and_the_poll_after_it() -> None:
             order.append(f"hold {now}")
             return now + 100
 
-        def dumped(self, ack: FlashDumpAck) -> int | None:
+        def answered(self, ack: FlashDumpAck | FlashWriteAck) -> int | None:
             return None
 
     link = BoardLink("esp32-devkitc", [Ordered()], hold=Hold())
@@ -760,18 +762,20 @@ def test_pins_that_are_not_gpio_numbers_are_refused() -> None:
 class Holder:
     """A `Hold` that returns its `bounds` one per turn, after `entered` is set for the turn."""
 
-    def __init__(self, *bounds: int | RunTo | FlashDump | None) -> None:
+    def __init__(self, *bounds: int | RunTo | FlashDump | FlashWrite | None) -> None:
         self.bounds = list(bounds)
         self.turns: list[int] = []
-        self.acks: list[FlashDumpAck] = []
+        self.acks: list[FlashDumpAck | FlashWriteAck] = []
         self.go = threading.Event()
 
-    def turn(self, now: int) -> int | RunTo | FlashDump | None:
+    def turn(self, now: int) -> int | RunTo | FlashDump | FlashWrite | None:
         self.turns.append(now)
         assert self.go.wait(5)
         return self.bounds.pop(0)
 
-    def dumped(self, ack: FlashDumpAck) -> int | RunTo | FlashDump | None:
+    def answered(
+        self, ack: FlashDumpAck | FlashWriteAck
+    ) -> int | RunTo | FlashDump | FlashWrite | None:
         self.acks.append(ack)
         return self.bounds.pop(0)
 
@@ -840,7 +844,7 @@ def test_a_hold_that_raises_fails_the_link_naming_the_clock() -> None:
         def turn(self, now: int) -> int | None:
             raise RuntimeError("broken")
 
-        def dumped(self, ack: FlashDumpAck) -> int | None:
+        def answered(self, ack: FlashDumpAck | FlashWriteAck) -> int | None:
             raise RuntimeError("broken")
 
     link = BoardLink("esp32-devkitc", hold=Broken())
@@ -886,19 +890,49 @@ def test_an_answer_the_harness_did_not_ask_for_fails_the_link() -> None:
     assert link.error == "the runner sent flash_dump_ack, and the harness asked for none"
 
 
+def test_a_flash_write_goes_out_after_the_board_s_switches_of_the_turn() -> None:
+    gnss = Peer(schedule=[(5 * MS, b"$GPGGA\r\n")])
+    write = FlashWrite(0x9000, "/tmp/nvs-9000.bin")
+    hold = Holder(write, FlashDump(), 100 * MS)
+    hold.go.set()
+    link = BoardLink("esp32-devkitc", [gnss], hold=hold)
+    link.receive(HELLO)
+    # the test switched the supply off, in the turn it is held at, before it wrote the flash
+    link.board_input(Power(5 * MS, False))
+    assert link.receive(Sync(5 * MS)) == [Power(5 * MS, False), write]
+    assert link.receive(FlashWriteAck(5 * MS)) == [FlashDump()]
+    # the switch went out once: not again at the end of the turn
+    assert link.receive(FlashDumpAck(5 * MS)) == [
+        UartRx(5 * MS, 5, 9600, b"$GPGGA\r\n"),
+        Wait(0, 100 * MS, None),
+    ]
+    assert hold.acks == [FlashWriteAck(5 * MS), FlashDumpAck(5 * MS)]
+    assert link.error is None
+
+
+def test_an_answer_of_the_other_kind_fails_the_link() -> None:
+    hold = Holder(FlashDump())
+    hold.go.set()
+    link = BoardLink("esp32-devkitc", hold=hold)
+    link.receive(HELLO)
+    assert link.receive(Sync(0)) == [FlashDump()]
+    assert link.receive(FlashWriteAck(0)) == [Stop()]
+    assert link.error == "the runner sent flash_write_ack, and the harness asked for none"
+
+
 def test_a_hold_that_raises_on_the_answer_ends_the_turn_it_is_in() -> None:
     class Broken:
         def turn(self, now: int) -> FlashDump:
             return FlashDump()
 
-        def dumped(self, ack: FlashDumpAck) -> int | None:
+        def answered(self, ack: FlashDumpAck | FlashWriteAck) -> int | None:
             raise RuntimeError("broken")
 
     link = BoardLink("esp32-devkitc", hold=Broken())
     link.receive(HELLO)
     assert link.receive(Sync(0)) == [FlashDump()]
     assert link.receive(FlashDumpAck(0)) == [Stop()]
-    assert link.error == "the test's clock.dumped raised RuntimeError: broken"
+    assert link.error == "the test's clock.answered raised RuntimeError: broken"
 
 
 def test_console_messages_reach_the_console_s_reader() -> None:

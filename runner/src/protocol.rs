@@ -177,6 +177,12 @@ pub enum Incoming {
     },
     /// The whole flash into the file of `--flash-out`, now, in this turn (5.21).
     FlashDump,
+    /// The bytes of the file `path` into the flash at `offset`, now, in this turn, with the
+    /// board's supply off (5.25).
+    FlashWrite {
+        offset: u64,
+        path: String,
+    },
     Wait {
         ack: u64,
         quiet_until: Option<u64>,
@@ -284,6 +290,10 @@ pub fn parse(line: &str) -> Result<Incoming, String> {
             image: field("image").optional_string()?,
         },
         "flash_dump" => Incoming::FlashDump,
+        "flash_write" => Incoming::FlashWrite {
+            offset: field("offset").time()?,
+            path: field("path").string()?,
+        },
         "stop" => Incoming::Stop,
         "adc" => Incoming::NotYet("adc"),
         _ => return Err(format!("unknown type {kind:?}")),
@@ -570,6 +580,13 @@ pub fn sd_card_ack(t: u64, image: Option<&str>, error: Option<&str>) -> String {
 pub fn flash_dump_ack(t: u64, error: Option<&str>) -> String {
     let error = error.map_or("null".into(), |e| format!(r#""{}""#, escape(e)));
     format!(r#"{{"type":"flash_dump_ack","t":{t},"error":{error}}}"#)
+}
+
+/// The flash holds the file of the peer's `flash_write` in the turn at `t`, unless `error` says
+/// why it does not (5.25). Not an event: the turn it answers is still going on.
+pub fn flash_write_ack(t: u64, error: Option<&str>) -> String {
+    let error = error.map_or("null".into(), |e| format!(r#""{}""#, escape(e)));
+    format!(r#"{{"type":"flash_write_ack","t":{t},"error":{error}}}"#)
 }
 
 /// Where the boot's uptime counter, the one `esp_timer_get_time()` reads, counted zero: no

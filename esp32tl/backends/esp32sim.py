@@ -40,7 +40,9 @@ also while it is off; `boots` are the chip's boots, from the link's `reset` mess
 
 `flash()` reads the runner's flash through a file, `--flash-out`, beside the link's socket: in a
 held turn the runner writes it on the link's `flash_dump` and the board's time does not move, and
-after the run the file is what the runner wrote as the run ended (protocol 5.21).
+after the run the file is what the runner wrote as the run ended (protocol 5.21). `nvs()` after a
+`power_off()` has the runner write an NVS image into its flash in a held turn, with the supply off
+(`flash_write`, protocol 5.25), for the next boot to read.
 
 What the test does on the board, what the firmware prints and the bytes on every route go into a
 `RunLog` (`esp32tl.report`), which the report of a test that failed shows after the link's.
@@ -884,10 +886,22 @@ class Esp32Sim(Board):
                 f" at {self.app.partition_table:#x}: {error}"
             ) from error
 
-    def nvs(self, namespaces: Namespaces, partition: str = "nvs") -> None:
-        """Replace a named NVS partition with the test's values before power-on."""
+    def nvs(self, namespaces: Namespaces, partition: str = "nvs", *, merge: bool = False) -> None:
+        """Write the test's keys into a named NVS partition, before the first power-on or while
+        the board is off after `power_off()`. Without `merge` the partition holds the test's keys
+        and nothing else. With it, the test's keys go over what the partition holds now: the
+        build's contents, and the test's earlier `nvs`, before the first power-on; the flash as
+        the firmware left it after a power-off. Every namespace and key the test does not name
+        keeps its value; the partition is written anew, so the firmware's layout of its items is
+        not kept."""
+        call = f"board.nvs(partition={partition!r}{', merge=True' if merge else ''})"
+        if self.powered:
+            raise BoardOff(
+                "board.nvs: the board is on: call board.power_off() first, and write the flash"
+                " while it is off"
+            )
         if self.started:
-            raise BackendError("board.nvs: write the flash before board.power_on()")
+            self._hold.check(call)
         found = self._partition_table("board.nvs")
         if partition not in found:
             raise BackendError(flash.no_partition(partition, found))
@@ -896,12 +910,61 @@ class Esp32Sim(Board):
             raise BackendError(
                 f"board.nvs: partition {partition!r} must be unencrypted, writable NVS"
             )
+        if merge:
+            current = self._partition_now(entry)
+            merged = {name: dict(keys) for name, keys in flash.nvs_values(current).items()}
+            for name, keys in namespaces.items():
+                merged.setdefault(name, {}).update(keys)
+            namespaces = merged
         image = flash.nvs_image(namespaces, entry.size)
-        # The offset is a safe filename even when a partition's label contains path separators.
-        path = Path(self.dut.logfile).parent / f"nvs-{entry.offset:x}.bin"
+        # The offset is a safe filename even when a partition's label contains path separators. A
+        # write between boots gets a file of its own, by the board's time and, for a second one in
+        # the same instant, a count, so that the image the runner started with stays what its
+        # --flash-at names, and each write's image stays.
+        run = Path(self.dut.logfile).parent
+        path = run / f"nvs-{entry.offset:x}.bin"
+        if self.started:
+            stem = f"nvs-{entry.offset:x}-t{self._hold.now}"
+            path, count = run / f"{stem}.bin", 1
+            while path.exists():
+                count += 1
+                path = run / f"{stem}-{count}.bin"
         path.write_bytes(image)
-        self._nvs[partition] = (entry.offset, path)
-        self.log.test(0, f"board.nvs(partition={partition!r})")
+        if not self.started:
+            self._nvs[partition] = (entry.offset, path)
+            self.log.test(0, call)
+            return
+        ack = self._hold.write_flash(entry.offset, str(path))
+        if ack is None:
+            self._hold.check(call)
+        elif ack.error is not None:
+            raise BackendError(f"board.nvs: the runner cannot write the flash: {ack.error}")
+        self.log.test(self._hold.now, call)
+
+    def _partition_now(self, entry: Partition) -> bytes:
+        """What the partition `entry` holds now: before the first power-on, what the runner would
+        start with, the build's files and the test's NVS images over them; after it, the
+        runner's flash."""
+        if self.started:
+            contents = self._flash_now("board.nvs", "dump the flash to merge over it")
+            return contents[entry.offset : entry.offset + entry.size]
+        end = entry.offset + entry.size
+        # erased, where nothing is flashed
+        current = bytearray(b"\xff" * entry.size)
+        images = [(f.offset, f.path) for f in self.app.flash_files] + list(self._nvs.values())
+        for offset, image in images:
+            if offset >= end:
+                continue
+            try:
+                data = image.read_bytes()
+            except OSError as error:
+                raise BackendError(f"board.nvs: cannot read {image}: {error.strerror}") from error
+            low, high = max(offset, entry.offset), min(offset + len(data), end)
+            if low < high:
+                current[low - entry.offset : high - entry.offset] = data[
+                    low - offset : high - offset
+                ]
+        return bytes(current)
 
     def flash(self) -> FlashSnapshot:
         """An immutable copy of the whole flash at this instant: at the turn the link is held at,
@@ -915,20 +978,26 @@ class Esp32Sim(Board):
                 " and the test's NVS"
             )
         table = self._partition_table("board.flash")
+        contents = self._flash_now("board.flash")
+        self.log.test(self._hold.now, "board.flash()")
+        return FlashSnapshot(contents, MappingProxyType(table))
+
+    def _flash_now(self, call: str, dump: str = "write the flash") -> bytes:
+        """The runner's whole flash at this instant, as `flash` reads it; `call` names the
+        board's call in the errors, and `dump` what the runner could not do when it refuses."""
         ack = self._hold.dump_flash()
         if ack is not None and ack.error is not None:
-            raise BackendError(f"board.flash: the runner cannot write the flash: {ack.error}")
+            raise BackendError(f"{call}: the runner cannot {dump}: {ack.error}")
         try:
             contents = self._flash_out.read_bytes()
             if ack is not None:
                 self._flash_out.unlink()
         except OSError as error:
             raise BackendError(
-                f"board.flash: the run left no flash to read: {error.strerror}; its output is in"
+                f"{call}: the run left no flash to read: {error.strerror}; its output is in"
                 f" {self.dut.logfile}"
             ) from error
-        self.log.test(self._hold.now, "board.flash()")
-        return FlashSnapshot(contents, MappingProxyType(table))
+        return contents
 
     def set_up(self) -> list[str]:
         """What the test has set up that only a run uses: the sources it gave and the taps it

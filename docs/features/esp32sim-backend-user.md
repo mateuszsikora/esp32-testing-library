@@ -67,16 +67,19 @@ calls them, and the run goes on through them on the same clock
 writes to, NVS and OTA data among them, is the runner's copy of the build's files: a power cycle
 keeps it, and the build's files are never written. The test reads it with
 [`board.flash()`](flash-contents-user.md#read-the-flash-of-a-run), while the board stands still and
-after the run. The card in the slot is the test's image file,
-which keeps what the firmware wrote through every reset and power cycle; with the supply off the
-card loses its power, and the firmware's driver has to mount it again. Each reset goes into the
-run's log as `boot N: REASON, IDF_REASON (reset cause C)`, and into the link's statistics as one
-of its `resets`. REASON is the ROM's name for the cause, and IDF_REASON the name ESP-IDF's
-`esp_reset_reason()` gives the boot, `boot.idf_reason`, from the cause and the hint the runner
-read with it: `ESP_RST_PANIC` rather than `ESP_RST_SW` after a panic, which the ROM reports as
-`esp_restart()`'s `SW_CPU_RESET`. A reset, whatever caused it, and `board.power_off()` end the TCP
-connections the test opened to the device, as `lost`, and leave the device without an address on the simulated network
-until it takes one again ([network](network-user.md#open-a-tcp-connection-to-the-device)).
+after the run, and writes NVS into it with
+[`board.nvs(...)`](flash-contents-user.md#change-nvs-between-two-boots) while the board is off
+between two boots, with `merge=True` keeping what the firmware stored. The card in the slot is the
+test's image file, which keeps what the firmware wrote through every reset and power cycle; with the
+supply off the card loses its power, and the firmware's driver has to mount it again. Each reset
+goes into the run's log as `boot N: REASON, IDF_REASON (reset cause C)`, and into the link's
+statistics as one of its `resets`. REASON is the ROM's name for the cause, and IDF_REASON the name
+ESP-IDF's `esp_reset_reason()` gives the boot, `boot.idf_reason`, from the cause and the hint the
+runner read with it: `ESP_RST_PANIC` rather than `ESP_RST_SW` after a panic, which the ROM reports
+as `esp_restart()`'s `SW_CPU_RESET`. A reset, whatever caused it, and `board.power_off()` end the
+TCP connections the test opened to the device, as `lost`, and leave the device without an address on
+the simulated network until it takes one again
+([network](network-user.md#open-a-tcp-connection-to-the-device)).
 
 A classic ESP32 in deep sleep with a timer wake wakes on its RTC timer, through a
 `DEEPSLEEP_RESET` (5); the other chips do not wake

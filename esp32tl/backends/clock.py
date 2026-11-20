@@ -8,9 +8,9 @@ most `STEP_NS`, and asks the test's condition at every turn, in the test's own t
 link is held. `wait_for_event` lets it go to its deadline at once, with a `latency` that has the
 runner take a turn soon after each event, and asks its condition at those turns only: the wait
 through a deep sleep, in which nothing happens until the chip wakes. `dump_flash` has the link
-ask the runner for the flash in the turn it is held at, on the link's thread, and the turn goes
-on: the board's time does not move. Times here are nanoseconds on the board's clock, from
-power-on.
+ask the runner for the flash in the turn it is held at, on the link's thread, and `write_flash`
+has it write a file into the flash, with the board's supply off; the turn goes on: the board's
+time does not move. Times here are nanoseconds on the board's clock, from power-on.
 """
 
 import threading
@@ -19,7 +19,7 @@ from typing import TypeVar
 
 from esp32tl.interfaces import NeverHappened, RunEnded
 from esp32tl.link.boardlink import RunTo
-from esp32tl.link.protocol import FlashDump, FlashDumpAck
+from esp32tl.link.protocol import FlashDump, FlashDumpAck, FlashWrite, FlashWriteAck
 from esp32tl.units import Duration
 
 # How far the run may go between two looks at a condition, 100 emulated milliseconds: how late
@@ -50,9 +50,10 @@ class HeldClock:
         self._until: int | None = None
         # How soon after an event the test wants the next turn; None for no sooner than _until.
         self._latency: int | None = None
-        # The test asks for the flash in the turn; the runner's answer, once it has come.
-        self._dump_asked = False
-        self._dumped: FlashDumpAck | None = None
+        # What the test asks of the runner's flash in the turn; the runner's answer, once it has
+        # come.
+        self._asked: FlashDump | FlashWrite | None = None
+        self._answer: FlashDumpAck | FlashWriteAck | None = None
         self._stopped = False
         self._ended: str | None = None
         # Where the run ended, when the runner said so in its stats.
@@ -60,11 +61,12 @@ class HeldClock:
 
     # The link's side.
 
-    def turn(self, now: int) -> int | RunTo | FlashDump | None:
+    def turn(self, now: int) -> int | RunTo | FlashDump | FlashWrite | None:
         """Holds the link's turn at the block point `now` until the test waits; then returns
         the latest time of the next turn, as a `RunTo` when the wait asks for a turn soon after
         each event, or `None` once the test is over or the run has ended, for the link to stop
-        the run. Returns `FlashDump` when the test asks for the flash."""
+        the run. Returns `FlashDump` when the test asks for the flash, and `FlashWrite` when it
+        writes into it."""
         with self._cv:
             self._now = now
             self._turns += 1
@@ -72,18 +74,20 @@ class HeldClock:
             self._latency = None
             return self._hold_turn()
 
-    def dumped(self, ack: FlashDumpAck) -> int | RunTo | FlashDump | None:
+    def answered(
+        self, ack: FlashDumpAck | FlashWriteAck
+    ) -> int | RunTo | FlashDump | FlashWrite | None:
         """The runner's answer goes to the test, and the same turn is held on: as `turn`."""
         with self._cv:
-            self._dumped = ack
+            self._answer = ack
             return self._hold_turn()
 
-    def _hold_turn(self) -> int | RunTo | FlashDump | None:
+    def _hold_turn(self) -> int | RunTo | FlashDump | FlashWrite | None:
         self._held = True
         self._cv.notify_all()
         while (
             self._until is None
-            and not self._dump_asked
+            and self._asked is None
             and not self._stopped
             and self._ended is None
         ):
@@ -91,9 +95,9 @@ class HeldClock:
         self._held = False
         if self._stopped or self._ended:
             return None
-        if self._dump_asked:
-            self._dump_asked = False
-            return FlashDump()
+        if self._asked is not None:
+            asked, self._asked = self._asked, None
+            return asked
         if self._latency is not None and self._until is not None:
             return RunTo(self._until, self._latency)
         return self._until
@@ -140,18 +144,33 @@ class HeldClock:
         """Has the runner write the flash in the turn the link is held at, and returns its answer;
         `None` once the run is over, when the runner has written it for the last time. Emulated
         time does not move."""
+        answer = self._ask(FlashDump())
+        assert answer is None or isinstance(answer, FlashDumpAck)
+        return answer
+
+    def write_flash(self, offset: int, path: str) -> FlashWriteAck | None:
+        """Has the runner write the file at `path` into the flash at `offset` in the turn the link
+        is held at, with the board's supply off, and returns its answer; `None` once the run is
+        over, and nothing written. Emulated time does not move."""
+        answer = self._ask(FlashWrite(offset, path))
+        assert answer is None or isinstance(answer, FlashWriteAck)
+        return answer
+
+    def _ask(self, request: FlashDump | FlashWrite) -> FlashDumpAck | FlashWriteAck | None:
+        """`request` to the runner in the turn the link is held at, once it is held at one, and
+        the runner's answer; `None` once the run is over."""
         with self._cv:
             while not self._held and self._ended is None:
                 self._cv.wait()
             if self._ended is not None:
                 return None
-            self._dumped = None
-            self._dump_asked = True
+            self._answer = None
+            self._asked = request
             self._cv.notify_all()
-            while self._dumped is None and self._ended is None:
+            while self._answer is None and self._ended is None:
                 self._cv.wait()
-            self._dump_asked = False
-            return self._dumped
+            self._asked = None
+            return self._answer
 
     def wait(self, duration: int) -> None:
         """Lets the run go for `duration` from now, and returns at the turn at its end."""

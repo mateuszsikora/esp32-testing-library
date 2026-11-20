@@ -2,8 +2,10 @@
 
 ## Data flow
 
-1. `Esp32Sim.nvs(namespaces, partition="nvs")` in `esp32tl/backends/esp32sim.py` refuses a
-   powered board, then reads the partition table where the build flashes it, `Build.table()`
+1. `Esp32Sim.nvs(namespaces, partition="nvs", *, merge=False)` in `esp32tl/backends/esp32sim.py`
+   refuses a powered board with `BoardOff`, and once the runner has started asks
+   `HeldClock.check`, which raises `RunEnded` after the end of the run. It then reads the partition
+   table where the build flashes it, `Build.table()`
    ([builds](builds-technical.md#data-flow)): up to `0xC00` bytes at `Build.partition_table`, from
    the last of the build's flash files that holds that offset. For an ESP-IDF build the offset is
    that of the `partition-table` entry of `flasher_args.json`, and the file `partition-table.bin`;
@@ -11,6 +13,13 @@
    reads the table only when NVS is requested.
 2. `esp32tl.flash.partitions(table)` returns `Partition` records keyed by name. The backend
    resolves the requested name and requires type 1, subtype 2, flags 0.
+   With `merge`, `_partition_now(entry)` gives the partition's bytes now, and `flash.nvs_values`
+   reads them: before the first power-on, `0xff` over the partition's range with every flash file of
+   the build, then every image in `_nvs`, copied over it where it overlaps, as the runner's
+   `--flash-at` order would leave it; after it, the slice of the runner's flash that `_flash_now`
+   reads through a `flash_dump`, as `flash()` does. The test's namespaces are merged into those
+   values key by key (`dict.update` per namespace), and the result goes to step 3 in place of the
+   test's mapping.
 3. `flash.nvs_image(namespaces, size)` opens an NVS writer on `io.BytesIO` through
    `generator.nvs_open(output, size - 4096, generator.Page.VERSION2)`. The size excludes the
    final reserved page, which the writer adds on close. `_name` validates each namespace and
@@ -26,14 +35,30 @@
    Success must produce exactly the partition's size; this check also detects malformed output.
 4. The backend writes the image beside `dut.logfile` as `nvs-<offset in lowercase hex>.bin`,
    for example `nvs-9000.bin`. The offset avoids interpreting the partition label as a path.
-   `_nvs` maps each partition name to `(offset, path)`; replacing a call replaces that mapping
-   only after generation and writing succeed. No file from the build is modified.
+   Before the first power-on, `_nvs` maps each partition name to `(offset, path)`; replacing a call
+   replaces that mapping only after generation and writing succeed. No file from the build is
+   modified.
 5. At power-on `runner_command(extra_flash=tuple(self._nvs.values()))` adds these `--flash-at`
-   arguments after all build files. The runner applies them in order. Teardown keeps the files;
-   the runner does not write emulated flash changes back to them.
+   arguments after all build files. The runner applies them in order. Teardown keeps the
+   files; the runner does not write emulated flash changes back to them.
+6. Once the runner has started, the board off, `HeldClock.write_flash(offset, path)` instead: as
+   `dump_flash` does for a read (below), it waits for a held turn and hands `FlashWrite(offset,
+   path)` to the link's thread through `_hold_turn`. `BoardLink._held` sends the turn's board inputs
+   so far, the `power` of a `power_off()` in the same turn among them, then the `flash_write`, and
+   remembers the turn and the answer it waits for in `_asking`. The runner writes the file into its
+   flash and answers `flash_write_ack` ([protocol
+   5.25](../protocol.md#525-flash_write-and-flash_write_ack-ext-278)), which
+   `BoardLink._flash_answered` gives to `HeldClock.answered`. An `error` in it is a `BackendError`;
+   no answer, the run having ended meanwhile, is `RunEnded` from `check`. The image is
+   `nvs-<offset>-t<now>.bin`, `now` the held clock's in nanoseconds, with `-2`, `-3` and on before
+   `.bin` for a later write in the same instant, so that the file of step 4, which the runner's
+   `--flash-at` names, keeps what the run started with, and each write's image stays. `_nvs` is
+   not touched: the runner read its `--flash-at` files at its start.
 
-`set_up()` includes each NVS partition so the plugin's existing never-powered-on check covers
-NVS too. `RunLog` records `board.nvs(partition='NAME')` at time zero, without keys or values.
+`set_up()` includes each NVS partition of `_nvs` so the plugin's existing never-powered-on check
+covers NVS too. `RunLog` records `board.nvs(partition='NAME')`, with `, merge=True` when given, at
+time zero before the first power-on and at the held clock's `now` after it, without keys or
+values.
 
 Reading goes the other way:
 
@@ -41,24 +66,25 @@ Reading goes the other way:
    beside the link's socket, in `listen()`'s temporary directory, which `_close_link` removes.
 2. `Esp32Sim.flash()` refuses a board not started, reads the build's table through
    `_partition_table`, and calls `HeldClock.dump_flash()` in the test's thread.
-3. `dump_flash` waits for a held turn and sets `_dump_asked`. `_hold_turn`, on the link's thread,
-   wakes and returns `FlashDump()` from `turn`; `BoardLink._held` sends it instead of ending the
-   turn, and remembers the turn in `_dumping`.
-4. The runner writes the file and answers `flash_dump_ack`
-   ([protocol 5.21](../protocol.md#521-flash_dump-and-flash_dump_ack-ext-131)).
-   `BoardLink._flash_dumped` calls `HeldClock.dumped(ack)`, which hands the answer to the test and
-   holds the same turn on, and `self.turns` and `HeldClock._turns` stay as they were. What the
-   interfaces have to send goes out with the turn's `wait`, as without the dump.
-5. `flash()` reads the file into memory and removes it, so that a run whose runner dies later reports
-   no file rather than an older one. Once the run has ended, `dump_flash` returns `None` and asks
-   nothing: the file is what the runner wrote before its `stats`, and it stays for the next read. The
-   waiter thread ends the clock only after the runner has exited. The one file from a turn that can
-   be left then is that of a runner killed between its rename and the harness reading the answer,
-   and it is the flash the run left: no `wait` went out, so the guest has not run since. `link.stats`
-   cannot tell the two apart, because the end of a run with the peer gone writes the file and sends
-   no `stats`.
+3. `dump_flash` waits for a held turn and sets `_asked` to `FlashDump()`. `_hold_turn`, on the
+   link's thread, wakes and returns it from `turn`; `BoardLink._held` sends it instead of ending the
+   turn, and remembers the turn, and that it waits for `flash_dump_ack`, in `_asking`.
+4. The runner writes the file and answers `flash_dump_ack` ([protocol
+   5.21](../protocol.md#521-flash_dump-and-flash_dump_ack-ext-131)). `BoardLink._flash_answered`
+   calls `HeldClock.answered(ack)`, which hands the answer to the test and holds the same turn on,
+   and `self.turns` and `HeldClock._turns` stay as they were. What the interfaces have to send goes
+   out with the turn's `wait`, as without the dump.
+5. `flash()`, through `_flash_now`, reads the file into memory and removes it, so that a run whose
+   runner dies later reports no file rather than an older one. Once the run has ended, `dump_flash`
+   returns `None` and asks nothing: the file is what the runner wrote before its `stats`, and it
+   stays for the next read. The waiter thread ends the clock only after the runner has exited. The
+   one file from a turn that can be left then is that of a runner killed between its rename and the
+   harness reading the answer, and it is the flash the run left: no `wait` went out, so the guest
+   has not run since. `link.stats` cannot tell the two apart, because the end of a run with the peer
+   gone writes the file and sends no `stats`.
 6. `FlashSnapshot(contents, table)` keeps the bytes, as many as the runner's flash has: the
-   `--flash-mb` the backend passed ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)),
+   `--flash-mb` the backend passed
+   ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)),
    4 MiB without it, 16 MiB at most. Its `repr` leaves them out, or a failed assertion would print
    them all. `nvs_values` and `OtaEntry` are computed on each call.
 
@@ -148,7 +174,11 @@ The backend raises `BackendError`:
 
 | Message | Cause |
 |---|---|
-| `board.nvs: write the flash before board.power_on()` | Runner already started |
+| `board.nvs: the board is on: call board.power_off() first, and write the flash while it is off` (`BoardOff`) | The supply is on |
+| `board.nvs: the runner cannot write the flash: ERROR` | `flash_write_ack` with an `error` |
+| `board.nvs: the runner cannot dump the flash to merge over it: ERROR` | With `merge` between boots, `flash_dump_ack` with an `error` |
+| `board.nvs: the run left no flash to read: STRERROR; its output is in LOG` | With `merge` after the run's first power-on, no flash file to read |
+| `board.nvs: cannot read FILE: STRERROR` | With `merge` before power-on, a flash file of the build or an earlier image cannot be read |
 | `board.nvs: BUILD/flasher_args.json names no partition table` | An ESP-IDF build without a `partition-table` entry |
 | `board.nvs: no file of BUILD is flashed at OFFSET` | None of the build's flash files holds the table's offset |
 | `board.nvs: cannot read the partition table of BUILD at OFFSET: ERROR` | File access or partition parsing failed; `OFFSET` as `0x8000` |
@@ -161,6 +191,9 @@ sizes and generator failures. Messages include:
 
 - `NVS name NAME: use 1 to 15 UTF-8 bytes without NUL, CR or LF` (`NAME` is represented with `repr`).
 - `NAMESPACE/KEY: an NVS string cannot contain NUL`.
+- `NAMESPACE/KEY: an NVS string is written as UTF-8, and this one holds bytes that are not (surrogates): give the key a value of its own`:
+  a `str` that does not encode as UTF-8, as `nvs_values` reads a string that is not; the generator
+  appends the NUL to the `str` and encodes it strictly, so it cannot write such bytes.
 - `NVS partition size must be a multiple of 4096 and at least 12288 bytes`.
 - `NVS generator failed: ERROR` with the generator's exception message.
 - `NVS generator wrote ACTUAL bytes, expected SIZE`.

@@ -333,4 +333,8 @@ impl Guest for S31 {
     fn flash(&self) -> Cow<'_, [u8]> {
         Cow::Borrowed(&self.m.bus.flash)
     }
+    fn write_flash(&mut self, offset: usize, data: &[u8]) -> Result<(), String> {
+        super::fits(self.m.bus.flash.len(), offset, data.len())?;
+        esp_soc::SocBus::write_flash(&mut self.m.bus, offset, data)
+    }
 }

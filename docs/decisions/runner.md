@@ -916,7 +916,8 @@ because it goes into no queue: the runner answers it where it reads it, in the t
 Status: decided (#131)
 
 `HeldClock` makes the exchange: `turn` returns `FlashDump` to the link, which sends it and reads the
-answer as any other message, then calls `dumped` to hold the turn on. Only the link's thread touches
+answer as any other message, then calls `dumped` to hold the turn on (`answered` since #278,
+which answers `flash_write` the same way). Only the link's thread touches
 the socket, and `BoardLink.run`'s one loop of reading and answering stays one loop.
 
 **Rejected:** the test's thread writing on the socket while the link is held, because the link would
@@ -1309,3 +1310,26 @@ untested here.
 
 **Not yet:** esp32sim keeping RTC_CNTL's registers through the C3's reset, and the S31's LP_STORE
 registers, as it does on the other chips; the runner's write goes once it does.
+
+## The peer writes the flash in its turn, with the supply off
+
+Status: decided (#278)
+
+`flash_write` writes a file into the runner's flash where the runner reads it, in the turn, as
+`flash_dump` reads it, and only with the board's supply off: off since an earlier turn, or switched
+off by a `power` due by the bus's current cycle, which the runner applies before the guest runs
+again ([protocol 5.25](../protocol.md#525-flash_write-and-flash_write_ack-ext-278)). A
+`board.nvs(..., merge=True)` reads the partition with `flash_dump`, merges, and writes it back in
+the same held turn, and a `board.flash()` right after it sees the new bytes, all without moving
+the board's time. The bytes come through a file, as for `flash_dump` and `--flash-at`.
+
+**Rejected:** a `flash_write` with a `t`, queued as an input and applied when the run reaches it,
+because its answer would come only once the test waits: `board.nvs` could not say in the call that
+the write failed, and a `board.flash()` in the same turn would read the flash before it.
+
+**Rejected:** a write with the supply on, because the guest could read the bytes half written, or
+write over them with what it had cached, and NVS on a running chip has no way to take a change from
+outside; the runner refuses it as a protocol error rather than leave the check to the harness.
+
+The harness's side, the merge and the refusal while the board is on, is
+[board.nvs merges by values, before power-on and between boots](harness.md#boardnvs-merges-by-values-before-power-on-and-between-boots).

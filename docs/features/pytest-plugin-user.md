@@ -181,7 +181,10 @@ pytest-embedded's `--app-path` and `--build-dir` stay refused, also in `addopts`
 the working directory, with no board profile beside them.
 
 On esp32sim, before `board.power_on()`, `board.nvs({"config": {"broker_host": "broker.test"}})`
-can replace a named NVS partition from the build's table. Integer values require a width,
+can replace a named NVS partition from the build's table, and `merge=True` puts the keys over what
+the partition holds instead. After `board.power_off()`, while the board is off, it writes the
+runner's flash for the next boot, with `merge=True` over what the firmware left; while the board is
+on it raises `BoardOff`. Integer values require a width,
 for example `u16(8883)` from `esp32tl`. On serial, `board.nvs(...)` skips without writing
 a replacement partition. See [flash contents](flash-contents-user.md).
 A test that supplies NVS and passes without calling `board.power_on()` fails teardown:
@@ -431,7 +434,11 @@ def test_the_count_survives_a_power_cut(board: Board):
   is the world's time at the first power-on; it has run on since, and the board's clock with it`.
 - Sources and taps are still given before the first `power_on()` only:
   `SourceError: uart.gnss: the board has been on: give an interface its source before
-  board.power_on()`. So is `board.nvs()`. What the firmware wrote to flash, a test reads with
+  board.power_on()`. `board.nvs()` is not: with the board off it writes the NVS the next boot
+  finds, `merge=True` keeping what the firmware stored
+  ([flash contents](flash-contents-user.md#change-nvs-between-two-boots)), and with the board on it
+  raises `BoardOff: board.nvs: the board is on: call board.power_off() first, and write the flash
+  while it is off`. What the firmware wrote to flash, a test reads with
   [`board.flash()`](flash-contents-user.md#read-the-flash-of-a-run), through both.
 - `board.boots` is the chip's boots, in order, as `Boot`s (from `esp32tl`): `number`,
   1 for the first; `at`, the board's time the boot started, a `Duration`; `cause`, the reset cause

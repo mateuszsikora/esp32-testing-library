@@ -174,6 +174,12 @@ pub trait Guest {
     fn flash(&self) -> Cow<'_, [u8]> {
         Cow::Borrowed(&[])
     }
+    /// `data` into the flash at `offset`, for `flash_write` with the supply off; an error, and
+    /// nothing written, when it does not fit in the flash. What the guest reads there from its
+    /// next boot on, and what `flash` gives.
+    fn write_flash(&mut self, offset: usize, data: &[u8]) -> Result<(), String> {
+        crate::chip::fits(0, offset, data.len())
+    }
     // Deep sleep: the defaults are a chip that never sleeps.
 
     /// Whether the chip is in a deep sleep the run loop steps through: its digital domain off,
@@ -1398,6 +1404,23 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     // the write was the runner's time, not the peer's
                     deadline = self.deadline();
                 }
+                Incoming::FlashWrite { offset, path } => {
+                    if !self.off_once_due(&inputs) {
+                        return Err(protocol_error("flash_write with the supply on", &line));
+                    }
+                    let error = std::fs::read(&path)
+                        .map_err(|e| e.to_string())
+                        .and_then(|data| {
+                            let offset = usize::try_from(offset).unwrap_or(usize::MAX);
+                            self.guest.write_flash(offset, &data)
+                        })
+                        .err()
+                        .map(|e| format!("{path}: {e}"));
+                    // as `flash_dump`: the turn goes on, and the bus's clock has not moved
+                    self.send(&protocol::flash_write_ack(b, error.as_deref()))?;
+                    self.flush()?;
+                    deadline = self.deadline();
+                }
                 Incoming::Wait {
                     ack,
                     quiet_until,
@@ -1440,6 +1463,26 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 }
             }
         }
+    }
+
+    /// Whether the board's supply is off at the bus's current cycle once the inputs due by then
+    /// are applied, as the next `apply_inputs` does before the guest runs: those of earlier
+    /// turns, then `turn`'s, the inputs of the turn being read, each in time order.
+    fn off_once_due(&self, turn: &[(u64, Input)]) -> bool {
+        let now = self.guest.cycles();
+        let mut switches: Vec<(u64, usize, bool)> = self
+            .inputs
+            .iter()
+            .map(|(&(t, _), input)| (t, input))
+            .chain(turn.iter().map(|(t, input)| (*t, input)))
+            .enumerate()
+            .filter_map(|(order, (t, input))| match input {
+                Input::Power(on) if cycles(t) <= now => Some((t, order, *on)),
+                _ => None,
+            })
+            .collect();
+        switches.sort_unstable();
+        switches.last().map_or(self.off, |&(_, _, on)| !on)
     }
 
     /// Applies every input now due, in the queue's order: received bytes go on their lines

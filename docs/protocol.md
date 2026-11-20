@@ -21,8 +21,9 @@ real device at the far end of a route (section 12), came with #28. #105 adds `po
 rules, `sd_fault`, `sd_clear` and `sd_op` (#260 the `observe` action), #131 `flash_dump` and
 `flash_dump_ack`, a read of the flash in a turn, #34 `hci_tx` and `hci_rx`, the guest's Bluetooth
 HCI with `--bt`, #245 `uptime`, where each boot's `esp_timer` counts zero on the socket's clock
-(5.24), and #261 the `hint` of `reset`, the register ESP-IDF's `esp_reset_reason()` reads at the
-next boot (5.5). `console_rx` and `stats.console_rx_lost` are the console on the chip's
+(5.24), #261 the `hint` of `reset`, the register ESP-IDF's `esp_reset_reason()` reads at the next
+boot (5.5), and #278 `flash_write` and `flash_write_ack`, a write of the flash in a turn with the
+board's supply off (5.25). `console_rx` and `stats.console_rx_lost` are the console on the chip's
 USB-Serial/JTAG controller, with `--console-port usb`, and since #233 on UART0 of the ESP32-P4 and
 the ESP32-S31, whose UARTs have no pins in esp32sim (5.23).
 
@@ -116,10 +117,10 @@ every end of a run, so the runner's `stats` is written before the socket closes.
 **Turns.** After the handshake the runner and the peer take turns. The runner's turn ends with a
 `sync` whose `t` is the block point `B` it stopped at (rule 1). The peer's turn follows: any number
 of input messages, then exactly one `wait` (or `stop`, section 9), which ends it. A `flash_dump`
-(5.21) may come among them, and the runner answers it within the turn. The runner reads
-the socket only between its `sync` and the peer's `wait`, never while the guest runs, so how fast
-a peer answers in wall time cannot change what the guest sees (section 6 of the plan: two runs of
-one recording give identical output).
+(5.21) or a `flash_write` (5.25) may come among them, and the runner answers it within the turn. The
+runner reads the socket only between its `sync` and the peer's `wait`, never while the guest runs,
+so how fast a peer answers in wall time cannot change what the guest sees (section 6 of the plan:
+two runs of one recording give identical output).
 
 Outside its turn a peer reads and does not write. The runner cannot tell an early message from
 the next turn's, so it would be checked against that turn's `sync`; and a peer blocked on writing
@@ -162,6 +163,7 @@ seen exactly the events up to the block point, however the emulator schedules it
 | runner → harness | `sd_card_ack` *ext* | `t`, `image`, `error` | #106 |
 | runner → harness | `sd_op` *ext* | `t`, `fault`, `op`, `blocks`, `action`, `delay`, `written` | #107 |
 | runner → harness | `flash_dump_ack` *ext* | `t`, `error` | #131 |
+| runner → harness | `flash_write_ack` *ext* | `t`, `error` | #278 |
 | runner → harness | `uptime` *ext* | `t`, `earliest`, `latest` | #245 |
 | runner → harness | `stats` *ext* | `t`, `end`, `resets`, `turns`, `uart`, `unrouted_rx_bytes`, `inputs_on_output`, `inputs_not_applied`, `rx_bytes_not_paced`; `wifi` with `--wifi` or `--wifi-sta`; under `--realtime` also `rt_resyncs` (M5); with `--console-port usb`, or on the ESP32-P4 and the ESP32-S31, also `console_rx_lost` | M1 |
 | harness → runner | `uart_rx` | `t`, `pin`, `baud`, `data` | M1 |
@@ -179,6 +181,7 @@ seen exactly the events up to the block point, however the emulator schedules it
 | harness → runner | `sd_fault` *ext* | `t`, `id`, `op`, `action`, `delay`, `count`, `blocks` | #107 |
 | harness → runner | `sd_clear` *ext* | `t`, `ids` | #107 |
 | harness → runner | `flash_dump` *ext* | none | #131 |
+| harness → runner | `flash_write` *ext* | `offset`, `path` | #278 |
 | harness → runner | `wait` | `ack`, `quiet_until`, `latency` | M1 |
 | harness → runner | `stop` | none | M1 |
 
@@ -208,6 +211,10 @@ the peer gave. The version originally stayed 1
 `flash_dump` and `flash_dump_ack` (5.21) originally left the version at 1: the runner sends the answer only
 to a peer that asked, and without `--flash-out` the message is a protocol error.
 
+`flash_write` and `flash_write_ack` (5.25) leave the version at 2: the runner sends the answer only
+to a peer that asked, and a runner built before them answers `flash_write` with a protocol error,
+`unknown type "flash_write"`; the harness and the runner come from one checkout.
+
 `uptime` (5.24) left the version at 2. The runner sends it on every run, and a harness built before
 it refuses it as `no message type 'uptime' from the runner`; the harness and the runner come from
 one checkout.
@@ -231,7 +238,8 @@ it ignores (section 2). The console's output keeps its message, `console` (5.7)
 **Events** are the runner messages that carry `seq`: `uart_tx`, `uart_cfg`, `gpio_out`, `reset`,
 `eth_tx`, `hci_tx` and `wifi_link`. They are what a peer may answer, so they set the block point (rule 1). `seq`
 is one counter over all seven, starting at 1 and growing by 1. `sync`, `console`, `warn`,
-`sd_card_ack`, `sd_op`, `flash_dump_ack`, `uptime` and `stats` carry no `seq` and ask for nothing.
+`sd_card_ack`, `sd_op`, `flash_dump_ack`, `flash_write_ack`, `uptime` and `stats` carry no `seq`
+and ask for nothing.
 
 ### 5.1 `hello`
 
@@ -807,8 +815,9 @@ chip's. With `--wifi` the station comes back to a fresh access point, as at powe
 must join again; the access point stays off the air if the peer switched it off.
 
 The flash lives in the runner, from the `--flash-at` files read at the start, and is never
-written back to them: what the guest wrote lasts as long as the run. esp32sim carries out each
-program and erase command whole when the guest issues it, so a power cut falls between two
+written back to them: what the guest wrote lasts as long as the run. While the supply is off the
+peer may write into it too (`flash_write`, 5.25), for the next boot to find. esp32sim carries out
+each program and erase command whole when the guest issues it, so a power cut falls between two
 commands, never inside one: torn pages and half-erased sectors are not modelled.
 
 ### 5.18 `chip_reset` *ext* (#105)
@@ -1071,7 +1080,9 @@ for answers that never come.
 `flash_dump` and the end of the run (5.21) write the flash as the guest has it: from the guest's
 `esp_bt_controller_init` on, esp32sim's controller task runs from a trampoline it wrote into the
 flash over the function's code (`install`, `esp-soc/src/ble/vhci.rs:177-200`), and the runner
-writes the code esp32sim keeps for `reboot()` to put back (`Ble::original_flash`) in its place.
+writes the code esp32sim keeps for `reboot()` to put back (`Ble::original_flash`) in its place. A
+`flash_write` (5.25) over the trampoline writes that copy too, so that `reboot()` puts the peer's
+bytes back.
 
 `esp_bt_controller_enable` takes the mode of the config given to `esp_bt_controller_init`, and no
 other, as ESP-IDF does (`esp-soc/src/ble/vhci.rs:261-275`, from mikroverk/esp32sim#347): a
@@ -1198,6 +1209,41 @@ slice, while the boot has no zero yet. After a load while the counter counts, wh
 next two slices comes before the new `uptime`, and until then the boot's zero is the one sent before
 the load: for ESP-IDF's `esp_timer_impl_advance` after a light sleep, which makes up for the time
 asleep, that is off by what the making up got wrong.
+
+### 5.25 `flash_write` and `flash_write_ack` *ext* (#278)
+
+```json
+{"type": "flash_write", "offset": 36864, "path": "/tmp/esp32tl-x1/nvs-9000-t2000000000.bin"}
+{"type": "flash_write_ack", "t": 2000000000, "error": null}
+{"type": "flash_write_ack", "t": 2000000000, "error": "/tmp/esp32tl-x1/nvs-3fc000.bin: 24576 bytes at 0x3fc000 end past the flash, of 4194304 bytes"}
+```
+
+The bytes reach the runner through a file, as `--flash-at` and an SD card's image do (5.21).
+`flash_write`, from the peer in its turn, writes the whole file `path` into the flash at `offset`,
+in bytes from the flash's start, now. Like `flash_dump` it carries no `t` and does not go into the
+input queue: the runner writes while it reads the turn, answers `flash_write_ack`, and goes on
+reading the same turn, up to its `wait` or `stop`. No slice runs, so the bus's clock does not move.
+A peer may send any number of them in a turn, and each answer starts `--peer-timeout` again
+(section 9). It needs no `--flash-out`.
+
+The board's supply must be off: off since an earlier turn, or switched off by a `power` (5.17) the
+runner has read and that is due by the bus's current cycle, as the turn's own `power` with the
+`sync`'s `t` is. The runner applies such inputs before the guest runs again, so the guest never
+runs between the write and the switch. With the supply on, or switched on again by then,
+`flash_write` is a protocol error, `flash_write with the supply on` (section 9): the guest could
+read the bytes half written, or write over them. What the peer writes is what the guest reads from
+its next boot on, and what `flash_dump` writes from now on.
+
+The runner writes through esp32sim's `write_flash`, as it writes the `--flash-at` files at the
+start; on the classic ESP32, the ESP32-S3 and the ESP32-C3, bytes over esp32sim's Bluetooth
+trampoline also go into the copy of the code `reboot()` puts back (5.22). On the ESP32-C6
+esp32sim keeps that copy to itself, so bytes written over the trampoline there go at the next
+power-on.
+
+`flash_write_ack`, from the runner, says the flash holds the file: `t` is the `sync`'s, and `error`,
+`null` or absent unless nothing was written, says why, as the path and the error: the file could
+not be read, or it does not fit in the flash from `offset` on. The run goes on either way. It is not
+an event: it carries no `seq` and sets no block point.
 
 ## 6. Rules
 
@@ -1376,7 +1422,7 @@ the runner at or before its `t` (rule 1).
 | any other `Stop` (`esp-soc/src/soc.rs:9`: `MaxInsns`, `Breakpoint`, `Unimplemented`, `Simcall`, `Ebreak`, `Watch`, `Exceptions`, `CostModel`, `CostModelLifecycle`) | events not yet sent, `stats` with `end: emulator` and the variant, closes | 1 |
 | under `--no-bt`, the guest calls `esp_bt_controller_init`, which the runner's stub answers with `ESP_ERR_NOT_SUPPORTED` | ends the slice the call came in, sends events not yet sent, `stats` with `end: bt_controller`, closes | 5 |
 | usage error, or an image or ROM that cannot be loaded | nothing on the socket (it may not be connected yet) | 2 |
-| protocol error by the peer: malformed or oversized line, unknown `type`, version or chip mismatch, late `t`, wrong `ack`, `quiet_until` not after the `sync`, a `baud` of `0`, a `watch` with a pin the chip does not have, a message the runner does not implement yet, `eth_rx` without either Wi-Fi mode (`eth_rx without --wifi or --wifi-sta`), `wifi_ap` without `--wifi` (`wifi_ap without --wifi`), or `wifi_ap` in station mode (`wifi_ap with --wifi-sta: there is no virtual access point to switch`), an `eth_rx` frame outside 14 to 1518 bytes (`eth_rx: an Ethernet frame of N bytes; one without FCS has 14 to 1518`), `hci_rx` without `--bt` (`hci_rx without --bt`), an `hci_rx` packet outside 1 to 496 bytes (`hci_rx: an H4 packet of N bytes; esp32sim's VHCI carries 1 to 496`), an `on` that is not `true` or `false`, `sd_card` without `--sd-spi` (`sd_card without --sd-spi`), an `image` that is not a string, `sd_fault` or `sd_clear` without `--sd-spi` (`sd_fault without --sd-spi`, `sd_clear without --sd-spi`), an `sd_fault` that 5.20 does not allow (an `op` or `action` it does not list, an erase that fails, a `delay` missing, out of range or with `error`, a `count` out of range, `blocks` that are not `[first, last]`, an `id` in use already), `flash_dump` without `--flash-out` (`flash_dump without --flash-out`) | `stats` with `end: protocol_error`, closes | 3 |
+| protocol error by the peer: malformed or oversized line, unknown `type`, version or chip mismatch, late `t`, wrong `ack`, `quiet_until` not after the `sync`, a `baud` of `0`, a `watch` with a pin the chip does not have, a message the runner does not implement yet, `eth_rx` without either Wi-Fi mode (`eth_rx without --wifi or --wifi-sta`), `wifi_ap` without `--wifi` (`wifi_ap without --wifi`), or `wifi_ap` in station mode (`wifi_ap with --wifi-sta: there is no virtual access point to switch`), an `eth_rx` frame outside 14 to 1518 bytes (`eth_rx: an Ethernet frame of N bytes; one without FCS has 14 to 1518`), `hci_rx` without `--bt` (`hci_rx without --bt`), an `hci_rx` packet outside 1 to 496 bytes (`hci_rx: an H4 packet of N bytes; esp32sim's VHCI carries 1 to 496`), an `on` that is not `true` or `false`, `sd_card` without `--sd-spi` (`sd_card without --sd-spi`), an `image` that is not a string, `sd_fault` or `sd_clear` without `--sd-spi` (`sd_fault without --sd-spi`, `sd_clear without --sd-spi`), an `sd_fault` that 5.20 does not allow (an `op` or `action` it does not list, an erase that fails, a `delay` missing, out of range or with `error`, a `count` out of range, `blocks` that are not `[first, last]`, an `id` in use already), `flash_dump` without `--flash-out` (`flash_dump without --flash-out`), `flash_write` with the board's supply on (`flash_write with the supply on`) | `stats` with `end: protocol_error`, closes | 3 |
 | the peer is gone: the connection failed, the socket closed, a read or write failed, the peer's turn took longer than `--peer-timeout`, or a write made no progress for that long (in or outside a turn) | nothing more | 4 |
 | the process that started the runner is gone: end of file on `--parent-fd` | ends the slice in progress, or a wait for the peer, as for `SIGTERM`; nothing more on the socket | 4 |
 | a second `SIGTERM` or `SIGINT` | ends the process at once | 128 + the signal's number |
@@ -1424,8 +1470,9 @@ write end only after the runner has exited; a `SIGTERM` that arrives after the e
 process at once, as a second signal does.
 
 `--peer-timeout SECONDS` bounds, in wall time, how long the runner waits for the peer's turn to
-end, counted again after each `flash_dump_ack` (5.21), and how long a write may make no progress
-because the peer does not read (default 60; `0` waits for ever). For `tcp:` it also bounds each connection attempt, though not the name lookup
+end, counted again after each `flash_dump_ack` (5.21) and `flash_write_ack` (5.25), and how long a
+write may make no progress because the peer does not read (default 60; `0` waits for ever). For
+`tcp:` it also bounds each connection attempt, though not the name lookup
 before it. A hung peer, say a model in another process, then fails the
 run with code 4 instead of hanging a CI job. It acts only on that error path, so it cannot change a
 run that completes. The `esp32sim` backend passes `0`: its turns last as long as the test body

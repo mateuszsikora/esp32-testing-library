@@ -206,10 +206,10 @@ The [capability table](board-profiles-user.md#saying-what-a-test-needs) decides 
 at the call in the test. UART peripherals and the SD card are physical parts; the host cannot
 replace them. Only the console can be tapped. Merely requesting `modem` on a profile with that UART does not
 select a model or skip the test; requesting its model, replay or tap skips at that call.
-`board.nvs(...)` skips with `serial: NVS contents cannot be configured on this backend`; it does
-not generate or flash a replacement partition. `board.flash()` skips with
-`serial: flash contents cannot be read on this backend`: reading it would put the chip in download
-mode and break the run. Examples:
+`board.nvs(...)` skips with `serial: NVS contents cannot be configured on this backend`, with or
+without `merge=True`; it does not generate or flash a replacement partition. `board.flash()` skips
+with `serial: flash contents cannot be read on this backend`: reading it would put the chip in
+download mode and break the run. Examples:
 
 - `serial: uart.gnss takes no model source on this backend, only real`
 - `serial: uart.gnss takes no replay source on this backend, only real`

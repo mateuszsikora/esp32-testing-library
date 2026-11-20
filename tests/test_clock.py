@@ -23,7 +23,17 @@ from esp32tl.interfaces.modem import Modem as ModemRoute
 from esp32tl.interfaces.wifi import Wifi
 from esp32tl.link.boardlink import BoardLink, Interface, RunTo, Wire
 from esp32tl.link.protocol import Console as ConsoleMessage
-from esp32tl.link.protocol import FlashDump, FlashDumpAck, Reset, RunnerHello, Stop, Sync, Wait
+from esp32tl.link.protocol import (
+    FlashDump,
+    FlashDumpAck,
+    FlashWrite,
+    FlashWriteAck,
+    Reset,
+    RunnerHello,
+    Stop,
+    Sync,
+    Wait,
+)
 from esp32tl.net.ethernet import GATEWAY_MAC
 from esp32tl.net.mqtt import Broker, Publication
 from esp32tl.units import Duration, minutes, ms
@@ -65,9 +75,11 @@ class Run:
         self.end = end
         self.stats = stats
         self.syncs: list[int] = []
-        # The turns the runner answered a flash dump in, and what it answers.
+        # The turns the runner answered a flash dump in, and what it answers; the writes it
+        # answered, with their turn.
         self.dumps: list[int] = []
         self.dump_error: str | None = None
+        self.writes: list[tuple[int, FlashWrite]] = []
         self.stopped = False
         self.runner = threading.Thread(target=self._run, daemon=True)
         self.runner.start()
@@ -78,7 +90,11 @@ class Run:
         while True:
             self.syncs.append(t)
             (reply,) = self.link.receive(Sync(t))
-            while isinstance(reply, FlashDump):
+            while isinstance(reply, FlashDump | FlashWrite):
+                if isinstance(reply, FlashWrite):
+                    self.writes.append((t, reply))
+                    (reply,) = self.link.receive(FlashWriteAck(t, self.dump_error))
+                    continue
                 self.dumps.append(t)
                 (reply,) = self.link.receive(FlashDumpAck(t, self.dump_error))
             if reply == Stop():
@@ -710,7 +726,7 @@ def test_a_flash_dump_the_end_of_the_run_cuts_short_returns() -> None:
 
 def test_the_test_is_over_while_the_runner_holds_a_dump_unanswered() -> None:
     clock = HeldClock()
-    results: list[int | RunTo | FlashDump | None] = []
+    results: list[int | RunTo | FlashDump | FlashWrite | None] = []
     link = threading.Thread(target=lambda: results.append(clock.turn(0)))
     link.start()
     answer: list[FlashDumpAck | None] = [FlashDumpAck(99)]
@@ -721,3 +737,25 @@ def test_the_test_is_over_while_the_runner_holds_a_dump_unanswered() -> None:
     clock.end("the runner exited with code 101")
     asking.join(5)
     assert not asking.is_alive() and answer == [None]
+
+
+def test_a_flash_write_is_answered_in_the_turn_the_link_is_held_at_and_moves_no_time() -> None:
+    run = Run()
+    run.clock.wait(2 * S)
+    syncs = list(run.syncs)
+    assert run.clock.write_flash(0x9000, "/tmp/nvs.bin") == FlashWriteAck(2 * S)
+    assert run.clock.dump_flash() == FlashDumpAck(2 * S)
+    assert run.writes == [(2 * S, FlashWrite(0x9000, "/tmp/nvs.bin"))]
+    assert run.syncs == syncs and run.clock.now == 2 * S
+    run.dump_error = "/tmp/nvs.bin: 24576 bytes at 0x9000 end past the flash, of 16 bytes"
+    assert run.clock.write_flash(0x9000, "/tmp/nvs.bin") == FlashWriteAck(2 * S, run.dump_error)
+    run.clock.wait(1 * S)
+    assert run.clock.now == 3 * S
+
+
+def test_a_flash_write_once_the_run_has_ended_writes_nothing() -> None:
+    run = Run(end=1 * S)
+    with pytest.raises(RunEnded):
+        run.clock.wait(2 * S)
+    assert run.clock.write_flash(0x9000, "/tmp/nvs.bin") is None
+    assert run.writes == []

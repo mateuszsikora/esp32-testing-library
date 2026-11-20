@@ -7,8 +7,8 @@ class SourceError(Exception):
 
 
 class BoardOff(Exception):
-    """The test waited on a board it has not powered on, powered on a board that is on, or
-    switched off or reset one that is off."""
+    """The test waited on a board it has not powered on, powered on a board that is on,
+    switched off or reset one that is off, or wrote the NVS of one that is on."""
 
 
 class RunEnded(Exception):

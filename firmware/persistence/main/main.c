@@ -1,6 +1,7 @@
 /* What a boot finds of the boots before it: a count in NVS, in RTC memory and in RAM that no
  * reset initialises, a line per boot on the SD card when there is one, and the reset reason.
- * On its first boot, as NVS counts them, it restarts itself once with esp_restart. */
+ * On its first boot, as NVS counts them, it restarts itself once with esp_restart. A string the
+ * test wrote beside the count, `note`, it prints when there is one. */
 #include <inttypes.h>
 #include <stdio.h>
 
@@ -47,6 +48,19 @@ static uint32_t count_boot(void) {
     ESP_ERROR_CHECK(nvs_commit(handle));
     nvs_close(handle);
     return boots;
+}
+
+/* The string under `note` in the count's namespace, as a line, when there is one. */
+static void print_note(void) {
+    nvs_handle_t handle;
+    ESP_ERROR_CHECK(nvs_open("persistence", NVS_READONLY, &handle));
+    char note[64];
+    size_t size = sizeof(note);
+    esp_err_t found = nvs_get_str(handle, "note", note, &size);
+    nvs_close(handle);
+    if (found == ESP_ERR_NVS_NOT_FOUND) return;
+    ESP_ERROR_CHECK(found);
+    printf("persistence: note=%s\n", note);
 }
 
 /* The lines of BOOTS.TXT once this boot's is appended; -1 without a card. The pins are those of
@@ -101,6 +115,7 @@ void app_main(void) {
            " sd=%d uptime_ms=%" PRId64 "\n",
            boots, esp_reset_reason(), (int)esp_rom_get_reset_reason(0), rtc, ram, sd,
            esp_timer_get_time() / 1000);
+    print_note();
     if (boots == 1) {
         printf("persistence: restarting\n");
         fflush(stdout);

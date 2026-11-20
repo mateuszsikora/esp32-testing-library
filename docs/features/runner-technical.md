@@ -385,6 +385,25 @@ error. `Session::run` calls `write_flash_at_end` after `drive` has returned and 
 `--board`. It logs a failure to stderr and returns nothing, so the exit code stays the first cause's
 ([protocol 5.21](../protocol.md#521-flash_dump-and-flash_dump_ack-ext-131)).
 
+`Session::take_turn` answers `flash_write { offset, path }` where it reads it too, with or without
+`--flash-out`. `off_once_due(&inputs)` first folds the `power` inputs due by the bus's current
+cycle, those queued in `self.inputs` from earlier turns and then those of this turn read so far
+(`inputs`), each in time order, over `self.off`: the supply as the next `apply_inputs` leaves it,
+before the guest runs again. With the supply on that is a protocol error, `flash_write with the
+supply on`. Otherwise `std::fs::read(path)` and `Guest::write_flash(offset, &data)`, and
+`protocol::flash_write_ack` at the turn's `b`, flushed, with `PATH: ERROR` when either failed; the
+loop goes on reading the same turn, with a new deadline
+([protocol 5.25](../protocol.md#525-flash_write-and-flash_write_ack-ext-278)). Each chip's
+`Guest::write_flash` checks with `chip::fits` that the bytes fit in `bus.flash`, since esp32sim's
+own refusal, `flash image too large`, does not say where, then calls `esp_soc::SocBus::write_flash`
+on the bus, which `--flash-at` uses too: on the classic ESP32 it lets go of the code decoded from
+the pages it writes, on the S3 of the flash it writes (`note_written`), on the S31 of all of it,
+and on the C3, the C6 and the P4 of none. On the classic ESP32, the S3 and the C3,
+`chip::under_trampoline` then copies the bytes that fall under esp32sim's Bluetooth trampoline into
+`Ble::original_flash`, which `reboot()` puts back; the C6 keeps that copy inside esp32sim, and the
+P4 and the S31 have no trampoline. The default, a scripted guest's, has no flash and refuses every
+write.
+
 With `--console-port usb`, `Options.usb_console` is set. `collect`, at every slice boundary and
 before every reset, takes `Guest::take_usb_console` (on the S3, C3 and C6 `std::mem::take` of
 esp-soc's `Console::usb`, the backlog `Machine::drain_console` fills inside `run`, trimmed by
@@ -725,7 +744,8 @@ flash, the bus writes into `m.bus.flash` itself and esp32sim keeps the code it c
 `Ble::original_flash`, which `reboot()` puts back (`Ble::restore_flash`, `esp32/src/soc.rs:152`).
 `Guest::flash`, which `flash_dump` and the end of the run write (protocol 5.21), returns a copy
 with the code in place while `original_flash` holds it, and the flash itself otherwise; the guest
-goes on running the trampoline.
+goes on running the trampoline. `Guest::write_flash`, for `flash_write` (protocol 5.25), writes
+the copy too where the bytes fall under it, so that `reboot()` puts the peer's bytes back.
 
 **The forwarder.** `hci::Hci`, shared as `hci::Shared` (`Rc<RefCell<Hci>>`) by the `Forwarder` in
 the machine and the session (`Options::hci`), holds `tx`, the host's packets with their bus cycle,
@@ -1125,7 +1145,14 @@ a guest that programs a byte between two dumps;
 `a_flash_dump_without_flash_out_is_a_protocol_error`; and
 `every_end_of_a_run_leaves_the_flash_in_the_file`, with exit codes 0, 1, 3 and 4; and in
 `tests/test_runner_link.py`, against the real binary, which also checks that the file is there once
-`stats` has come, and that a run without `--board` writes it. The rest:
+`stats` has come, and that a run without `--board` writes it. `flash_write` is covered in
+`runner/src/session/tests.rs` by `a_flash_write_with_the_supply_off_is_in_the_flash_at_the_next_boot`,
+in the turn of the `power` that switched the supply off and in a later one;
+`a_flash_write_with_the_supply_on_is_a_protocol_error`, from the start and after the supply came
+back in the same turn; and `a_flash_write_that_cannot_be_done_says_why_and_the_run_goes_on`; in
+`runner/src/chip/tests.rs` by `the_<chip>_writes_its_flash_for_the_peer` for each chip and
+`a_flash_write_over_the_trampoline_lasts_through_the_reboot`; and in `tests/test_runner_link.py`
+against the real binary. The rest:
 
 - `runner/src/chip/tests.rs`: each chip's machine on the emulator itself.
   `every_chip_is_found_by_its_name_in_any_case` and `the_profiles_say_what_esp32sim_models` check

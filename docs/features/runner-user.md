@@ -252,6 +252,14 @@ for it in a turn, with `flash_dump`, as often as it likes: the guest does not ru
 does not move. [The protocol](../protocol.md#521-flash_dump-and-flash_dump_ack-ext-131) has the rules;
 the `esp32sim` backend's way in is [`board.flash()`](flash-contents-user.md#read-the-flash-of-a-run).
 
+While the board's supply is off, the peer can write a file into the flash in its turn, with
+`flash_write` and an offset, without `--flash-out`: the guest finds the bytes at its next boot, and
+the run's time does not move. With the supply on the message is a protocol error, `flash_write with
+the supply on`, and the run ends with exit code 3.
+[The protocol](../protocol.md#525-flash_write-and-flash_write_ack-ext-278) has the rules; the
+`esp32sim` backend's way in is [`board.nvs(...)` between two
+boots](flash-contents-user.md#change-nvs-between-two-boots).
+
 With `--realtime` the run follows wall time, for a peer with a real device at the far end of a
 route: its `hello` says `clock: wall`, it waits for wall time at each block point before the peer's
 turn, and its `stats` carries `rt_resyncs`, the lags it skipped. The times on the socket stay emulated
@@ -261,7 +269,7 @@ nanoseconds, and the run does not repeat, whatever the peer does.
 [real source](real-source-user.md).
 
 `--peer-timeout` bounds, in wall time, how long the runner waits for the peer's turn to end, counted
-again after each answer to `flash_dump`, and
+again after each answer to `flash_dump` and `flash_write`, and
 how long a write to the socket may make no progress because the peer does not read; for `tcp:` it
 also bounds each connection attempt, though not the name lookup before it. A peer that hangs then
 fails the run with exit code 4 instead of hanging a CI job.

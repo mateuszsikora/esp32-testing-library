@@ -159,6 +159,15 @@ def _value(namespace: str, key: str, value: Value) -> tuple[str, str | bytes | i
     if isinstance(value, str):
         if "\0" in value:
             raise ValueError(f"{namespace}/{key}: an NVS string cannot contain NUL")
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            # what FlashSnapshot.nvs reads of a string that is not UTF-8, which the generator
+            # cannot write back
+            raise ValueError(
+                f"{namespace}/{key}: an NVS string is written as UTF-8, and this one holds bytes"
+                " that are not (surrogates): give the key a value of its own"
+            ) from None
         return "string", value
     if isinstance(value, bytes):
         return "binary", value
