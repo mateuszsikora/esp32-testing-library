@@ -287,6 +287,14 @@ The two paths have different bases, as in the configuration file:
 Neither is relative to the directory pytest starts in. An absolute path avoids the question:
 `-o esp32tl_build_dir=$GITHUB_WORKSPACE/.pio/build/esp32-s3`.
 
+`-o` sets the project defaults, and a marker still wins over them for its test, class or module
+([the selection, closest first](#project-defaults)). A test with an `app_path` marker runs the
+marker's app and its build, the marker's `build_dir` or that app's `build/`, in every job, whatever
+`esp32tl_build_dir` the job sets; one with a `board_profile` marker runs the marker's profile, and
+skips what that profile's chip lacks, whatever `esp32tl_board_profile_path` the job sets. Such a
+test does not run the chip its job is named after. Keep both markers out of the tests that follow
+the matrix.
+
 The board profile's `chip` is the chip esp32sim runs, and the build is checked against it. A
 matrix entry whose build and profile name different chips gives each test an error at setup, as
 `esp32sim: /path/to/project/.pio/build/esp32-s3 is built for esp32s3; the board's chip is esp32: build for esp32 or choose a board profile with that chip`
@@ -309,9 +317,11 @@ Each job writes its own JUnit file and uploads it under its own name, so the rep
 never mix: the test ids are the same in both, and the job's name and the file's say which chip
 ran. `-o junit_suite_name=${{ matrix.name }}`, a pytest option, also puts the name in the
 report's `testsuite` element. Each test's run report starts with the build it loaded, as
-`build: /path/to/project/.pio/build/esp32-s3 (PlatformIO for esp32s3); app_sha256 {sha256}`, so a
-job that ran another build than its matrix entry names shows it
-([the run on the board's clock](run-report-user.md#the-run-on-the-boards-clock)).
+`build: /path/to/project/.pio/build/esp32-s3 (PlatformIO for esp32s3); app_sha256 {sha256}`, and
+names its board profile by the profile's `name` on the next line, as
+`board my-s3-board, watching …`, so a test that ran another build or profile than its matrix entry
+names shows it
+([the link's report](esp32sim-backend-user.md#the-links-report)).
 
 Within one job, `-n auto` runs the session's tests in parallel as usual, with pytest-xdist
 installed beside esp32tl ([parallel execution](#parallel-execution)). On the serial backend each job is one board on its own `--port`, on a runner the board is attached
@@ -322,7 +332,10 @@ A test that asks for what esp32sim does not model on a chip, an SD card on the S
 skipped in that chip's job with the reason
 ([chips other than the classic ESP32](esp32sim-backend-user.md#chips-other-than-the-classic-esp32)),
 and runs in the others. `-ra`, in `addopts` above, lists each job's skips with their reasons, so
-a job's skip list is its chip's.
+a job's skip list is its chip's. Two gaps that table names fail instead of skipping, since nothing
+asks for them before the firmware reaches them: deep sleep on the S3, C3 and C6, where
+`board.wait_for_wake` raises when its time is up, and Bluetooth on the C6 with an image built with
+ESP-IDF v5.3.6, which fails at `board.power_on()`.
 
 On your machine, the same with a shell loop, which fails when any chip's session fails:
 
