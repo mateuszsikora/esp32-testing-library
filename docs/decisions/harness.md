@@ -4310,6 +4310,31 @@ working directory, which changes with where pytest is started; pytest's `paths` 
 value, a list in native TOML and split at spaces in an ini file; a plugin hook or fixture of the
 project's that sets markers, which is what the options spare it.
 
+## One suite runs on several chips as one pytest session per build and profile
+
+Status: decided (#290)
+
+A firmware built for several chips runs its suite once per chip, each run a pytest session of its
+own with `esp32tl_build_dir` and `esp32tl_board_profile_path` set by `-o`: in CI one job of a
+matrix per pair of a build and a board profile, each with its own JUnit file
+([one suite on several chips](../features/pytest-plugin-user.md#one-suite-on-several-chips)).
+esp32tl adds no targets of its own. The two paths keep the bases of
+[the project defaults](#project-defaults-are-esp32tl-ini-options-that-the-markers-override),
+the build relative to the app and the profile relative to the configuration file's directory;
+the user guide spells both out beside the example, since on one command line they invite a wrong
+path. A test that meets one of [esp32sim's gaps on a chip](#esp32sims-gaps-on-a-chip-skip-the-test-that-asks-for-them)
+is skipped in that chip's job alone.
+
+**Rejected:** targets in the pytest configuration (`esp32tl_targets = …`, `--esp32tl-target`) and
+a parametrisation of `board` by target in one session, because a CI matrix gives the same result
+with no new configuration syntax, and a target in the session would need precedence rules against
+the `app_path` and `board_profile` markers, the project defaults, pytest-xdist's workers and the
+serial backend's one port; and the target's name in each test id, which the matrix job's name and
+its own JUnit file already give. Also rejected: an environment variable of esp32tl's own for the
+build directory (`ESP32TL_BUILD_DIR`), and `${VAR}` expansion in the options' values, because
+pytest's `PYTEST_ADDOPTS` already sets any option from the environment, and a second way to set
+one option would need precedence rules of its own.
+
 ## A model that frames by silence tells on_frame when the frame's data came
 
 Status: decided (#237)

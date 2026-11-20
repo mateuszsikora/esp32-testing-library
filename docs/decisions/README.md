@@ -336,6 +336,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A boot's ESP-IDF reason comes from each chip's own table](harness.md#a-boots-esp-idf-reason-comes-from-each-chips-own-table) | `harness.md` | decided (#261) |
 | [The serial backend runs the classic ESP32 only](harness.md#the-serial-backend-runs-the-classic-esp32-only) | `harness.md` | postponed (#236) |
 | [Project defaults are esp32tl ini options that the markers override](harness.md#project-defaults-are-esp32tl-ini-options-that-the-markers-override) | `harness.md` | decided (#237) |
+| [One suite runs on several chips as one pytest session per build and profile](harness.md#one-suite-runs-on-several-chips-as-one-pytest-session-per-build-and-profile) | `harness.md` | decided (#290) |
 | [A model that frames by silence tells on_frame when the frame's data came](harness.md#a-model-that-frames-by-silence-tells-on_frame-when-the-frames-data-came) | `harness.md` | decided (#237) |
 | [The emulated device's Wi-Fi MACs are constants of the wifi interface](harness.md#the-emulated-devices-wi-fi-macs-are-constants-of-the-wifi-interface) | `harness.md` | decided (#237) |
 | [A missing release manifest names possible causes, not a diagnosis or a fallback](harness.md#a-missing-release-manifest-names-possible-causes-not-a-diagnosis-or-a-fallback) | `harness.md` | decided (#237) |
