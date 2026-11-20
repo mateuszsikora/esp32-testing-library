@@ -106,6 +106,7 @@ from esp32tl.matching import PMTK as PMTK
 from esp32tl.matching import UBX as UBX
 from esp32tl.matching import Protocol as Protocol
 from esp32tl.net import Internet as Internet
+from esp32tl.net import LinkChange as LinkChange
 from esp32tl.net.bridge import Bridge as Bridge
 from esp32tl.net.client import ConnectionEnded as ConnectionEnded
 from esp32tl.net.client import NotReachable as NotReachable
@@ -244,6 +245,7 @@ __all__ = [
     "LineEvent",
     "LineRoute",
     "Lines",
+    "LinkChange",
     "Mark",
     "Message",
     "ModeChange",

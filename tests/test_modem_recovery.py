@@ -4,10 +4,12 @@ from pathlib import Path
 
 import pytest
 
+from esp32tl import LinkChange
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.lines import LineEvent, Lines
 from esp32tl.interfaces.modem import Modem
+from esp32tl.net import LinkCause
 from esp32tl.units import Duration, ms, seconds
 
 pytestmark = [
@@ -59,6 +61,14 @@ def test_recovers_a_hung_modem(
     board.wait_until(console.line("modem_recovery: connected"), within=seconds(60))
     assert modem.data_mode and modem.registered and network.ppp.ipcp_open
     board.wait_until(lambda: network.ntp.requests > requests, within=seconds(5))
+    # The hang ended the link; the restart that recovered the modem had no link left to end.
+    assert [(c.up, c.cause) for c in network.link_changes] == [
+        (True, "IPCP open"),
+        (False, "modem hung"),
+        (True, "IPCP open"),
+    ]
+    assert network.link_changes[1].at == hung_at
+    assert network.link_changes[2].at > recovered.at
 
     # the procedure's pulses, on the board's clock
     key = firmware_pulses(lines, "modem.pwrkey", hung_at)
@@ -130,9 +140,14 @@ def test_redials_after_a_dropped_call(
     board.wait_until(console.line("modem_recovery: connected"), within=seconds(60))
     board.wait_until(lambda: network.ntp.requests > 0, within=seconds(5))
 
+    [opened] = network.link_changes
+    assert opened.up and opened.cause == "IPCP open"
+    down, up = network.next_link_down(), network.next_link_up()
     dropped_at = board.now
     modem.drop_call(terminate=terminate)
     assert modem.registered and not modem.data_mode and modem.powered
+    cause: LinkCause = "far end terminated" if terminate else "call ended"
+    assert down() == LinkChange(dropped_at, False, cause)
     line = board.wait_until(console.line("modem_recovery: (no answer|lost ip)"), within=seconds(60))
     assert line.text == noticed
     assert modem.registered and not modem.data_mode
@@ -147,6 +162,9 @@ def test_redials_after_a_dropped_call(
     assert "+CEREG: 0,1" in "\n".join(entry.text for entry in console.lines(since=back.at))
     assert modem.registered
     requests = network.ntp.requests
+    redialled = board.wait_until(up, within=seconds(60))
+    assert redialled.cause == "IPCP open" and redialled.at > back.at
+    assert network.link_changes == [opened, down(), redialled]
     board.wait_until(console.line("modem_recovery: connected"), within=seconds(60))
     assert modem.data_mode and modem.registered and network.ppp.ipcp_open
     board.wait_until(lambda: network.ntp.requests > requests, within=seconds(5))

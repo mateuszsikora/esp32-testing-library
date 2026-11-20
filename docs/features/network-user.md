@@ -1036,6 +1036,69 @@ test opened with `network.connect` are lost at the link's end, as before: the de
 is gone. Why there is no option for the old behaviour: [the
 decision](../decisions/harness.md#a-lost-link-leaves-the-devices-connections-half-open-until-their-keepalive).
 
+## When the link comes up and goes down
+
+`network.link_changes` is the list of `LinkChange` records, in order, one each time the link between
+the device and the network came up or went down: `at`, the board's time as a `Duration`, `up`,
+`True` or `False`, and `cause`, one of the sixteen strings of the `LinkCause` `Literal` of
+`esp32tl.net`: two for an up, below, and fourteen for a down, in the table. Behind a modem the link
+is up from the instant IPCP opens, cause `IPCP open`; behind a [virtual
+station](#joining-the-devices-own-access-point), from the instant the station has joined the
+device's access point (`wifi station: ready` in `network.events`), cause `station joined`. A test
+reads the times there, not from the text of `network.events`. `LinkChange` is exported from
+`esp32tl`.
+
+A change is recorded only when it changes something, but for a station joining again: a link that is
+down already, such as a call the device ended with an LCP Terminate-Request and the modem then hung
+up, gets no second down, and a link that never opened IPCP gets none at all. The down's `cause`
+names the path:
+
+| `cause` | What ended the link |
+|---|---|
+| `call ended` | `modem.drop_call()` |
+| `far end terminated` | `modem.drop_call(terminate=True)`: the network's LCP Terminate-Request, at the call's instant |
+| `device terminated` | The device's LCP or IPCP Terminate-Request (`ppp: the device ended the link` for LCP) |
+| `device renegotiated LCP`, `device renegotiated IPCP` | A Configure-Request of the device on an open LCP or IPCP |
+| `device left data mode` | The device's `+++`, at the end of the guard second |
+| `modem hung` | `modem.hang()` |
+| `coverage lost` | `modem.lose_registration()` |
+| `modem off` | `modem.power_off()`, or a PWRKEY pulse that switches it off |
+| `modem lost power` | `modem.lose_power()` |
+| `modem restarted` | `modem.power_on()` on a modem that is on, or a RESET pulse |
+| `station left` | The station's data link went (`wifi station: disconnected`), as when the device stops its access point; a `wifi station: ready` while joined is a down and an up at its instant, as the station left and joined again within one of the runner's slices |
+| `device reset`, `device lost its power` | The device's chip reset, as `board.reset()` or a watchdog, or its power went, `board.power_off()`, which a modem on the board's supply follows |
+
+`network.next_link_up()` and `network.next_link_down()` are described conditions for the first
+change of that direction appended after the call, whatever its cause: the boundary is
+`link_changes` at the call, the condition consumes nothing and returns the same `LinkChange` each
+time it is asked, and its timeout says `the next link up did not happen within 60 s` (or `link
+down`). A firmware's reconnect ladder, from a dropped call to the next IPCP open:
+
+```python
+from esp32tl.units import seconds
+
+
+def test_redials_after_a_dropped_call(board, modem):
+    network = modem.network()
+    board.power_on()
+    board.wait_until(network.next_link_up(), within=seconds(60))
+    down, up = network.next_link_down(), network.next_link_up()
+    modem.drop_call()
+    dropped = down()  # LinkChange(at=..., up=False, cause='call ended'), at once
+    redialled = board.wait_until(up, within=seconds(90))
+    assert redialled.at - dropped.at < seconds(60)
+```
+
+Behind a Wi-Fi access point nothing is recorded: the network does not see the device join or
+leave its access point, only the frames it sends, so `link_changes` stays empty and both
+conditions raise `ValueError`:
+`network.next_link_up: behind a Wi-Fi access point the network does not see the device join or
+leave; wait for network.dhcp.next_lease()`, and `network.next_link_down: behind a Wi-Fi access
+point the network does not see the device join or leave; the test's own switches are in
+wifi.events`. The device's address there is in `network.dhcp.leases`,
+each stamped `at`, and the test's own switches of the access point in `wifi.events`. Why: [the
+decision](../decisions/harness.md#behind-a-wi-fi-access-point-the-network-records-no-link-changes).
+
 ## DNS, time and services
 
 Behind the modem, PPP gives the device `10.64.0.2` and DNS `10.64.0.1`; the peer is `10.64.0.1`.

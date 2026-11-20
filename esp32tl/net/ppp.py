@@ -6,6 +6,10 @@ and a DNS server. IPv4 datagrams go to `on_ip`.
 import struct
 from collections.abc import Callable
 from ipaddress import IPv4Address
+from typing import Literal
+
+# What the device did to end LCP or IPCP, as `ended` is told.
+PppCause = Literal["device terminated", "device renegotiated LCP", "device renegotiated IPCP"]
 
 DEFAULT_MRU = 1500
 MIN_MRU = 68  # our supported minimum, enough for IPv4/TCP control packets
@@ -35,7 +39,9 @@ def ip4(address: str) -> bytes:
 
 class Ppp:
     """One PPP link. `send` takes the bytes to put on the line; `on_ip` gets each IPv4 datagram
-    the device sends once IPCP is open; `log` gets a line per event worth seeing."""
+    the device sends once IPCP is open; `log` gets a line per event worth seeing. `opened` is
+    called each time IPCP opens, and `ended` each time the device ends LCP or IPCP, with what it
+    did: `device terminated`, `device renegotiated LCP` or `device renegotiated IPCP`."""
 
     def __init__(
         self,
@@ -46,8 +52,10 @@ class Ppp:
         peer: str = "10.64.0.2",
         dns: str = "10.64.0.1",
         log: Callable[[str], None] = lambda line: None,
-        ended: Callable[[], None] = lambda: None,
+        opened: Callable[[], None] = lambda: None,
+        ended: Callable[[PppCause], None] = lambda cause: None,
     ) -> None:
+        self._opened = opened
         self._ended = ended
         self._requests: dict[int, tuple[int, bytes]] = {}
         self._escaped = False
@@ -188,7 +196,7 @@ class Ppp:
                 return
         if code == CONF_REQ:
             if self.lcp_open:
-                self._reset_lcp()
+                self._reset_lcp("device renegotiated LCP")
             if not self.started:
                 self.start()
             self._lcp_acked_them = False
@@ -219,7 +227,7 @@ class Ppp:
         elif code == TERM_REQ:
             self._control(LCP, TERM_ACK, ident, b"")
             self._log("ppp: the device ended the link")
-            self._reset_lcp()
+            self._reset_lcp("device terminated")
             return
         if not self.lcp_open and self._lcp_acked_us and self._lcp_acked_them:
             self.lcp_open = True
@@ -243,7 +251,7 @@ class Ppp:
                 self.ipcp_open = False
                 self._ipcp_acked_us = False
                 self._requests.pop(IPCP, None)
-                self._ended()
+                self._ended("device renegotiated IPCP")
             if IPCP not in self._requests:
                 self._request(IPCP, _pack([(3, ip4(self.local))]))
             self._ipcp_acked_them = False
@@ -269,20 +277,21 @@ class Ppp:
             self.ipcp_open = False
             self._ipcp_acked_us = self._ipcp_acked_them = False
             self._requests.pop(IPCP, None)
-            self._ended()
+            self._ended("device terminated")
             return
         if not self.ipcp_open and self._ipcp_acked_us and self._ipcp_acked_them:
             self.ipcp_open = True
             self.ipcp_opened += 1
             self._log(f"ppp: IPCP open, the device is {self.peer}, DNS {self.dns}")
+            self._opened()
 
-    def _reset_lcp(self) -> None:
+    def _reset_lcp(self, cause: PppCause) -> None:
         self.lcp_open = self.ipcp_open = self.started = False
         self.peer_mru = DEFAULT_MRU
         self._lcp_acked_us = self._lcp_acked_them = False
         self._ipcp_acked_us = self._ipcp_acked_them = False
         self._requests.clear()
-        self._ended()
+        self._ended(cause)
 
 
 def _pack(options: list[tuple[int, bytes]]) -> bytes:

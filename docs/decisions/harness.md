@@ -5059,3 +5059,26 @@ record that the services kept apart from the history could disagree with it.
 comprehension over the history saying the same thing. Also rejected: a test's own wrapper of
 `network.ip.udp[53]` and `network.ip.udp[123]`, the only way before, because that table is the
 network's, not the test's.
+
+## Behind a Wi-Fi access point the network records no link changes
+
+Status: decided (#275)
+
+`network.link_changes` records the link coming up and going down behind a modem, at IPCP open and
+at each way the call or PPP ends, and behind a virtual station, at the runner's `wifi_link`
+transitions. Behind the virtual access point it records nothing, and `next_link_up` and
+`next_link_down` raise `ValueError` there. The network behind the access point sees only the
+Ethernet frames the device sends: the runner sends `wifi_link` for its own virtual station alone
+(`Session` reads `station_state()`, which is that station's `StaLink::Joined`), and no event says
+when the device's station associates with the access point or leaves it. So the network knows of no
+down that the device's firmware causes itself, as `esp_wifi_disconnect()`, and an up recorded at
+the next DHCP lease would come after no down. `network.dhcp.leases` keeps every lease the device was given, each stamped `at`,
+with `next_lease()`, and `wifi.events` the test's own switches of the access point; together they
+are what the network can know.
+
+**Rejected:** the DHCP acknowledgment as up, with `wifi.access_point_off()`, a device reset and the
+device giving its address up as down, because a down the network cannot see would leave the record
+up across a reconnect, and the reconnect a test measures would have no up. Also rejected: an empty
+list behind the access point with conditions that wait without raising, because such a wait can
+only time out. A record of association needs a `wifi_link`-like event from the runner for the
+access point's side; it comes with a test that needs it.

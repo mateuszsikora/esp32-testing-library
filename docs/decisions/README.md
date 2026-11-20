@@ -360,6 +360,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [An escape is a mode change, not a modem command](harness.md#an-escape-is-a-mode-change-not-a-modem-command) | `harness.md` | decided (#276) |
 | [The broker keeps how each connection ended in connection_ends, not on MqttClient](harness.md#the-broker-keeps-how-each-connection-ended-in-connection_ends-not-on-mqttclient) | `harness.md` | decided (#274) |
 | [NTP and DNS keep a history of what the device asked, with board times](harness.md#ntp-and-dns-keep-a-history-of-what-the-device-asked-with-board-times) | `harness.md` | decided (#273) |
+| [Behind a Wi-Fi access point the network records no link changes](harness.md#behind-a-wi-fi-access-point-the-network-records-no-link-changes) | `harness.md` | decided (#275) |
 
 ## The runner crate and esp32sim
 

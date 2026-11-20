@@ -193,6 +193,7 @@ A lower bound, at least `AT_LEAST_S` of wall time, only grows on a slow host, an
 | `tests/test_sd_faults.py` | The SD card's fault rules without the emulator: `sd_card.fail`, `sd_card.delay` and the clears in the link's turns at the test's instants, what they refuse, the runner's `sd_op` into the rules' hits, the report and the properties, a spent rule, rules that observe beside one that fails, an `sd_op` that is not what its rule does, a run that has ended, rules in order with the card's changes, and an `sd_fault` from another interface or one the runner would refuse | Nothing beyond the package; milliseconds |
 | `tests/test_wifi.py` | The `Wifi` interface without the emulator: the runner's `--wifi` and `--wifi-nearby` arguments, the parameters it refuses, one access point and networks around that are not it, a backend that refuses the access point, the `wifi_ap` inputs at the instants of the switches | Nothing beyond the package; milliseconds |
 | `tests/test_net_path.py` | `network.set_path` in exact stamps, from hand-made PPP and Ethernet frames, with the clock moved by hand: the RTT from a request to its answer, each direction's share, the rates, FIFO order and no overtaking, the floor's message, what is not delayed, resets, `quiet_until` | Nothing beyond the package; milliseconds |
+| `tests/test_net_link_changes.py` | `network.link_changes`, `next_link_up` and `next_link_down` from hand-made PPP frames, the modem model and the station's data-link transitions: IPCP open as up, each way the device, the modem or the test ends the link as its down with its cause, one record per change, a device reset and the renegotiation after it, the station joining and leaving, nothing behind the access point and the conditions' refusal there, and a poll that reads only the changes since the last one | Nothing beyond the package; milliseconds |
 | `tests/test_net_mqtt_sessions.py` | The broker's sessions by client ID in raw MQTT packets, exact bytes, flags and packet IDs: Session Present, the queue, DUP and original packet IDs on redelivery, CleanSession=1, a refused CONNECT, `session`, `forget_session`, `deliveries` and `next_delivery` | Nothing beyond the package; milliseconds |
 | `tests/test_mqtt_session.py` | esp-mqtt with CleanSession=0 in `mqtt_session`: Session Present, a QoS 1 message published while offline, one redelivered with DUP after `broker.disconnect` in the same instant; on a path, a backlog's spacing at 200 ms and 600 ms, its ratio, the rate, and a redelivery | The built `mqtt_session` image, the runner and the ROM ELF |
 | `tests/test_net_bridge.py` | `network.bridge` against services on loopback sockets, in wall time: the stream both ways, each end's close, what the service sends after the device closed, a refused connection, a lost link, the turns it asks for, what it refuses, and an answer reaching the station in a TCP segment | Loopback TCP; under a second |
@@ -218,7 +219,7 @@ A lower bound, at least `AT_LEAST_S` of wall time, only grows on a slow host, an
 | `tests/test_gnss_fixture.py` | `gnss.replay` and `gnss.tap` into `nmea_reader` through the `gnss` fixture, and, through `pytester`, a source given out of order with `board.power_on()`, and `test_nmea_reader.py`'s `test_reports_a_fix` failing on a changed recording and on a baud mismatch | The built `nmea_reader` image, the runner and the ROM ELF |
 | `tests/test_gnss_recordings.py` | `recordings/gnss-generated-*.jsonl` are what `scripts/generate-gnss-recordings.py` writes, `--check` names a stale one, and every recording is one valid sentence per emulated second | Nothing beyond Python |
 | `tests/test_pytest_plugin.py` | The plugin's parametrisation and refused options, the `board_profile` marker, the project defaults in `pyproject.toml` and their precedence below the markers, the wall-time timeout it gives, the runner's command line, `load_app`'s refusals, the runner and ROM paths, power-on, sources and taps, the `lines` fixture's refusals and how a runner's exit is reported (against a fake runner, a shell script), how the backend serves the link, holds it on the test's clock, ends the run, writes a tap and reports the run (against a fake runner that speaks the link protocol, a Python script) | Most tests nothing beyond the package; `test_hello_world_fails_on_an_image_that_prints_something_else` the built image, the runner and the ROM ELF |
-| `tests/test_determinism.py` | The runs the determinism job runs twice: `nmea_reader` fed each generated recording and the converted NEO-M8N log, and fed the receiver model through a fix, a move, a lost fix and a new one, each run tapped and ended at a time the test chose; `pppos_client` publishing to the broker; a TLS exchange without firmware; the `position_tracker` example publishing over TLS through the modem (`test_tls_on_the_device`); `mqtt_session` on a path with a backlog and a redelivery (`test_mqtt_session_on_a_path`); `http_request` fetching behind the access point (`test_wifi_http`); `bt_spp_initiator` streaming to an `SppPeer` through the `bt` fixture (`test_spp_to_a_peer`); each test leaves its console, its tap or its network transcript in its `tmp_path` ([Determinism](#determinism)) and checks that its run did what it should | The built `nmea_reader`, `pppos_client`, `mqtt_session`, `http_request` and `bt_spp_initiator` images and the `position_tracker` example, the runner and the ROM ELF |
+| `tests/test_determinism.py` | The runs the determinism job runs twice: `nmea_reader` fed each generated recording and the converted NEO-M8N log, and fed the receiver model through a fix, a move, a lost fix and a new one, each run tapped and ended at a time the test chose; `pppos_client` publishing to the broker; a TLS exchange without firmware; the `position_tracker` example publishing over TLS through the modem (`test_tls_on_the_device`); `mqtt_session` on a path with a backlog and a redelivery (`test_mqtt_session_on_a_path`); `http_request` fetching behind the access point (`test_wifi_http`); `bt_spp_initiator` streaming to an `SppPeer` through the `bt` fixture (`test_spp_to_a_peer`); `modem_recovery` redialling after a dropped call (`test_a_dropped_call_and_the_redial`) and `arduino_shell`'s SoftAP left and joined again (`test_device_softap_left_and_joined_again`), with the link's changes; each test leaves its console, its tap or its network transcript in its `tmp_path` ([Determinism](#determinism)) and checks that its run did what it should | The built `nmea_reader`, `pppos_client`, `modem_recovery`, `mqtt_session`, `http_request` and `bt_spp_initiator` images, the PlatformIO `arduino_shell` image and the `position_tracker` example, the runner and the ROM ELF |
 | `tests/test_check_determinism.py` | `scripts/check-determinism.py` on two runs made up in the test: the files, a tap's `created` left out, the links in the JUnit XML without the run's basetemp, and the check itself against a stand-in for pytest (its arguments, a run that fails, the `--out` it refuses) | Nothing beyond Python; milliseconds |
 | `tests/test_compare_backends.py` | `scripts/compare-backends.py` on JUnit XML made up in the test: the outcomes it reads, the ids without the backend, the line each test gets and the counts, and the script against a stand-in for pytest (the arguments of each run, the required `--port`, a run that cannot test, no test on both backends) ([comparing the two backends](../features/serial-backend-user.md#comparing-the-two-backends)) | Nothing beyond Python; milliseconds |
 | `tests/test_tap.py`, `tests/test_run_report.py` | A tap's recording and a tapped `Uart` on a `BoardLink`; the run's log and how the report shows it | Nothing beyond the package; milliseconds |
@@ -265,7 +266,7 @@ the ROM and its firmware image at test time; PPP and host network services are n
 `tests/test_modem_recovery.py` runs `firmware/modem_recovery` with the simulated network, through
 `esp_modem` and PPP: the recovery of a hung modem, with its pulses read from `lines.events()` and its
 two presses of PWRKEY waited for with two successive `next_change(on=True)`, also of
-one that hangs while the firmware dials, and the dial after a dropped call, with and without a Terminate-Request. Build it with `firmware/build.sh modem_recovery`.
+one that hangs while the firmware dials, and the dial after a dropped call, with and without a Terminate-Request, with the down and the up each gives in `network.link_changes`. Build it with `firmware/build.sh modem_recovery`.
 
 ## Determinism
 
@@ -339,6 +340,15 @@ its sidecar `hci.btsnoop.json`, the tap of the HCI, every packet both ways at it
 ([tapping the HCI](../features/run-report-user.md#tapping-the-hci)); it checks that the channel is
 open and that the firmware printed a `speed(...)` line. The btsnoop file is compared byte for
 byte, and the sidecar as a recording's header is, without its `created`.
+`test_a_dropped_call_and_the_redial` runs `modem_recovery` until it prints `modem_recovery: connected`, drops the call
+with `modem.drop_call()`, waits for the firmware's redial to open IPCP again and two more emulated
+seconds, and leaves its `console.txt` and `link_changes.txt`, each of `network.link_changes` as
+`<board time>  up|down  <cause>`; it checks that the three are `IPCP open`, `call ended` and `IPCP
+open`. `test_device_softap_left_and_joined_again` runs `arduino_shell`'s open SoftAP, joins it with
+the virtual station, stops the access point with the shell's `ap-off` and starts it with `ap-on`,
+waits for the new lease and one more second, and leaves the same two files; it checks `station
+joined`, `station left` and `station joined`
+([the link's changes](../features/network-user.md#when-the-link-comes-up-and-goes-down)).
 
 Network transcripts (`"esp32tl_network": 1`) are compared exactly like any other file, times
 after a TLS handshake included: the harness's TLS server draws its keys and nonces from a seed,
@@ -387,7 +397,8 @@ The existing capability markers are unchanged. [docs/cicd.md](../cicd.md) descri
 
 `tests/test_net_ppp.py`, `test_net_ip.py`, `test_net_services.py`, `test_net_mqtt.py` and
 `test_net_tls.py` check the protocol layers with handmade frames, independent checksums and
-in-memory TLS. They need the installed package, including cryptography, but no emulator or
+in-memory TLS. `tests/test_net_link_changes.py` checks `network.link_changes` and its conditions
+with handmade PPP frames, the modem model and the station's data-link transitions. They need the installed package, including cryptography, but no emulator or
 network service. `tests/test_net_ethernet.py` and `tests/test_net_http.py` do the same for the
 network behind the Wi-Fi access point (Ethernet, ARP, DHCP) and the HTTP server, and
 `tests/test_wifi.py` for the `wifi` interface. `tests/test_net_mqtt_failures.py` drives held,
@@ -404,7 +415,7 @@ loopback socket, on the wall clock. `tests/test_http_request.py` needs
 and HTTP behind the access point, and a fetch through a bridge. `tests/test_net_client.py` checks
 the connections the test opens, without firmware, and `tests/test_http_server.py` needs
 `firmware/http_server/build/`, the runner and ROM ELF, and opens them to `esp_http_server` behind
-the access point. `make determinism` needs `nmea_reader`, `pppos_client`, `mqtt_session` and
+the access point. `make determinism` needs `nmea_reader`, `pppos_client`, `modem_recovery`, `mqtt_session` and
 `http_request`; it builds any missing one. `tests/test_modem_model.py` also checks PPP lifecycle,
 guarded escape and fatal receive overflow on the network route.
 
@@ -512,7 +523,9 @@ failure and reset/power-cycle reacquisition. Build `arduino_shell` with
 `firmware/build-platformio.sh arduino_shell`. `tests/test_net_station.py` covers DHCP retries,
 NAK, expiry, ARP, host-only services and TCP/HTTP with synthetic packets, without firmware.
 `tests/test_determinism.py::test_device_softap` saves console lines, the network transcript and
-lease times for open and WPA2 runs. `make determinism` now builds `arduino_shell` when missing.
+lease times for open and WPA2 runs, and `test_device_softap_left_and_joined_again` the link's
+changes as the station leaves and joins again. `test_softap_leaves_and_rejoins` checks those changes
+against the `wifi station:` events. `make determinism` now builds `arduino_shell` when missing.
 To compare just these cases:
 
 ```sh

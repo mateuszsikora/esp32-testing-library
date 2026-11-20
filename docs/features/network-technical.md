@@ -18,8 +18,10 @@ deadlines and the path's next datagram.
 `Internet(now, world, *, link="ppp", mac="02:53:54:41:00:01", bridging=...)`, whose `world` defaults to `esp32tl.net.ntp.DEFAULT_UTC`, as the modem's and `Wifi`'s do, takes `link`, `"ppp"`, `"ethernet"` or `"station"` (the `Link` type),
 and keeps it for its life. `bridging(call)` is called by `bridge` before it makes a bridge, and
 refuses it by raising; it does nothing by default, and the `esp32sim` backend's refuses after
-power-on and in front of a replay ([backend](esp32sim-backend-technical.md#a-run-with-a-real-source)). `_peer()` builds the link object from it: a `Ppp` whose `ended`
-callback is `_link_ended`, which calls `Network.lose_link` and clears the path, an `Ethernet` given
+power-on and in front of a replay ([backend](esp32sim-backend-technical.md#a-run-with-a-real-source)). `_peer()` builds the link object from it: a `Ppp` whose `opened`
+callback records the link up ([link changes](#link-changes)) and whose `ended` callback,
+`_ppp_ended`, records the down with the cause `Ppp` gives and calls `_link_ended`, which calls
+`Network.lose_link` and clears the path, an `Ethernet` given
 the network's `Dhcp`, or a host-side `Station` with its own DHCP client. All send through the same
 closure, which queues link control traffic at `now + LATENCY_NS` and takes IPv4 datagrams down
 the path, and all hand IPv4 datagrams to
@@ -34,8 +36,9 @@ TCP 80, each TCP one wrapped in `_Traced` for the transcript, and one `Dhcp`. On
 the `Dhcp`; a network behind a modem has one that nothing asks, as does a network behind a virtual
 station. That station uses its own DHCP client and updates the DNS answer to its leased address.
 
-`start(t)` stops the network first, then marks it active and, for PPP only, starts LCP. `stop(at)`
-marks it inactive, calls `_link_ended`, which loses the connections the test opened and leaves the
+`start(t)` stops the network first, then marks it active and, for PPP only, starts LCP.
+`stop(at=None, cause="call ended")` records the down with `cause` when the link was up, marks it
+inactive, calls `_link_ended`, which loses the connections the test opened and leaves the
 device's half-open (`Network.lose_link`), clears the path, drops the queued replies and replaces
 the link with a fresh one from `_peer()`. The `Dhcp`, the services and
 the transcript are not replaced, and neither are the bridges.
@@ -668,6 +671,45 @@ logs
 `wifi: access point back on the air`. Each switch also queues a `WifiAp` input for the runner. The
 fresh `Ethernet` has no `device_mac` until the station sends again. The `Dhcp` and its `leases`
 persist across the switches, so a test sees every lease of the run.
+
+### Link changes
+
+`Internet.link_changes` is a `list[LinkChange]`. `LinkChange.cause` is a `LinkCause`, a `Literal`
+of the sixteen causes; `Ppp`'s `ended` callback takes a `PppCause`, the `Literal` of the three
+causes `Ppp` gives. `_link_change(up, cause)` appends to the list: it stamps
+`Duration(self.now())`, the instant the callback or the held board runs at, and keeps
+`_link_up`: it appends only when `up` differs from it, and never on an `"ethernet"` link. Behind a
+modem `Ppp` calls `opened` after `ipcp_opened` counts an IPCP open, and `Internet` records `IPCP
+open`. `Ppp` calls `ended(cause)` from `_reset_lcp` at the device's LCP Terminate-Request,
+`device terminated`, and at its Configure-Request on an open LCP, `device renegotiated LCP`, and
+from `_ipcp` at the device's IPCP Terminate-Request, `device terminated`, and at its
+Configure-Request on an open IPCP, `device renegotiated IPCP`. `Internet.terminate(t)` records `far
+end terminated` before it sends the network's Terminate-Request on an open LCP, so the
+`Internet.stop` of `drop_call(terminate=True)` that follows finds the link down. The modem model
+gives `Internet.stop` the cause of each way it leaves data mode: `_end_data(at, cause)`
+([modem internals](modem-technical.md)). `device_reset(t, why)` records `device lost its power`
+when `why` names the power, `device reset` otherwise, on either link that records, before it
+forgets the device's flows: behind a modem the far end's PPP still has IPCP open, and the device's
+new negotiation on the same call, which `_reset_lcp` sees, finds the link down already, so the next
+IPCP open is its up. Behind a station `_station_link(t, ready)` records `station left` at every
+transition, which changes nothing on a link that is down, and `station joined` after it when
+`ready` is true and the network active, before `Station.start`. A `ready` while joined is thus a
+down and an up at the same `t`: the runner sends `wifi_link` when the station's `Joined` changes or
+its count of completed joins does, so a second `ready` is a station that left and joined again
+within one slice, and `Station` restarts DHCP for it. A lease that expires or a NAK restarts DHCP
+and records nothing, since the data link stays.
+
+`next_link_up()` and `next_link_down()` are `Condition`s whose `find` is
+`FirstFrom(lambda: self.link_changes, len(self.link_changes), lambda c: c.up is up)`, described
+`the next link up` and `the next link down`, service `network`. On an `"ethernet"` link
+`_next_link` raises `ValueError` instead, pointing up to `network.dhcp.next_lease()` and down to
+`wifi.events`: the runner sends `wifi_link` for its own virtual station only, so nothing tells the
+network when the device's station associates or leaves ([the
+decision](../decisions/harness.md#behind-a-wi-fi-access-point-the-network-records-no-link-changes)).
+`tests/test_net_link_changes.py` checks each cause with hand-made PPP frames, the modem model and
+`_station_link`; `tests/test_modem_recovery.py` and `tests/test_arduino_softap.py` check them on
+`modem_recovery`'s redial and hung modem and on `arduino_shell`'s SoftAP leaving and coming back,
+and `tests/test_determinism.py` writes them in `link_changes.txt` for two runs to compare.
 
 `Interface.lossless` defaults false; a modem with an `Internet` source returns true. `BoardLink`
 matches an `rxfifo_ovf` warning by RX pin and fails only its lossless owner. No wire-protocol version
