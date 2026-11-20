@@ -30,7 +30,8 @@ settings, not settings applied by the workflow files:
   self-hosted runners. Do not register a machine with private network access for public CI.
 - The default workflow permission is `read`. On 16 November 2026, the owner enabled
   **Allow GitHub Actions to create and approve pull requests** for the release-preparation
-  workflow; that workflow only creates PRs, never approves or merges them.
+  workflow; that workflow creates PRs and approves their workflow runs, but never reviews or
+  merges a PR.
   Each CI workflow also declares `contents: read`. The repository allows all actions;
   action tags are not required to be pinned to full commit SHAs.
 - Secret scanning, secret scanning push protection and Dependabot vulnerability alerts
@@ -488,10 +489,26 @@ release trigger will not accept the mixed change.
 Repository setup: **Settings → Actions → General → Workflow permissions → Allow GitHub Actions
 to create and approve pull requests** must be enabled for `GITHUB_TOKEN` to open the PR. This
 option was enabled with the owner's approval on 16 November 2026; the default token permission
-remains `read`. The workflow creates PRs; it does not approve or merge them. Its write permissions are limited to
-contents, pull requests and Actions. It explicitly dispatches `ci.yml` on the PR branch because
-pushes with `GITHUB_TOKEN` do not start push CI. This also provides CI without relying on approval
-of an automatically created PR's event-triggered workflow runs.
+remains `read`. The workflow creates PRs; it does not review or merge them. Its write permissions are limited to
+contents, pull requests and Actions.
+
+The PR's `pull_request` runs of **CI** and **Runtime release** start in `action_required`, and
+the required checks wait with them. This is GitHub's rule for a PR opened or updated with
+`GITHUB_TOKEN`, not the fork approval policy above: such runs wait until a user with write access
+selects **Approve workflows to run** ([GitHub's `GITHUB_TOKEN`
+documentation](https://docs.github.com/en/actions/concepts/security/github_token)). It holds for a
+branch of this repository too: the runs of #272, opened from `build/release-0.2.0`, waited for
+approval as well.
+The workflow's last step, **Approve the pull request's workflow runs**, waits up to two minutes
+until both runs exist for the PR's head commit, then approves every `pull_request` run of that
+commit in `action_required` (`POST /repos/{owner}/{repo}/actions/runs/{run_id}/approve`, with the
+job's `actions: write`). It tries every such run before failing, and logs a line when none
+waits. Whether GitHub lets `GITHUB_TOKEN` approve runs it caused is not yet known; the next
+preparation is the first test, and if it is refused, the documented way out is a GitHub App
+token for opening the PR. Dispatching `ci.yml` on the branch is no substitute: for v0.2.0 (#272) a
+dispatched run passed all 30 required checks on the PR's head commit, yet the PR stayed
+`BLOCKED`: the PR's checks list only runs GitHub links to the PR, and the dispatched run's check
+suite links none.
 
 CLI equivalent:
 
@@ -500,9 +517,13 @@ gh workflow run prepare-release.yml --ref main -f version=0.1.1
 ```
 
 The preparation job has a five-minute timeout and is serialized. Existing release branches are
-never force-pushed. If creating the PR or dispatching CI fails after the branch push, use the
-existing branch to open the PR or run `gh workflow run ci.yml --ref build/release-0.1.1`; do not
-rerun preparation expecting it to overwrite that branch.
+never force-pushed. If creating the PR fails after the branch push, open it from the existing
+branch; do not rerun preparation expecting it to overwrite that branch. If an approval fails,
+the step's errors name each run it could not approve; if a run did not appear in two minutes,
+the error names the workflow but no run. Either way, approve the waiting runs with **Approve
+workflows to run** on the PR, or with
+`gh api -X POST repos/mateuszsikora/esp32-testing-library/actions/runs/RUN_ID/approve`. The PR's
+description says the last step approves its runs, whether or not it managed to.
 
 ## Version-only CI
 

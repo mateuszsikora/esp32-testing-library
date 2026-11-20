@@ -49,9 +49,12 @@ pull request, and the repository squashes pull requests anyway.
 Status: decided (amended 16 November 2026; originally #54)
 
 The `docs` job runs on `pull_request` events, against `origin/<base branch>` of the pull request,
-with the full history the merge base needs (`fetch-depth: 0`). It now also runs on manual CI
-dispatch, against `origin/main`, so bot-created version branches receive this required check
-without relying on approval of PR-triggered runs.
+with the full history the merge base needs (`fetch-depth: 0`). It also runs on manual CI
+dispatch, against `origin/main`, so a manual run checks the documentation contract too. The
+16 November amendment added that for bot-created version branches; since v0.2.0 the preparation
+workflow approves its PR's own runs instead, because a dispatched run's checks do not count for
+the PR (see
+[the release decision](ci.md#prepare-versions-in-a-pr-and-build-releases-after-merge)).
 
 **Rejected:** running it on pushes to `main` too, because there the merge base with `main` is the
 commit itself: the contract part would compare nothing with nothing and always pass. The integrity
