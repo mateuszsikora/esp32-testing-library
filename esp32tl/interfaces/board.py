@@ -149,10 +149,13 @@ class UptimeZero:
 class Boot:
     """One boot of the chip: its `number`, 1 for the first, the board's time `at` which it
     started, and the reset `cause` the ROM reports for it, which `reason` names. `uptime_zero`
-    is where its uptime counter counted zero, once the backend has seen it count; `None` until
-    then. `idf_reason` is what ESP-IDF's `esp_reset_reason()` reports for the boot, as
-    `ESP_RST_PANIC` (`idf_reset_reason`); `None` where the backend cannot tell. Neither takes part
-    in comparing two boots."""
+    is where its uptime counter counted zero as the backend knew it when this record was read:
+    `None` before the backend has seen the counter count, and it stays so in a record read then,
+    which is frozen. `board.uptime_zero(boot)` reads it now, and
+    `board.next_boot(uptime_zero=True)` returns the boot only once it is known. `idf_reason` is
+    what ESP-IDF's `esp_reset_reason()` reports for the boot, as `ESP_RST_PANIC`
+    (`idf_reset_reason`); `None` where the backend cannot tell. Neither takes part in comparing
+    two boots."""
 
     number: int
     at: Duration
@@ -264,22 +267,58 @@ class Board(ABC):
         """The chip's current boot: the last of `boots`."""
         return self.boots[-1]
 
-    def next_boot(self, cause: int | None = None) -> Condition[Boot | None]:
+    def next_boot(
+        self, cause: int | None = None, *, uptime_zero: bool = False
+    ) -> Condition[Boot | None]:
         """A described condition for the first boot after this call, through any reset, or
         through a reset of `cause` only, as `POWERON_RESET`: a boot of another cause does not
         satisfy it, and a later one of `cause` still can. The boundary is the boots there are now,
         `boots` at this call; the condition consumes nothing, and returns the same boot each time
-        it is asked. Arm it before `reset()`, `power_on()` or what makes the firmware restart."""
+        it is asked. Arm it before `reset()`, `power_on()` or what makes the firmware restart.
+
+        With `uptime_zero`, it returns that boot only while its `uptime_zero` is known, read again
+        at each poll, and `None` before: a wait on it times out for a boot whose zero never comes,
+        as on a firmware that never starts the counter, or on the ESP32-S31. It still waits on
+        the first boot after the call of `cause`, not on a later one that has a zero."""
         if cause is not None and (isinstance(cause, bool) or not isinstance(cause, int)):
             raise TypeError(
                 f"board.next_boot: cause is {cause!r}, not a reset cause as a number, such as"
                 " POWERON_RESET"
             )
-        find = FirstFrom(
+        if not isinstance(uptime_zero, bool):
+            raise TypeError(f"board.next_boot: uptime_zero is {uptime_zero!r}, not True or False")
+        first = FirstFrom(
             lambda: self.boots, len(self.boots), lambda boot: cause is None or boot.cause == cause
         )
         description = "the next boot" if cause is None else f"the next boot ({reset_reason(cause)})"
-        return Condition(find, description)
+        if not uptime_zero:
+            return Condition(first, description)
+
+        # The match is read again at each poll, so the boot's zero, which comes after the boot
+        # has begun, is seen once the backend has it; a filter of `FirstFrom` would refuse the
+        # boot for good at the poll that saw it without one.
+        def counted() -> Boot | None:
+            boot = first()
+            return boot if boot is not None and boot.uptime_zero is not None else None
+
+        return Condition(counted, f"{description}, with its uptime zero")
+
+    def uptime_zero(self, boot: Boot) -> UptimeZero | None:
+        """Where `boot`'s uptime counter counted zero, as the backend knows it now: the
+        `uptime_zero` of the same boot in `boots`, read again, where `boot.uptime_zero` is what was
+        known when `boot` was read. `None` while it is not known."""
+        if not isinstance(boot, Boot):
+            raise TypeError(
+                f"board.uptime_zero: boot is {boot!r}, not a Boot from board.boots,"
+                " board.next_boot() or board.wait_for_wake()"
+            )
+        boots = self.boots
+        if not 1 <= boot.number <= len(boots) or boots[boot.number - 1] != boot:
+            raise ValueError(
+                f"board.uptime_zero: boot {boot.number} at {boot.at} (reset cause {boot.cause})"
+                f" is not one of this board's {len(boots)} boots"
+            )
+        return boots[boot.number - 1].uptime_zero
 
     @property
     @abstractmethod

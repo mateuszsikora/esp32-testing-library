@@ -221,8 +221,10 @@ Every wait is on the board's clock, and every limit a test states is part of wha
   most a millisecond apart on the classic ESP32, two after a load while the counter counts, 60
   ns on the ESP32-S3, -C3 and -C6 and 65 ns on the ESP32-P4; on the ESP32-S31 the zero is not known
   ([boots](../features/pytest-plugin-user.md#resets-and-power-cycles)). For a record of an earlier
-  boot, use `board.boots[n - 1].uptime_zero`, boot `n`'s. It is `None` while the zero is not known,
-  before the counter starts and after it stops.
+  boot, use `board.boots[n - 1].uptime_zero`, boot `n`'s, or `board.uptime_zero(boot)` for a `Boot`
+  the test holds. It is `None` while the zero is not known, before the counter starts and after it
+  stops, and a `Boot` read then keeps `None`: wait on `board.next_boot(uptime_zero=True)` for a boot
+  that has it.
 
 The board's time and the wall clock are apart. A test also has a wall-time timeout, 600 s unless
 pytest-timeout's options set another, which says only that something is stuck

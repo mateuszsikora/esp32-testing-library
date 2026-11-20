@@ -5228,3 +5228,39 @@ generator, would be a second place for the format to go wrong.
 
 **Rejected:** `BackendError` for a board that is on, as before #278, because the cause is the
 board's state, which the test changes with `power_off()`, not the backend's setup.
+
+## The boot next_boot returns has its uptime zero on request, and a held boot's zero is read again
+
+Status: decided (#286)
+
+A `Boot` is built anew at every read of `boots`, with the `uptime_zero` the runner has reported so
+far, and is frozen. The runner reports a boot's zero once it has seen the counter count, some tens
+of milliseconds after `boot.at` on the classic ESP32, so the `Boot` a wait on `board.next_boot()`
+or `board.wait_for_wake()` returns, read at the first poll that saw the boot, keeps `None`; a test
+that dates a stamp with it fails far from the mistake. Two additions, together:
+
+- `board.next_boot(cause=None, *, uptime_zero=False)`: with `uptime_zero=True` the condition returns
+  the first boot after the call (of `cause`) only while its zero is known, so the `Boot` the wait
+  returns has it. A boot whose zero never comes, on a firmware that never starts the counter or on
+  the ESP32-S31, times out as `the next boot, with its uptime zero did not happen within …`. The
+  condition stays on the first boot after the call rather than going on to a later one that has a
+  zero: a test that waits for "the next boot" means that one, and dating its stamps with another
+  boot's zero would be wrong. It is a wrapper of the `FirstFrom`, not part of `wanted`, which would
+  refuse the boot for good at the poll that saw it without a zero.
+- `board.uptime_zero(boot)`: the zero of a `Boot` the test holds, read again from `boots`. The
+  option alone does not cover the `Boot` of `wait_for_wake()`, whose wait takes no polls, the stamps
+  of an older boot, or a zero that a load while the counter counts moved after the `Boot` was read,
+  as ESP-IDF's after a light sleep; for these `board.boots[boot.number - 1].uptime_zero` works but
+  needs the test to know that the record is a snapshot. A boot that is not one of the board's
+  (another number, or the same number with another `at` or `cause`) is refused with `ValueError`
+  rather than answered with another boot's zero.
+
+**Rejected:** dropping `uptime_zero` from `Boot` in favour of the lookup only, so that no field can
+be stale, because `board.boots` and `board.boot`, read when the test needs the zero, are right as
+they are, and the documented examples that read them would all have to go through the board.
+Also rejected: renaming the field to show it is a snapshot, as `uptime_zero_when_read`, because
+every field of a frozen record read from a live history is one, and the name would say it for this
+field only. Also rejected: `next_boot(uptime_zero=True)` returning `None` or a boot without a zero
+when the zero never comes, because the wait has no point at which to give up but its `within`.
+Also rejected: an `uptime_zero` option on `wait_for_wake`, because the lookup covers its boot, and
+waiting for the zero there would take polls in a wait that takes none through the sleep.

@@ -318,8 +318,10 @@ For esp32sim:
 - `board.wait_for_wake(within=duration)` lets the board run to the chip's next boot, which must be
   a wake from deep sleep, and returns its `Boot`
   ([waking from deep sleep](#waking-from-deep-sleep)).
-- `board.next_boot(cause=None)` is a [described condition](#described-conditions) for the chip's
-  next boot, of any cause or of `cause` only, for `board.wait_until`
+- `board.next_boot(cause=None, *, uptime_zero=False)` is a [described condition](#described-conditions)
+  for the chip's next boot, of any cause or of `cause` only, with `uptime_zero=True` only once its
+  `uptime_zero` is known, for `board.wait_until`; `board.uptime_zero(boot)` is a held `Boot`'s
+  `uptime_zero` as the backend knows it now
   ([resets and power cycles](#resets-and-power-cycles)).
 - `board.now` is the board's time since the first power-on, a `Duration`; `board.utc` the
   world's time, the UTC instant at the first power-on plus `board.now`. Neither restarts at a
@@ -533,14 +535,32 @@ def test_the_count_survives_a_power_cut(board: Board):
   is still the zero from before the load for up to two slices of the run, a millisecond each: a
   stamp the firmware sent in them, put on the board's clock with it, is off by what the load
   changed, for ESP-IDF's load after a light sleep, which makes up for the time asleep, by what the
-  making up got wrong. `boot.uptime_zero` takes no part in comparing two boots, and a `Boot` read
-  before the zero was seen keeps `None`: read `board.boot` or `board.boots` again.
+  making up got wrong. `boot.uptime_zero` takes no part in comparing two boots.
+
+  A `Boot` is a record of what was known when it was read, and frozen: one read before the zero
+  was seen keeps `None`, and one read before a load keeps the zero from before it. The boot that
+  `board.wait_until(board.next_boot(), ...)` and `board.wait_for_wake()` return was read at the
+  first poll that saw the boot, tens of milliseconds before its counter counts on the classic
+  ESP32, so its `uptime_zero` is `None` for good. There are two ways to get the zero:
+
+  - `board.next_boot(uptime_zero=True)` returns the boot only once its zero is known, so the `Boot`
+    the wait returns has it (below).
+  - `board.uptime_zero(boot)` is the zero of a `Boot` the test holds, as the backend knows it now:
+    the same as `board.boots[boot.number - 1].uptime_zero`, `None` while it is not known. Use it
+    for the boot of a wake from deep sleep, for a stamp of an older boot, or after a load. A
+    `boot` that is not a `Boot` raises `TypeError: board.uptime_zero: boot is 2, not a Boot from
+    board.boots, board.next_boot() or board.wait_for_wake()`, and one whose `number`, `at` or
+    `cause` is not that of this board's boot of its number raises `ValueError:
+    board.uptime_zero: boot 3 at 2.5 s (reset cause 1) is not one of this board's 2 boots`.
 
   ```python
   from esp32tl.units import ms, seconds
 
-  line = board.wait_until(console.line(r"uptime_ms=(\d+)"), within=seconds(1))
-  zero = board.boot.uptime_zero
+  booted = board.next_boot(uptime_zero=True)
+  board.reset()
+  boot = board.wait_until(booted, within=seconds(1))
+  line = board.wait_until(console.line(r"uptime_ms=(\d+)"), within=seconds(5))
+  zero = boot.uptime_zero
   assert zero is not None
   uptime = ms(int(line[1]))
   assert zero.earliest + uptime <= line.at <= zero.latest + uptime + ms(2)
@@ -552,7 +572,7 @@ def test_the_count_survives_a_power_cut(board: Board):
   needs less.
 
   Serial skips it with `board.boots` (the backend does not see the chip's resets).
-- `board.next_boot(cause=None)` is a [described condition](#described-conditions), a
+- `board.next_boot(cause=None, *, uptime_zero=False)` is a [described condition](#described-conditions), a
   `Condition[Boot | None]`, for the first boot after the call: of any cause, or of `cause` only,
   a reset cause as a number such as `POWERON_RESET` (from `esp32tl`). A boot of
   another cause does not satisfy it, and a later one of `cause` still can; to check that the very
@@ -574,7 +594,14 @@ def test_the_count_survives_a_power_cut(board: Board):
   A timeout names it, `NeverHappened: the next boot (POWERON_RESET) did not happen within 1 s:
   waited from …`, and so does the run report: `waits up to 1 s for the next boot (POWERON_RESET)`.
   Without `cause` it is `the next boot`; a cause `RESET_REASONS` does not name reads
-  `the next boot (reset cause 42)`. A `cause` that is not a number raises `TypeError:
+  `the next boot (reset cause 42)`. With `uptime_zero=True` it returns the boot only while its
+  `uptime_zero` is known, read again at each poll, and `None` before; it still waits on the first
+  boot after the call (of `cause`), not on a later one whose zero is known. Its description ends
+  `, with its uptime zero`: a boot whose zero never comes, on a firmware that never starts the
+  counter, on the ESP32-S31, or a boot that resets again before its counter counts, times out as
+  `NeverHappened: the next boot, with its uptime zero did not happen within 1 s: waited from …`.
+  An `uptime_zero` that is not `True` or `False` raises `TypeError: board.next_boot: uptime_zero is
+  1, not True or False`. A `cause` that is not a number raises `TypeError:
   board.next_boot: cause is 'POWERON_RESET', not a reset cause as a number, such as
   POWERON_RESET`, and before the first `power_on()` it raises `BoardOff` as `board.boots` does.
   `board.reset()` and `board.power_on()` return `None`, not this condition

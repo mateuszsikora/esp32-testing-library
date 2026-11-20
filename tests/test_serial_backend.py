@@ -276,6 +276,11 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
         def test_next_boot(board):
             board.power_on()
             board.next_boot()
+        def test_uptime_zero(board):
+            from esp32tl import POWERON_RESET, Boot
+            from esp32tl.units import Duration
+            board.power_on()
+            board.uptime_zero(Boot(1, Duration(0), POWERON_RESET))
         class Silent:
             def receive(self, t, data):
                 return ()
@@ -290,7 +295,7 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
     """)
     )
     result = run_serial(pytester, "-rs")
-    result.assert_outcomes(skipped=30)
+    result.assert_outcomes(skipped=31)
     result.stdout.fnmatch_lines(
         [
             "*serial: uart.gnss takes no model source on this backend, only real*",
@@ -317,6 +322,7 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
             "*serial: wifi takes no model source on this backend, only real*",
             "*serial: bluetooth takes no model source on this backend*",
             "*serial: the backend cannot switch the board's power*",
+            "*serial: the backend does not see the chip's resets*",
             "*serial: the backend does not see the chip's resets*",
             "*serial: the backend does not see the chip's resets*",
             "*serial: the backend does not see the chip's resets*",
