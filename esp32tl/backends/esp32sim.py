@@ -1319,8 +1319,9 @@ class Esp32Sim(Board):
         self.log.test(clock.now, f"waits up to {seconds(ns)} for {description}")
         try:
             value = clock.wait_until(condition, ns, description)
-        except NeverHappened:
-            self.log.test(clock.now, f"{description}: did not happen within {seconds(ns)}")
+        except NeverHappened as error:
+            because = f": {error.why}" if error.why is not None else ""
+            self.log.test(clock.now, f"{description}: did not happen within {seconds(ns)}{because}")
             raise
         except RunEnded:
             self.log.test(clock.now, f"{description}: the run ended first")

@@ -185,8 +185,9 @@ class HttpExchange:
         self._parser = _ResponseParser()
         self._result: ClientResponse | None = None
         self._error: ValueError | ConnectionEnded | None = None
+        # A wait that times out before the device answered the connection's SYN says so.
         self.response: Condition[ClientResponse | None] = Condition(
-            self._find, f"HTTP {method} {path} response", "HTTP"
+            self._find, f"HTTP {method} {path} response", "HTTP", connection.unanswered
         )
         connection._observers.append(self._update)
 
@@ -201,7 +202,7 @@ class HttpExchange:
                     f"http client: {c.identity} {self.method} {self.path} → {self._result.status}"
                 )
                 c.close()
-            elif c.state in ("refused", "reset", "lost", "closed"):
+            elif c.state in ("refused", "reset", "lost", "closed", "timed out"):
                 raise ConnectionEnded(f"{c.name}: {c.state} before HTTP response completed")
         except (ValueError, ConnectionEnded) as error:
             self._error = type(error)(f"HTTP {self.method} {self.path}: {error}")

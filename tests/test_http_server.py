@@ -7,6 +7,7 @@ import json
 import pytest
 
 from esp32tl.backends.esp32sim import Esp32Sim
+from esp32tl.interfaces import NeverHappened
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.wifi import Wifi
 from esp32tl.net import Internet
@@ -184,3 +185,68 @@ def test_http_client_gets_status_and_posts_json(
     assert "GET /status → 200" in board.report()
     assert "POST /echo → 200" in board.report()
     assert board.link.warnings == [] and board.link.error is None
+
+
+def test_a_get_sent_at_the_lease_is_answered_once_its_syn_goes_again(
+    board: Esp32Sim, wifi: Wifi
+) -> None:
+    # The device takes the leased address only once its DHCP client's ARP check is done, about 1 s
+    # after the ACK, and drops a SYN to it until then, silently: the first SYN gets no answer and
+    # the one 1 s later is accepted, with no wait for a line of the firmware's.
+    network = wifi.access_point(SSID, password=PASSWORD)
+    lease = network.dhcp.next_lease()
+    board.power_on()
+    leased = board.wait_until(lease, within=seconds(15))
+    get = network.http_client.get("/status")
+    status = board.wait_until(get.response, within=seconds(3))
+    assert status.status == 200 and status.json()["requests"] == 1
+    connection = get.connection
+    first, again = connection.syns
+    assert 0 <= first.ns - leased.at.ns <= 1_000_000
+    assert again.ns - first.ns == 1_000_000_000
+    assert connection.established_at is not None and connection.established_at > again
+    name = "net: TCP 10.64.0.1:49152 → 10.64.0.2:80"
+    assert f"{name} SYN again, 2 of 7" in [e.get("event") for e in network.events]
+    assert board.link.warnings == [] and board.link.error is None
+
+
+def test_a_wait_on_a_syn_with_no_answer_yet_says_so(board: Esp32Sim, wifi: Wifi) -> None:
+    # What docs/features/network-user.md quotes, at the times it quotes.
+    network = wifi.access_point(SSID, password=PASSWORD)
+    lease = network.dhcp.next_lease()
+    board.power_on()
+    board.wait_until(lease, within=seconds(15))
+    get = network.http_client.get("/status")
+    network.connect(8080)
+    with pytest.raises(NeverHappened) as error:
+        board.wait_until(get.response, within=ms(500))
+    assert str(error.value) == (
+        "HTTP GET /status response did not happen within 0.5 s: the SYN at 1.032 s has had no"
+        " answer in 0.5 s (no SYN-ACK, no RST); waited from 1.032 s to 1.532 s of the board's time"
+    )
+    assert network.report()[-3:] == [
+        "TCP connections the test opened:",
+        "  device:80/1  TCP 10.64.0.1:49152 → 10.64.0.2:80  connecting: the SYN at 1.032 s has had"
+        " no answer in 0.5 s (no SYN-ACK, no RST)",
+        "  device:8080/1  TCP 10.64.0.1:49153 → 10.64.0.2:8080  connecting: the SYN at 1.032 s has"
+        " had no answer in 0.5 s (no SYN-ACK, no RST)",
+    ]
+    # Once the device has its address, the SYNs that go again find the server, and no listener.
+    assert board.wait_until(get.response, within=seconds(3)).status == 200
+    assert network.report()[-2:] == [
+        "  device:80/1  TCP 10.64.0.1:49152 → 10.64.0.2:80  established at 2.036 s",
+        "  device:8080/1  TCP 10.64.0.1:49153 → 10.64.0.2:8080  refused at 2.036 s",
+    ]
+
+
+def test_a_syn_to_a_port_nobody_listens_on_is_refused_once_the_device_has_its_address(
+    board: Esp32Sim, wifi: Wifi
+) -> None:
+    network = wifi.access_point(SSID, password=PASSWORD)
+    lease = network.dhcp.next_lease()
+    board.power_on()
+    board.wait_until(lease, within=seconds(15))
+    connection = network.connect(8080)
+    refused = board.wait_until(connection.refused(), within=seconds(3))
+    # Dropped before the address, as on port 80; a RST once the device has it.
+    assert len(connection.syns) == 2 and refused > connection.syns[1]

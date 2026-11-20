@@ -851,6 +851,7 @@ writes with `board.nvs(...)` ([flash contents](flash-contents-user.md#supply-nvs
 |---|---|---|
 | `greeting` | string | printed after the banner; empty when missing |
 | `ssid`, `password` | strings | the network it joins as a station; without `ssid` it does not start Wi-Fi |
+| `listen_delay_ms` | `u32` (`esp32tl.u32`) | as a station, how long after `WL_CONNECTED` it starts `WebServer`, printing `arduino_shell: connected at <address>` first when not 0; 0 when missing, so it starts with the address. A test of a server that listens after its address sets it ([the network](network-user.md#open-a-tcp-connection-to-the-device)) |
 
 At 115200 baud on `Serial`, every line it prints starts with `arduino_shell: ` and ends with
 `\r\n`:

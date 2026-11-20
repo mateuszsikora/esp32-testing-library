@@ -2480,3 +2480,36 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_arduino_softap.py::test_softap_leaves_and_rejoins`,
   `tests/test_determinism.py::test_a_dropped_call_and_the_redial`,
   `tests/test_determinism.py::test_device_softap_left_and_joined_again`
+
+## A SYN the device does not answer
+
+- **280.** The SYN of a connection the test opened goes again, the same segment, 1, 3, 7, 15, 31
+  and 63 s after the first while the device answers none, and the connection ends as
+  `"timed out"` 127 s after the first, with no SYN more. A SYN-ACK or a RST to any of them ends the
+  timer. While the connection is connecting, a wait on any of its conditions, or on the HTTP
+  client's `response`, that times out names every SYN sent so far: each one sent again before the
+  last as having got no answer, the last as having had none in its age, or `has just gone` at age
+  0, and the condition's `waiting` is called once for it. The run report lists each connection
+  the test opened with its state. On `http_server`, a `GET` sent
+  when the DHCP lease holds is answered after the SYN sent again 1 s later, with no wait for a
+  console line, and a port nothing listens on refuses that SYN.
+  `tests/test_net_client.py::test_an_unanswered_syn_goes_again_on_a_doubling_rto_then_times_out`,
+  `tests/test_net_client.py::test_the_devices_answer_to_a_syn_sent_again_ends_its_timer`,
+  `tests/test_net_client.py::test_a_connection_lost_while_connecting_keeps_no_timer`,
+  `tests/test_net_client.py::test_a_http_response_waited_for_before_the_syn_is_answered_says_so`,
+  `tests/test_clock.py::test_a_tcp_wait_that_times_out_names_the_syns_sent_again_on_the_clock`,
+  `tests/test_http_server.py::test_a_get_sent_at_the_lease_is_answered_once_its_syn_goes_again`,
+  `tests/test_http_server.py::test_a_wait_on_a_syn_with_no_answer_yet_says_so`,
+  `tests/test_http_server.py::test_a_syn_to_a_port_nobody_listens_on_is_refused_once_the_device_has_its_address`,
+  `tests/test_net_client.py::test_a_syn_ack_slower_than_the_rto_meets_the_syn_sent_again_once`,
+  `tests/test_arduino_shell.py::test_serves_a_get_sent_at_the_lease_once_its_syn_goes_again`
+- **281.** `network.accepting(port)` connects at once and again 1 s after each refusal, on the
+  board's clock whether a wait polls it or not, up to 30 connections; it returns the first
+  connection the device accepts, open, and raises `ConnectionEnded` once a connection ended
+  another way or all 30 were refused, and `NotReachable` when a connection again finds the device
+  out of reach. On `arduino_shell` with `WebServer` 200 ms after the address, a `GET` at the lease
+  is refused, and `accepting(80)` is accepted after one refusal, with no wait for a console line.
+  `tests/test_net_client.py::test_accepting_connects_again_a_second_after_each_refusal`,
+  `tests/test_net_client.py::test_accepting_gives_up_after_30_refusals`,
+  `tests/test_net_client.py::test_accepting_raises_for_a_lost_connection_and_an_unreachable_device`,
+  `tests/test_arduino_shell.py::test_a_server_that_listens_after_its_address_is_waited_for_with_accepting`

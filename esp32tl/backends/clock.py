@@ -18,6 +18,7 @@ from collections.abc import Callable
 from typing import TypeVar
 
 from esp32tl.interfaces import NeverHappened, RunEnded
+from esp32tl.interfaces.condition import waiting
 from esp32tl.link.boardlink import RunTo
 from esp32tl.link.protocol import FlashDump, FlashDumpAck, FlashWrite, FlashWriteAck
 from esp32tl.units import Duration
@@ -225,12 +226,19 @@ class HeldClock:
             if value:
                 return value
             with self._cv:
-                if self._now >= deadline:
-                    raise NeverHappened(
-                        f"{description} did not happen within {seconds(within)}: waited from"
-                        f" {seconds(start)} to {seconds(self._now)} of the board's time"
-                    )
-                until = deadline if step is None else min(deadline, self._now + step)
+                end = self._now
+                if end < deadline:
+                    until = deadline if step is None else min(deadline, end + step)
+            if end >= deadline:
+                # Outside the lock too, once: the condition's own words on why it did not hold.
+                why = waiting(condition)
+                raise NeverHappened(
+                    f"{description} did not happen within {seconds(within)}: "
+                    + (f"{why}; " if why is not None else "")
+                    + f"waited from {seconds(start)} to {seconds(end)} of the board's time",
+                    why,
+                )
+            with self._cv:
                 try:
                     self._advance(until, what, latency)
                 except RunEnded as ended:

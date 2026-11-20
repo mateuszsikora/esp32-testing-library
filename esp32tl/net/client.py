@@ -5,19 +5,21 @@
 The connection comes from `10.64.0.1`, from an ephemeral port that is never reused, 49152 first,
 so runs repeat. Its conditions fail loudly: one that can no longer hold, a connection refused when
 the test waits for it to be established, raises `ConnectionEnded` at once rather than wait out its
-time.
+time; and a wait on one that times out while the connection is still connecting says which SYNs
+got no answer.
 """
 
 from collections.abc import Callable
 
 from esp32tl.interfaces.condition import Condition
+from esp32tl.net.ip import SYN_RETRIES
 from esp32tl.units import Duration
 
 
 class ConnectionEnded(AssertionError):
     """What the test asked of its TCP connection can no longer happen: the device refused or reset
-    it, closed it first, or it was lost: the link went down, or the device reset or lost its
-    power."""
+    it, closed it first, it timed out with no answer to its SYNs, or it was lost: the link went
+    down, or the device reset or lost its power."""
 
 
 class NotReachable(RuntimeError):
@@ -31,7 +33,14 @@ _HOW = {
     "refused": "refused by the device",
     "reset": "reset by the device",
     "lost": "lost with the link",
+    "timed out": f"timed out with no answer to its {1 + SYN_RETRIES} SYNs",
 }
+
+
+def _listed(times: list[Duration]) -> str:
+    """`0.957 s`, `0.957 s and 1.957 s`, `0.957 s, 1.957 s and 3.957 s`."""
+    shown = [str(t) for t in times]
+    return shown[0] if len(shown) == 1 else f"{', '.join(shown[:-1])} and {shown[-1]}"
 
 
 class TcpConnection:
@@ -39,9 +48,10 @@ class TcpConnection:
 
     `state` is `"connecting"` until the device answers, then `"established"`, and at the end
     `"closed"` (both ends closed), `"refused"` (the device answered the SYN with a RST), `"reset"`
-    (a RST later) or `"lost"` (the link went down, or the device reset or lost its power).
-    `received` holds every byte the device sent, in order. Calls run while the board is held;
-    the network calls back during the board's turns."""
+    (a RST later), `"lost"` (the link went down, or the device reset or lost its power) or
+    `"timed out"` (no answer to any of its SYNs). `syns` holds when each SYN went, and `received`
+    every byte the device sent, in order. Calls run while the board is held; the network calls
+    back during the board's turns."""
 
     def __init__(
         self,
@@ -65,6 +75,7 @@ class TcpConnection:
         self._closing = False
         self._end: str | None = None
         self._why: str | None = None  # why a lost connection was lost, unless with the link
+        self.syns: list[Duration] = []
         self.established_at: Duration | None = None
         self.closed_at: Duration | None = None
         self.ended_at: Duration | None = None
@@ -96,6 +107,29 @@ class TcpConnection:
         if self._end == "lost" and self._why is not None:
             return f"lost when {self._why}"
         return _HOW[self._end]
+
+    def unanswered(self) -> str | None:
+        """While the connection is connecting, what its SYNs got: each SYN sent again says that the
+        one before it got no answer in its RTO, and the last one has had none so far. `the SYN at
+        1.032 s has had no answer in 0.5 s (no SYN-ACK, no RST)`; `the SYNs at 1 s and 2 s got no
+        answer (no SYN-ACK, no RST), and the SYN at 4 s has just gone` at the instant the last one
+        went. `None` once the device answered or the connection ended. A wait on any of its
+        conditions that times out says it."""
+        if self.state != "connecting" or not self.syns:
+            return None
+        *before, last = self.syns
+        age = Duration(self._now() - last.ns)
+        if age.ns:
+            now = f"has had no answer in {age}" if not before else f"has had none in {age}"
+        else:
+            now = "has just gone"
+        if not before:
+            return f"the SYN at {last} {now}" + (" (no SYN-ACK, no RST)" if age.ns else "")
+        which = "SYN" if len(before) == 1 else "SYNs"
+        return (
+            f"the {which} at {_listed(before)} got no answer (no SYN-ACK, no RST),"
+            f" and the SYN at {last} {now}"
+        )
 
     @property
     def received(self) -> bytes:
@@ -144,7 +178,7 @@ class TcpConnection:
     def established(self) -> Condition[Duration | None]:
         """A condition returning when the device accepted the connection. Raises
         `ConnectionEnded` once the device refused it, or it was lost (the link down, the device
-        reset or without power) before the device answered."""
+        reset or without power) or timed out before the device answered."""
 
         def find() -> Duration | None:
             if self.established_at is not None:
@@ -153,7 +187,7 @@ class TcpConnection:
                 raise ConnectionEnded(f"{self.name} was {self._how} before it was established")
             return None
 
-        return Condition(find, f"{self.name} established", "TCP")
+        return Condition(find, f"{self.name} established", "TCP", self.unanswered)
 
     def closed(self) -> Condition[Duration | None]:
         """A condition returning when the device closed its end, a FIN, whoever closed first.
@@ -166,7 +200,7 @@ class TcpConnection:
                 raise ConnectionEnded(f"{self.name} was {self._how}, not closed by the device")
             return None
 
-        return Condition(find, f"{self.name} closed by the device", "TCP")
+        return Condition(find, f"{self.name} closed by the device", "TCP", self.unanswered)
 
     def refused(self) -> Condition[Duration | None]:
         """A condition returning when the device answered the connection's SYN with a RST. Raises
@@ -175,8 +209,14 @@ class TcpConnection:
 
     def reset(self) -> Condition[Duration | None]:
         """A condition returning when the device reset the established connection. Raises
-        `ConnectionEnded` once it ended another way: closed, refused or lost."""
+        `ConnectionEnded` once it ended another way: closed, refused, lost or timed out."""
         return self._ended_by("reset")
+
+    def timed_out(self) -> Condition[Duration | None]:
+        """A condition returning when the connection timed out with no answer to any of its SYNs,
+        127 s after the first. Raises `ConnectionEnded` once the device answered instead,
+        accepting or refusing it, or it was lost first."""
+        return self._ended_by("timed out")
 
     def _ended_by(self, kind: str) -> Condition[Duration | None]:
         def find() -> Duration | None:
@@ -184,11 +224,11 @@ class TcpConnection:
                 return self.ended_at
             if self._end is not None:
                 raise ConnectionEnded(f"{self.name} was {self._how}, not {_HOW[kind]}")
-            if kind == "refused" and self.established_at is not None:
+            if kind in ("refused", "timed out") and self.established_at is not None:
                 raise ConnectionEnded(f"{self.name} was established, not {_HOW[kind]}")
             return None
 
-        return Condition(find, f"{self.name} {_HOW[kind]}", "TCP")
+        return Condition(find, f"{self.name} {_HOW[kind]}", "TCP", self.unanswered)
 
     def next_data(
         self,
@@ -258,9 +298,14 @@ class TcpConnection:
                 raise ConnectionEnded(f"{self.name} was {how} before the device sent {missing}")
             return None
 
-        return Condition(find, f"the next data on {self.name}{after}{wanted}", "TCP")
+        return Condition(
+            find, f"the next data on {self.name}{after}{wanted}", "TCP", self.unanswered
+        )
 
     # The network's side, during the board's turns.
+
+    def on_syn(self) -> None:
+        self.syns.append(Duration(self._now()))
 
     def on_established(self) -> None:
         self.established_at = Duration(self._now())

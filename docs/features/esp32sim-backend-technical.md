@@ -292,7 +292,9 @@ in the test's thread:
   lock, while the link is held: at once, then after each step to `min(deadline, now + STEP_NS)`,
   `STEP_NS` being 100 emulated milliseconds. A turn the link takes sooner for another reason, at a
   replayed event's time or an interface's latency, is asked too. It returns the condition's first
-  true value, and at the deadline raises `NeverHappened`. When the run ends while it waits, or has
+  true value, and at the deadline raises `NeverHappened`, with what the condition's `waiting` says
+  (`esp32tl.interfaces.condition.waiting`, called once, outside the lock), if anything, between the
+  window's length and `waited from`, and in the exception's `why`. When the run ends while it waits, or has
   ended before, it asks the condition once more and raises the `RunEnded` unless it holds. An exception from the
   condition propagates to the test, and the link stays held.
 - `wait_for_event(condition, within, description, latency)` is `wait_until` without the steps: it
@@ -320,8 +322,9 @@ name; `wait_on_clock(condition, within, description)` takes the description from
 console does. `wait` logs `board.wait({seconds})` at the board's time it starts from, and `the run
 ended while the test waited` when it raises `RunEnded`; `wait_on_clock`, and with it `wait_until`
 and the console's expects, logs `waits up to {within} for {description}`, then `{description}:
-happened`, `{description}: did not happen within {within}` or `{description}: the run ended first`,
-at the board's time it returns or raises at.
+happened`, `{description}: did not happen within {within}`, followed by `: {why}` when the
+`NeverHappened` has a `why`, or `{description}: the run ended first`, at the board's time it
+returns or raises at.
 
 **The wait for a wake.** `wait_for_wake(*, within)` raises `BoardOff` before `power_on()`, and on
 a board that is off (`the board is off: board.wait_for_wake() waits for a board that is on`):
@@ -657,7 +660,7 @@ In the test body:
 | the message of `capabilities.check`, as `no backend takes a 'replay' source on uart.gnss; the sources there are model` or `no backend can tap uart.gnss` | `SourceError` | A source or a tap no backend declares |
 | `esp32sim: {reason}`, as `esp32sim: uart.gnss takes no replay source on this backend, only model` or `esp32sim: uart.gnss cannot be tapped on this backend` | the `skip` given: pytest's skip under the plugin | A source or a tap this backend does not declare |
 | `{what} takes a Duration, as seconds({value!r}), not {value!r}` (`as seconds(5)` for what is not a number), `{what} takes a Duration of 0 or more, not {duration}` | `TypeError`, `ValueError` | A duration that is not a `Duration`, or is below 0 |
-| `{description} did not happen within {within}: waited from {start} to {end} of the board's time` | `NeverHappened` | `wait_until`'s deadline, and `wait_for_wake`'s, with `a wake from deep sleep` |
+| `{description} did not happen within {within}: waited from {start} to {end} of the board's time`, or `{description} did not happen within {within}: {why}; waited from …` when the condition's `waiting` returns `why` | `NeverHappened` | `wait_until`'s deadline, and `wait_for_wake`'s, with `a wake from deep sleep` |
 | `board.wait_for_wake: boot {number} at {at} is {reason} (reset cause {cause}), not a wake from deep sleep (DEEPSLEEP_RESET)` | `AssertionError` | The chip booted again through another reset: `esp_restart()`, a watchdog |
 | `the board is off: board.wait_for_wake() waits for a board that is on` | `BoardOff` | `wait_for_wake` after `power_off()` |
 | `the run ended {when} while the test waited {what}: {reason}` | `RunEnded` | The run ended during, or before, a wait. `{when}` is `at {time}` from the runner's `stats`, `after the turn at {time}` without them, the last held turn being only a bound, or `before its first turn`. `{what}` is `until {time}` for `wait`, `for {description}` for `wait_until`, `for a wake from deep sleep` for `wait_for_wake`; `{reason}` is `[the link failed: {error}; ][{no_bluetooth}; ]the runner exited with code {code}; its last output:` and the tail |

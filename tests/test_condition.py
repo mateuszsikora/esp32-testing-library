@@ -8,7 +8,7 @@ from conftest import CountingList
 import esp32tl
 from esp32tl import Condition, condition
 from esp32tl.interfaces.board import DEEPSLEEP_RESET, POWERON_RESET, Board, Boot, UptimeZero
-from esp32tl.interfaces.condition import FirstFrom
+from esp32tl.interfaces.condition import FirstFrom, waiting
 from esp32tl.units import Duration
 
 
@@ -71,6 +71,18 @@ def test_what_is_not_a_condition_is_refused(
 ) -> None:
     with pytest.raises(TypeError, match=f"^{message}$"):
         condition(find, description, service=service)  # type: ignore[arg-type]
+
+
+def test_waiting_says_why_only_for_a_condition_that_has_it() -> None:
+    reasons = ["the SYN at 1 s got no answer", None]
+    said = condition(lambda: None, "an event", waiting=lambda: reasons.pop(0))
+    assert said.waiting is not None
+    assert waiting(said) == "the SYN at 1 s got no answer" and waiting(said) is None
+    assert waiting(condition(lambda: None, "an event")) is None
+    # Any other callable says nothing, whatever attribute it has.
+    assert waiting(SimpleNamespace(waiting=lambda: "no")) is None
+    with pytest.raises(TypeError, match=r"^condition: waiting is 'no', not a function of no"):
+        condition(lambda: None, "an event", waiting="no")  # type: ignore[arg-type]
 
 
 def test_first_from_reads_each_record_once_and_keeps_its_match() -> None:

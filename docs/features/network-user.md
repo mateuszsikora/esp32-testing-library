@@ -210,7 +210,9 @@ happens after the call that makes it is `next_*` (`next_message`, `next_connecti
 (`messages`, `clients`, `connection_ends`, `subscribe_requests`, `leases`, NTP's `exchanges`, DNS's
 `questions`) is the history itself; and a condition named for a state (`subscribed`, TLS's
 `handshake_started` and `handshake_completed`, a TCP connection's `established`, `closed`,
-`refused` and `reset`) is true while that state holds, or once it has.
+`refused`, `reset` and `timed_out`) is true while that state holds, or once it has. The network's
+`accepting(port)` is a state too, the port accepting a connection, but it acts: it opens
+connections until the device accepts one.
 
 All MQTT conditions have timeout representations such as `the next MQTT message on 'a/+' saying
 b'new'`, `the next MQTT client connection`, `the next MQTT connection attempt`, `the next MQTT
@@ -652,7 +654,9 @@ transcript logs each datagram dropped, as
 What the network's own TCP has to send waits while the path drops, and goes at the restore: a
 PUBLISH from `broker.publish`, a bridged service's bytes, the FIN of a connection the broker's
 keepalive closed. That is what a real network's retransmission would deliver; this TCP sends
-nothing again by itself ([Open a TCP connection](#open-a-tcp-connection-to-the-device)). Two cases
+nothing again by itself but the SYN of a connection the test opened, which goes on its schedule
+into the black hole too, dropped, until one goes after the restore ([Open a TCP
+connection](#open-a-tcp-connection-to-the-device)). Two cases
 it would otherwise never get past are covered:
 
 - At the restore, each connection with bytes or a FIN unacknowledged or waiting gets one probe, a
@@ -895,36 +899,111 @@ def test_answers_a_get(board, wifi, console):
     assert json.loads(body)["status"] == "ok"
 ```
 
-Wait for the firmware to say its server listens, as its own client would wait for it: a DHCP lease
-or IPCP gives the device its address, not its server, and a SYN that comes first is refused. In
-`tests/test_http_server.py` the station takes its address at about 2.03 emulated seconds and the
-server listens less than a millisecond later (measured with ESP-IDF v5.3.6 at esp32sim's pin in
-`runner/Cargo.toml`; a bump of either can move it). What the test writes before the device accepts the connection
-waits for the handshake.
+A DHCP lease or IPCP gives the device an address, but the device does not use it at once.
+Behind the access point, ESP-IDF's DHCP client takes a leased address only after its ARP check
+(`CONFIG_LWIP_DHCP_DOES_ARP_CHECK`, on by default), and until then its stack drops every SYN to
+that address without answering. In `tests/test_http_server.py` DHCP acknowledges the address at
+1.031 emulated seconds. The station takes it at 2.027 s, and the server listens 0.6 ms later
+(measured with ESP-IDF v5.3.6 at esp32sim's pin in `runner/Cargo.toml`; a bump of either can move
+it). Behind Arduino-ESP32 3.3, in `tests/test_arduino_shell.py`, the ACK comes at 0.956 s, and the
+station takes the address and starts `WebServer`, as soon as `WiFi.status()` is `WL_CONNECTED`,
+between 1.938 and 1.943 s: a SYN that arrives at 1.938 s gets nothing on either port, one at
+1.943 s is accepted on port 80. Its `listening on` line ends at 1.958 s, once `Serial` has printed
+it, after the server listens. What one SYN gets, measured on port 80 and on a port nothing
+listens on:
+
+| The SYN reaches the device | It gets |
+|---|---|
+| Before the device has taken its address, as a SYN sent when `dhcp.next_lease()` holds | Nothing: the device drops it |
+| After the device has taken its address, on a port nothing listens on, as before the server's `listen()` | A RST: `"refused"` |
+| On a port a server listens on | A SYN-ACK: `"established"` |
+
+So a SYN that gets no answer is sent again, as a real client sends it: 1 s after the first SYN,
+then each time twice as long after the last one (RFC 6298's initial RTO of 1 s, doubled), 6
+times, as Linux's default `tcp_syn_retries` does. The SYNs go at 0, 1, 3, 7, 15, 31 and 63 s
+after `connect`. 64 s after the last one, 127 s after the first, the connection ends as
+`"timed out"`. A test can therefore connect as soon as the lease holds, with no wait for a
+console line, to a server that starts with its address: on `http_server` and `arduino_shell` the
+SYN sent at the lease gets no answer, and the one sent 1 s later is accepted. The margin is small:
+that SYN arrives about 5 ms after `http_server` listens (2.033 s against 2.0277 s) and
+15 ms or more after `arduino_shell` does (1.958 s against at most 1.943 s), so firmware that spends
+longer than that between its address and `listen()` refuses it. When the test does not know when
+the firmware's server listens, wait for the port with `network.accepting(port)`, below.
+
+```python
+def test_answers_once_leased(board, wifi):
+    network = wifi.access_point("myssid", password="mypassword")
+    lease = network.dhcp.next_lease()
+    board.power_on()
+    board.wait_until(lease, within=seconds(15))
+    status = board.wait_until(network.http_client.get("/status").response, within=seconds(3))
+    assert status.status == 200
+```
+
+A server that starts listening some time after its address, as a sketch that does more setup
+after `WL_CONNECTED` does, refuses the SYNs that arrive in between, and a refused connection is
+not tried again. For such firmware, wait for the port with `network.accepting(port)`: it connects
+now, and again 1 s after each refusal, on the board's clock, up to 30 connections, and returns the
+first connection the device accepts, open. Close it before a request on a server that takes one
+client at a time, as Arduino's `WebServer` does:
+
+```python
+def test_answers_once_its_server_listens(board, wifi):
+    board.nvs({"shell": {"ssid": "myssid", "password": "mypassword", "listen_delay_ms": u32(200)}})
+    network = wifi.access_point("myssid", password="mypassword")
+    lease = network.dhcp.next_lease()
+    board.power_on()
+    board.wait_until(lease, within=seconds(30))
+    board.wait_until(network.accepting(80), within=seconds(5)).close()
+    status = board.wait_until(network.http_client.get("/status").response, within=seconds(5))
+    assert status.status == 200
+```
+
+There `arduino_shell` starts `WebServer` 200 ms after its address ([validation
+firmware](validation-firmware-user.md#arduino_shell)): a `GET` sent at the lease ends `refused` at
+its SYN sent again, while `accepting(80)` is refused once and accepted 1 s later. Each connection it
+opens is in `connections`. Its retries are timers of the network, not of the wait: a condition the
+test stopped waiting on, as one a `pytest.raises(NeverHappened)` caught, goes on connecting until
+the device accepts or its 30 connections are used, and the connection it gets then stays open, with
+no one to close it, in `network.connections`. On a server that takes one client at a time that idle
+connection holds back the next request until the server drops it, as `WebServer` does after
+`HTTP_MAX_DATA_WAIT`, 5 s. Keep the condition and close what it returns once it holds: it returns
+the accepted connection however late it is called. `accepting` raises `NotReachable` at the call as
+`connect` does, its message naming `network.accepting(80)`, and from the condition when a connection
+again finds the device out of reach; and `ConnectionEnded` once a connection ended another way, lost
+or timed out, or once the device refused all 30, as `TCP 10.64.0.2:80 accepting a connection: the
+device refused 30 connections, the last at 29.001 s, and no more go`. While it waits, a timeout says
+what it is at, as `the device refused 1 connection, the last at 0.002 s; the next goes at 1.002 s`,
+or, with the next connection's SYN out, that and what the SYN got (`unanswered()`). What the test
+writes before the device accepts a connection waits for the handshake.
 
 | Network API | Meaning |
 |---|---|
 | `connect(port, *, address=None)` | Open a TCP connection to the device's `port` (1 to 65535) and return its `TcpConnection`. `address` is the device's, `device_address` unless given, as for firmware with a static address behind the access point |
 | `device_address` | The device's address on the link now: the one IPCP gave it behind the modem, the one this link's DHCP acknowledged behind the access point, `10.64.0.2` either way; `None` before it has one, from the device's chip reset or power loss until IPCP opens again or DHCP acknowledges it again, and from a DISCOVER, a REQUEST not acknowledged, a RELEASE or a DECLINE of the device's until the next ACK |
-| `connections` | Every `TcpConnection` the test opened, in order |
+| `accepting(port, *, address=None)` | Condition returning the first `TcpConnection` the device accepts on `port`, connecting now and again 1 s after each refusal, up to 30 connections |
+| `connections` | Every `TcpConnection` the test opened, in order, those of `accepting` among them |
 
 | `TcpConnection` API | Meaning |
 |---|---|
 | `write(data)` | Send bytes, or `str` as UTF-8: now, once the connection is established and the device's window has room, else as soon as it does |
 | `close()` | Close the test's end, a FIN after what was written; a second call, or one after the connection ended, does nothing |
 | `received`, `text` | Every byte the device sent so far, in order; the same as UTF-8 with replacement |
-| `state` | `"connecting"`, `"established"`, then `"closed"` (both ends closed), `"refused"` (a RST answered the SYN), `"reset"` (a RST later) or `"lost"` (the link went down, or the device's chip reset or lost its power) |
+| `state` | `"connecting"`, `"established"`, then `"closed"` (both ends closed), `"refused"` (a RST answered the SYN), `"reset"` (a RST later), `"lost"` (the link went down, or the device's chip reset or lost its power) or `"timed out"` (none of its 7 SYNs got an answer, 127 s after the first) |
+| `syns` | When each SYN went, a list of `Duration`: the first at `connect`, then each one sent again, until the device answered or the connection ended |
+| `unanswered()` | While the connection is `"connecting"`, what its SYNs got: each one sent again got no answer in its RTO, and the last has had none so far, as `the SYN at 1.032 s has had no answer in 0.5 s (no SYN-ACK, no RST)`, `the SYN at 1.032 s got no answer (no SYN-ACK, no RST), and the SYN at 2.032 s has had none in 0.25 s`, or `..., and the SYN at 2.032 s has just gone` at the instant it went; `None` once the device answered or the connection ended |
 | `established()` | Condition returning when the device accepted the connection, a `Duration` |
 | `closed()` | Condition returning when the device closed its end (its FIN), whoever closed first |
 | `refused()` | Condition returning when the device answered the SYN with a RST |
 | `reset()` | Condition returning when the device reset the established connection |
+| `timed_out()` | Condition returning when the connection timed out with no answer to any of its SYNs |
 | `next_data(until=None, *, size=None, start=None)` | Condition on the bytes the device sends after `start`, an offset into `received`, which is where `received` ends at the call unless given: with `until` (bytes or text), returns them up to and including the first `until` among them; with `size`, the first `size` of them; with neither, whatever has arrived, once anything has |
 | `address`, `port`, `local`, `local_port` | The device's address and port, and the test's: `10.64.0.1` and the connection's ephemeral port |
 | `at`, `established_at`, `closed_at`, `ended_at` | When the test connected, the device accepted, the device closed its end and the connection ended, each a `Duration` or `None` |
 | `identity` | `device:<port>/<n>`, the connection's stream in the transcript |
 
-A connection is established, closed, refused or reset once at most, so those four conditions read
-its state: one returns its event's time however long ago it happened. `next_data` is a next-event
+A connection is established, closed, refused, reset or timed out once at most, so those five
+conditions read its state: one returns its event's time however long ago it happened. `next_data` is a next-event
 condition, with the boundary and polling of the [MQTT next-event
 conditions](#history-next-events-and-current-state) at `start`. Every condition fails loudly: once it
 can no longer hold, it raises `ConnectionEnded` (an `AssertionError`, from `esp32tl`)
@@ -935,11 +1014,21 @@ an accepted one, `... was established, not refused by the device`; `next_data(un
 the device closed without sending it, `... was closed by the device before the device sent b'!'`;
 and once the connection is lost, `... was lost with the link`, `... was lost when the device
 reset` or `... was lost when the device lost its power`, then what can no longer happen, as
-`before it was established`. A timeout names the condition: `TCP 10.64.0.1:49152 → 10.64.0.2:80
-established did not happen within 1 s`, and for `next_data`, `the next data on TCP
-10.64.0.1:49152 → 10.64.0.2:80 up to b'\r\n\r\n'`, with `after byte <start>` when `start` is
-not 0 and `, <size> bytes` for `size`. Boolean coercion raises
+`before it was established`. Once its SYNs time out, `established()` raises `... was timed out with
+no answer to its 7 SYNs before it was established`, and `timed_out()` on an accepted connection
+raises `... was established, not timed out with no answer to its 7 SYNs`. A timeout names the
+condition: `TCP 10.64.0.1:49152 → 10.64.0.2:80 established did not happen within 1 s`, and for
+`next_data`, `the next data on TCP 10.64.0.1:49152 → 10.64.0.2:80 up to b'\r\n\r\n'`, with
+`after byte <start>` when `start` is not 0 and `, <size> bytes` for `size`. Boolean coercion raises
 `TypeError("call the TCP condition with (), or pass it to board.wait_until")`.
+
+If the connection is still connecting when a wait times out, the message also says what its SYNs
+got (`unanswered()`), before the window. For a wait from 1 s, the third SYN went at the wait's last
+instant:
+
+```text
+TCP 10.64.0.1:49152 → 10.64.0.2:80 established did not happen within 3 s: the SYNs at 1 s and 2 s got no answer (no SYN-ACK, no RST), and the SYN at 4 s has just gone; waited from 1 s to 4 s of the board's time
+```
 
 A response read by its length takes `start`, because the segment that brought a head may bring the
 body's first bytes with it, and a new condition's boundary would leave those out:
@@ -982,8 +1071,8 @@ network's life, and its initial sequence number is fixed, so runs repeat. It off
 and no other option, takes the device's MSS up to 1400 (536 when it offers none), and respects the
 device's window: a zero window holds what the test wrote until the device announces room, and
 nothing probes it but the restore of the path after a black hole ([Drop every
-datagram](#drop-every-datagram-and-restore-the-path)). It does not retransmit and keeps no timers,
-and has no TIME_WAIT. A segment from the device ahead of its stream, which a link that loses nothing
+datagram](#drop-every-datagram-and-restore-the-path)). It sends nothing again but its SYN, keeps no
+timer but the SYN's, and has no TIME_WAIT. A segment from the device ahead of its stream, which a link that loses nothing
 cannot produce, fails the run: the transcript logs `net: TCP 10.64.0.1:49152 → 10.64.0.2:80: the
 device sent sequence 5, 4 bytes ahead of 1, which a link that loses nothing cannot produce`, and
 behind the access point the link's error is `wifi.receive raised OutOfOrder: ` and that line. Losing
@@ -1001,15 +1090,35 @@ service's end, as the broker's keepalive. A SYN the new stack sends from the sam
 service resets the old connection, logged `reset: the device opened a new connection from its port`,
 and opens a new one, as the RST a challenge ACK draws from the new stack would (RFC 9293, 3.10.7.4).
 Why it is this TCP: [the test opens TCP connections to the
-device](../decisions/harness.md#the-test-opens-tcp-connections-to-the-device-on-the-same-tcp-with-no-timers).
+device](../decisions/harness.md#the-test-opens-tcp-connections-to-the-device-on-the-same-tcp-with-no-timers),
+and [it sends a SYN the device does not answer
+again](../decisions/harness.md#the-tests-tcp-sends-a-syn-the-device-does-not-answer-again-on-the-boards-clock).
 
 The transcript and the report carry the connection as they carry the device's: its bytes as stream
 `device:80/1`, `out` from the device as they arrive and `in` to it as each piece goes onto the
 network's path, so what waits for the handshake or for the device's window is there when it goes,
 and what never goes is not there; and the lines
-`net: TCP 10.64.0.1:49152 → 10.64.0.2:80 connecting`, `... established`, then `... closed`,
-`... refused by the device`, `... reset by the device`, `... link lost`, `... lost: the device
-reset` or `... lost: the device lost its power`.
+`net: TCP 10.64.0.1:49152 → 10.64.0.2:80 connecting`, `... SYN again, 2 of 7` for each SYN sent
+again, `... established`, then `... closed`, `... refused by the device`, `... reset by the
+device`, `... link lost`, `... lost: the device reset`, `... lost: the device lost its power` or
+`... timed out: no answer to 7 SYNs`. After the network's events, the report has the line
+`TCP connections the test opened:` and one line for each connection, with its state, the time of
+that state for every state but `connecting`, and for a connecting one what its SYNs got. A
+`GET /status` and a `connect(8080)` to `http_server` at its lease, 1.032 s, read at 1.532 s:
+
+```text
+TCP connections the test opened:
+  device:80/1  TCP 10.64.0.1:49152 → 10.64.0.2:80  connecting: the SYN at 1.032 s has had no answer in 0.5 s (no SYN-ACK, no RST)
+  device:8080/1  TCP 10.64.0.1:49153 → 10.64.0.2:8080  connecting: the SYN at 1.032 s has had no answer in 0.5 s (no SYN-ACK, no RST)
+```
+
+and once the SYNs sent again at 2.032 s are answered:
+
+```text
+TCP connections the test opened:
+  device:80/1  TCP 10.64.0.1:49152 → 10.64.0.2:80  established at 2.036 s
+  device:8080/1  TCP 10.64.0.1:49153 → 10.64.0.2:8080  refused at 2.036 s
+```
 
 ## Withhold PUBACK and disconnect a client
 
@@ -1518,7 +1627,8 @@ A receive FIFO overflow on the modem's route immediately fails with
 `uart.modem: UART receive overflow (rxfifo_ovf) on GPIO 27: the simulated network requires a lossless route`.
 Other routes retain their existing overflow policy; frame errors remain fatal everywhere.
 The simulated TCP accepts connections and [opens the test's](#open-a-tcp-connection-to-the-device),
-but does not retransmit or recover packet loss. The path
+but sends nothing again except the SYN of a connection the test opened, and does not recover
+packet loss. The path
 loses nothing ([packet loss is postponed](../decisions/harness.md#packet-loss-on-the-network-path-is-postponed)).
 Malformed packets are discarded or their application connection is closed; events help explain
 why the firmware stopped progressing. The test's `within=` and wall-time timeout still bound waits.
@@ -1542,8 +1652,10 @@ unchanged. See [the modem](modem-user.md) and [determinism](../guides/testing.md
 
 ## Call the device's HTTP API
 
-After the device has an address and its server is listening, `network.http_client` sends HTTP/1.1
-requests through the same simulated TCP path as `network.connect`. For example, behind
+After the device has an address, `network.http_client` sends HTTP/1.1 requests through the same
+simulated TCP path as `network.connect`, whose SYN is sent again until the device has taken its
+address and answers. A refused connection is not tried again: wait for a server that listens
+after its address with [`network.accepting(port)`](#open-a-tcp-connection-to-the-device) first. For example, behind
 `network = wifi.access_point("myssid", password="mypassword")`, once the firmware is ready:
 
 ```python
@@ -1576,8 +1688,12 @@ read-to-close and chunked response bodies are supported; chunk extensions and tr
 accepted, but trailers are not added to response headers. Up to 16 informational responses are skipped;
 204 and 304 have no body. Explicit keep-alive responses and protocol switching are refused.
 There is no TLS, connection reuse or redirect following. Malformed or truncated responses raise
-`ValueError` from the condition with the reason; refused, reset or lost connections raise
-`ConnectionEnded`. Heads, chunk size lines and trailers are limited to 64 KiB excluding their terminating
+`ValueError` from the condition with the reason; refused, reset, lost or timed-out connections raise
+`ConnectionEnded`, as `HTTP GET /status: TCP 10.64.0.1:49152 → 10.64.0.2:80: timed out before
+HTTP response completed`. A wait on `exchange.response` that times out before the device answered
+the connection's SYN says so, as the [TCP conditions](#open-a-tcp-connection-to-the-device) do:
+`HTTP GET /status response did not happen within 0.5 s: the SYN at 1.032 s has had no answer in
+0.5 s (no SYN-ACK, no RST); waited from …`. Heads, chunk size lines and trailers are limited to 64 KiB excluding their terminating
 separators, decoded bodies to 1 MiB. Limits are independent of TCP packet boundaries.
 
 The transcript and report's network section include request and result events such as
