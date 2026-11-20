@@ -80,13 +80,13 @@ hemisphere's letter, `negative` for a value below 0.
 
 | Name | What |
 |---|---|
-| `Duration(ns)` | `esp32tl/units.py`: frozen dataclass, `ns` an `int` (`TypeError` otherwise); `+`, `-` with a `Duration`; `*`, `/` by a number (rounded to the nanosecond); `/` by a `Duration` is a `float`; `-d`, `abs`, ordering; `seconds`; `str` `12.5 s`, `repr` `seconds(12.5)` |
+| `Duration(ns)` | `esp32tl/units.py`: frozen dataclass, `ns` an `int` (`TypeError` otherwise, a `Duration` checked first, with a message of its own); `+`, `-` with a `Duration`; `*`, `/` by a number (rounded to the nanosecond); `/` by a `Duration` is a `float`; `-d`, `abs`, ordering; `seconds`; `str` `12.5 s`, `repr` `seconds(12.5)` |
 | `Speed(m_s)`, `Distance(m)` | Frozen dataclasses of a finite number; `+`, `-`, `*` and `/` by a number, ordering, `-`, `abs`; `Speed * Duration` is a `Distance`, `Distance / Duration` a `Speed`, `Distance / Speed` a `Duration` (`ZeroDivisionError` for 0), `Speed / Speed` and `Distance / Distance` a `float`; `km_h`, `mph`, `knots`; `km`, `miles`, `feet`; `str` `10 m/s`, `1000 m`, `repr` `m_s(10)`, `m(1000)` |
 | `Heading(degrees)` | Frozen dataclass, `degrees` taken modulo 360, a result of 360.0 (`Heading(-1e-20)`) made 0; `str` `east` or `30°`, `repr` `EAST` or `Heading(30)`; `COMPASS` names the eight constants |
 | `Position(lat, lon)` | Frozen dataclass, `ValueError` outside −90…90 and −180…180; `moved(heading, distance)` (longitude from −180 up to 180), `distance_to(other)`, `bearing_to(other)`; `str` `52.229677° N, 21.012233° E` |
 | `about(value, *, within)` | `__eq__` true for the same kind within the tolerance, a `Position` within a `Distance`; false for any other kind; unhashable; `repr` `about(m(1000), within=m(15))` |
 | `Rate(bit_s)` | Frozen dataclass of a finite number above 0 (`Rate: 0 bit/s is not above 0`, a `ValueError`); ordering; `kbit_s`, `mbit_s`; `str` `512 kbit/s`, `repr` `kbit_s(512)`. `esp32tl/net/__init__.py` is what reads it |
-| `ms`, `seconds`, `minutes`, `hours`, `m_s`, `km_h`, `mph`, `knots`, `m`, `km`, `miles`, `feet`, `kbit_s`, `mbit_s` | Constructors; an `int` duration is scaled exactly, a `float` one rounded to the nanosecond |
+| `ms`, `seconds`, `minutes`, `hours`, `m_s`, `km_h`, `mph`, `knots`, `m`, `km`, `miles`, `feet`, `kbit_s`, `mbit_s` | Constructors; an `int` duration is scaled exactly, a `float` one rounded to the nanosecond. The four of a `Duration` refuse a `Duration` before `number` sees it, in `_duration` |
 | `number(value, what)` | A finite `int` or `float`, not a `bool`: `TypeError` `{what}: {value!r} is not a number`, `ValueError` `{what}: {value!r} is not a finite number` |
 | `shown(value)` | A number with up to six decimals, without trailing zeros, as the `str` and `repr` above write it |
 | `NS_PER_S`, `EARTH_RADIUS_M`, `M_PER_MILE`, `M_PER_FOOT`, `M_PER_NAUTICAL_MILE` | `1_000_000_000`; 6371008.8, IUGG's mean radius R1; 1609.344; 0.3048; 1852 |
@@ -127,6 +127,7 @@ world's time at power-on is `board.power_on(utc=...)`'s, `POWER_ON_UTC` in
 | `moved: heading is {heading!r}, not a Heading, as NORTH`, `moved: distance is {distance!r}, not a Distance, as km(1)`, `distance_to: {other!r} is not a Position`, `bearing_to: {other!r} is not a Position` | `TypeError` | |
 | `about: {value!r} is not a Duration, a Speed, a Distance or a Position`, `about: the tolerance around {value!r} is a {kind}, not {within!r}`, `about: the tolerance {within!r} is less than 0` | `TypeError`, `ValueError` | |
 | `Duration: {ns!r} is not a whole number of nanoseconds` | `TypeError` | `Duration(1.5)` |
+| `Duration: {ns!r} is already a Duration; use it as it is`, `{unit}: {value!r} is already a Duration; use it as it is` | `TypeError` | `Duration(seconds(1))`; `ms`, `seconds`, `minutes` or `hours` of a `Duration`, as `seconds(seconds(1))`. Both from `_already_a_duration` |
 
 The `SourceError`s of the first model call are the backend's and `Gnss`'s
 ([pytest-plugin-technical.md](pytest-plugin-technical.md#failure-modes)).
@@ -136,7 +137,9 @@ The `SourceError`s of the first model call are the backend's and `Gnss`'s
 - `tests/test_units.py`: the constructors and their conversions, arithmetic within a kind and
   across kinds where it is defined, kinds that do not mix, headings, positions and their bounds,
   great-circle movement and distance along a meridian and off it in the north-east and
-  south-west quadrants, across the antimeridian and over a pole, and `about`.
+  south-west quadrants, across the antimeridian and over a pole, and `about`. A `Duration` given to
+  `Duration()` or to a duration's constructor says it is one already, while `Duration(3.5)` keeps
+  its message about nanoseconds.
 - `tests/test_gnss_model.py`: the receiver on a clock of the test's own. The sentences against
   NMEA worked out by hand, with and without a fix, in the southern and western hemispheres and
   across a new year; checksums checked independently; the epochs on whole seconds of the world's

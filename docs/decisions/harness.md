@@ -1317,6 +1317,27 @@ would leave its unit to the reader, which [the units decision](#models-describe-
 rules out; and a `Duration` only, in an expect too, because a test ported from pytest-embedded
 would fail on its first `timeout=`.
 
+## A Duration given a Duration refuses it, saying it is one already
+
+Status: decided (#284)
+
+`Duration(d)` and `ms`, `seconds`, `minutes` and `hours` of `d`, with `d` a `Duration`, raise
+`TypeError` with a message of their own, checked before the one for what is not a whole number of
+nanoseconds or not a number: `Duration: seconds(3.7116536) is already a Duration; use it as it
+is`. A `Duration`'s `repr` is `seconds(…)`, so the general message read `Duration:
+seconds(3.7116536) is not a whole number of nanoseconds`, as if 3.7116536 s were the fault; it is
+what every test that wrapped a history's time in `Duration(...)` got once those times became
+`Duration`s.
+
+**Rejected:** taking a `Duration` as it is, `Duration(d) == d`, because the wrapping then hides
+that the code thinks `d` is a number of nanoseconds: `Duration(t)` would pass, and the same `t`
+would fail later and further from the mistake, in `t + 1000`, or not at all, in `t / 1e9`, a
+`Duration` a billion times shorter. Also rejected: leaving the constructors on `number`'s
+`seconds: seconds(1) is not a number`, because it does not say what to do, and `ms(seconds(1))`
+reads as a conversion that was meant to work. Also rejected: the wording in `number` itself for
+every kind, because `number` also checks plain numbers such as a fix's `hdop`, where a `Duration`
+is not the value to keep.
+
 ## Headings are a type of their own, and positions are on a sphere
 
 Status: decided (#69)
