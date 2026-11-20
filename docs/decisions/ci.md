@@ -722,3 +722,23 @@ so CI on `main` runs the version-only jobs for it, which test no code
 ([CI](../cicd.md#version-only-ci)). The code it lands on passed full CI on `main` when it merged,
 and the version beside that code is what the runtime release workflow's smoke test checks before
 the release is published.
+
+## A run whose only failures are jobs no runner took is re-run automatically
+
+Status: decided (19 November 2026)
+
+On 18 and 19 November 2026 macOS jobs of runs of `CI`, `Runtime release` and `Release merged
+version` were cancelled with `The job was not acquired by Runner of type hosted even after multiple
+attempts`, each failing its run, which then had to be re-run by hand; the release of 0.2.0 needed
+four attempts. A separate workflow on `workflow_run` re-runs the failed jobs of such a run, up to
+the fifth attempt, when every failed job is cancelled with no step and no runner
+([CI](../cicd.md#re-running-jobs-no-runner-took)). Five attempts cover the release's four and end
+the chain when macOS runners stay away for hours; a job no runner took costs queue time, not runner
+minutes.
+
+**Rejected:** re-running every failed run, which would retry real failures and hide flaky tests;
+re-running only the jobs no runner took when a real failure sits beside them: the run fails anyway
+and needs a look, and the API re-runs one job, or all failed jobs, of a completed run, not a chosen
+set; recognising such a job by its annotation, whose text a job that ran can write itself; retrying
+inside `ci.yml`, which cannot act on a job that never started; dropping or reducing the macOS jobs,
+which are the only ARM64 and macOS coverage.

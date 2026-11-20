@@ -80,7 +80,7 @@ jobs:
           python -m pip install build twine
           python -m build
           python -m twine check --strict dist/*
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-python
           path: dist/
@@ -103,7 +103,7 @@ jobs:
           sudo systemctl start docker
           docker info
           firmware/build.sh hello_world
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: smoke-firmware
           path: firmware/hello_world/build
@@ -144,11 +144,11 @@ jobs:
           fi
       - run: make setup
       - run: cd runner && cargo test --locked --release
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: smoke-firmware
           path: firmware/hello_world/build
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release-python
           path: dist
@@ -156,7 +156,7 @@ jobs:
         run: |
           .venv/bin/python scripts/package-runtime.py
           .venv/bin/python scripts/test-wheel-runtime.py firmware/hello_world/build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.target }}
           path: dist/esp32tl-runner-*
@@ -173,14 +173,14 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: release-*
           merge-multiple: true
           path: dist
       - name: Verify complete release and generate SHA256SUMS
         run: python scripts/check-release.py dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: verified-release
           path: dist/
@@ -197,7 +197,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.sha }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: verified-release
           path: dist
