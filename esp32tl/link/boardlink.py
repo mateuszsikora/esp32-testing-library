@@ -40,8 +40,8 @@ alone may send `sd_fault` and `sd_clear`.
 A hold may also ask for the flash (`flash_dump`, 5.21), or write a file into it with the board's
 supply off (`flash_write`, 5.25), in the turn it holds: the link sends the message, reads to the
 runner's `flash_dump_ack` or `flash_write_ack` and gives it to the hold, which holds the same turn
-on. A `flash_write` goes out after the board's inputs the turn holds so far, so that the runner
-has the `power` that switched the supply off before it.
+on. Both go out after the board's inputs the turn holds so far, so that the runner has the
+`power` that switched the supply off before it.
 
 Warnings and the run's `stats` are kept for the test report. What the harness finds wrong with
 the run is kept in `error`, the first cause only; the harness then ends the run with `stop` at the
@@ -669,13 +669,11 @@ class BoardLink:
         self, now: int, bound: int | RunTo | FlashDump | FlashWrite | None
     ) -> list[HarnessMessage]:
         """What the hold returned of the turn at `now`, once the run may go on."""
-        if isinstance(bound, FlashDump):
-            self._asking = (now, FlashDumpAck)
-            return [bound]
-        if isinstance(bound, FlashWrite):
-            # the supply's switches of this turn first: the runner writes only with it off
+        if isinstance(bound, FlashDump | FlashWrite):
+            # the supply's switches of this turn first: the runner writes only with it off, and
+            # on the S31 reads what the guest wrote since its last reset only with it off
             board = self._board_now(now)
-            self._asking = (now, FlashWriteAck)
+            self._asking = (now, FlashDumpAck if isinstance(bound, FlashDump) else FlashWriteAck)
             return [*board, bound]
         if bound is None:
             self._stopped = True

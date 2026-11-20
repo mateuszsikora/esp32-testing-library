@@ -910,6 +910,19 @@ def test_a_flash_write_goes_out_after_the_board_s_switches_of_the_turn() -> None
     assert link.error is None
 
 
+def test_a_flash_dump_goes_out_after_the_board_s_switches_of_the_turn() -> None:
+    hold = Holder(FlashDump(), FlashDump(), 100 * MS)
+    hold.go.set()
+    link = BoardLink("esp32-devkitc", hold=hold)
+    link.receive(HELLO)
+    # as a merge after board.power_off() reads the flash: the runner has the switch first
+    link.board_input(Power(5 * MS, False))
+    assert link.receive(Sync(5 * MS)) == [Power(5 * MS, False), FlashDump()]
+    assert link.receive(FlashDumpAck(5 * MS)) == [FlashDump()]
+    assert link.receive(FlashDumpAck(5 * MS)) == [Wait(0, 100 * MS, None)]
+    assert link.error is None
+
+
 def test_an_answer_of_the_other_kind_fails_the_link() -> None:
     hold = Holder(FlashDump())
     hold.go.set()

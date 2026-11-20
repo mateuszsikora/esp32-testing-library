@@ -69,8 +69,11 @@ Reading goes the other way:
 2. `Esp32Sim.flash()` refuses a board not started, reads the build's table through
    `_partition_table`, and calls `HeldClock.dump_flash()` in the test's thread.
 3. `dump_flash` waits for a held turn and sets `_asked` to `FlashDump()`. `_hold_turn`, on the
-   link's thread, wakes and returns it from `turn`; `BoardLink._held` sends it instead of ending the
-   turn, and remembers the turn, and that it waits for `flash_dump_ack`, in `_asking`.
+   link's thread, wakes and returns it from `turn`; `BoardLink._held` sends the turn's board inputs
+   so far, then it, instead of ending the turn, and remembers the turn, and that it waits for
+   `flash_dump_ack`, in `_asking`. So the dump of a merge in the turn of a `power_off()` comes after
+   its `power`, and on the ESP32-S31 the runner first takes in what the guest wrote since its last
+   reset ([protocol 5.21](../protocol.md#521-flash_dump-and-flash_dump_ack-ext-131)).
 4. The runner writes the file and answers `flash_dump_ack` ([protocol
    5.21](../protocol.md#521-flash_dump-and-flash_dump_ack-ext-131)). `BoardLink._flash_answered`
    calls `HeldClock.answered(ack)`, which hands the answer to the test and holds the same turn on,
