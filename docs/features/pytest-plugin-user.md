@@ -540,8 +540,11 @@ def test_the_count_survives_a_power_cut(board: Board):
   A `Boot` is a record of what was known when it was read, and frozen: one read before the zero
   was seen keeps `None`, and one read before a load keeps the zero from before it. The boot that
   `board.wait_until(board.next_boot(), ...)` and `board.wait_for_wake()` return was read at the
-  first poll that saw the boot, tens of milliseconds before its counter counts on the classic
-  ESP32, so its `uptime_zero` is `None` for good. There are two ways to get the zero:
+  first poll that saw the boot. On the classic ESP32 the counter counts some tens of milliseconds
+  after the reset, so whether that `Boot` has the zero depends on where the link's turn that
+  brought the reset ended: `board.wait_for_wake()`'s ends within a millisecond of it, so its boot
+  has `None` for good; a turn of `board.wait_until` may run past the zero or stop before it, as
+  at the end of a short `within` or of a `board.wait`. There are two ways to be sure of the zero:
 
   - `board.next_boot(uptime_zero=True)` returns the boot only once its zero is known, so the `Boot`
     the wait returns has it (below).
@@ -557,16 +560,19 @@ def test_the_count_survives_a_power_cut(board: Board):
   from esp32tl.units import ms, seconds
 
   booted = board.next_boot(uptime_zero=True)
+  printed = console.line(r"uptime_ms=(\d+)")
   board.reset()
   boot = board.wait_until(booted, within=seconds(1))
-  line = board.wait_until(console.line(r"uptime_ms=(\d+)"), within=seconds(5))
+  line = board.wait_until(printed, within=seconds(5))
   zero = boot.uptime_zero
   assert zero is not None
   uptime = ms(int(line[1]))
   assert zero.earliest + uptime <= line.at <= zero.latest + uptime + ms(2)
   ```
 
-  The firmware printed its uptime in whole milliseconds, rounded down, so the stamp can be up to
+  Both conditions are made before the reset: `console.line` matches only a line that ends after
+  it is made, and the firmware may print its line in the same turn of the link that brought the
+  zero. The firmware printed its uptime in whole milliseconds, rounded down, so the stamp can be up to
   1 ms early; the second millisecond is room for the time from its read of the counter to the end
   of the line, which `line.at` is the time of. A stamp in microseconds, read just before the line,
   needs less.

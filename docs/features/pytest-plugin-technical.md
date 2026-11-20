@@ -666,7 +666,10 @@ a boot of another cause for the next one of its own
 `board.uptime_zero` reads a held boot's zero now and refuses what is not one of the board's boots
 (`test_board_uptime_zero_reads_the_boot_s_zero_now`). `tests/test_power.py::
 test_the_boot_next_boot_returns_dates_the_firmware_s_stamps` runs the sequence on
-`firmware/persistence`, with the timeout of a wait shorter than the time to the counter's zero.
+`firmware/persistence`: 10 ms after `board.reset()`, by `board.wait`, the plain condition's boot
+has no zero, the condition with `uptime_zero` finds nothing and a 10 ms wait on it times out; the
+wait that follows returns the boot with its zero, which `board.uptime_zero` gives for the record
+read before it too.
 `tests/test_board_api.py::test_a_described_condition_names_its_timeout_and_refuses_bool` checks
 the `NeverHappened` message and the run report through `board.wait_until` on esp32sim, and
 `tests/test_serial_backend.py::test_console_reset_clock_tap_and_autoflash` the message and the

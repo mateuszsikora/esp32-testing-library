@@ -5236,8 +5236,11 @@ Status: decided (#286)
 A `Boot` is built anew at every read of `boots`, with the `uptime_zero` the runner has reported so
 far, and is frozen. The runner reports a boot's zero once it has seen the counter count, some tens
 of milliseconds after `boot.at` on the classic ESP32, so the `Boot` a wait on `board.next_boot()`
-or `board.wait_for_wake()` returns, read at the first poll that saw the boot, keeps `None`; a test
-that dates a stamp with it fails far from the mistake. Two additions, together:
+or `board.wait_for_wake()` returns, read at the first poll that saw the boot, has the zero only if
+the link's turn that brought the reset ran past it: `wait_for_wake()`'s never does, a turn of
+`wait_until` of up to 100 ms often does, and one cut short by its `within` or by `board.wait` may
+not. A test that dates a stamp with a `Boot` without one fails far from the mistake, and only
+some of the time. Two additions, together:
 
 - `board.next_boot(cause=None, *, uptime_zero=False)`: with `uptime_zero=True` the condition returns
   the first boot after the call (of `cause`) only while its zero is known, so the `Boot` the wait
