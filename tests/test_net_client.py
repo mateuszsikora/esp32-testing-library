@@ -901,3 +901,25 @@ def test_a_syn_ack_slower_than_the_rto_meets_the_syn_sent_again_once(device: Dev
     assert [flags for _, flags in sent] == [SYN, SYN, ACK]
     assert connection.state == "established" and connection.established_at == Duration(1501 * MS)
     assert len(connection.syns) == 2 and device.net.quiet_until() is None
+
+
+def test_accepting_refuses_a_connection_that_ended_before_it_was_seen(device: Device) -> None:
+    accepting = device.net.accepting(80)
+    device.poll()
+    # Accepted and reset by the device in one turn, before any poll of the condition.
+    device.send(80, 49152, 1000, ISN + 1, SYN | ACK)
+    device.send(80, 49152, 1001, ISN + 1, RST | ACK)
+    with pytest.raises(ConnectionEnded) as error:
+        accepting()
+    assert str(error.value) == (
+        "TCP 10.64.0.1:49152 → 10.64.0.2:80 was accepted, then reset by the device, before TCP"
+        " 10.64.0.2:80 accepting a connection returned it"
+    )
+    # One the condition returned stays returned, whatever the device does to it later.
+    later = device.net.accepting(81)
+    device.poll()
+    device.send(81, 49153, 1000, ISN + 1, SYN | ACK)
+    connection = later()
+    assert connection is not None
+    device.send(81, 49153, 1001, ISN + 1, FIN | ACK)
+    assert connection.closed_at is not None and later() is connection

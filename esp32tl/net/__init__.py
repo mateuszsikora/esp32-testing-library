@@ -844,6 +844,9 @@ class _Accepting:
         self.network, self.port, self.address = network, port, address
         self.attempts = [network._open(port, address, "accepting")]
         self.error: NotReachable | None = None
+        # Whether `find` has returned the accepted connection: from then on it returns it whatever
+        # becomes of it, as the test's to use or close.
+        self.returned = False
         self.description = f"TCP {self.attempts[0].address}:{port} accepting a connection"
 
     def due(self) -> int | None:
@@ -878,6 +881,13 @@ class _Accepting:
     def find(self) -> TcpConnection | None:
         last = self.attempts[-1]
         if last.established_at is not None:
+            if not self.returned and (last.state != "established" or last.closed_at is not None):
+                # Accepted, then ended or closed by the device before a poll saw it: not open.
+                how = last._how if last.state != "established" else "closed by the device"
+                raise ConnectionEnded(
+                    f"{last.name} was accepted, then {how}, before {self.description} returned it"
+                )
+            self.returned = True
             return last
         if self.error is not None:
             raise self.error

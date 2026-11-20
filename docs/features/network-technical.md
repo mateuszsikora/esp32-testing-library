@@ -626,8 +626,8 @@ nothing and changes nothing, as
 `tests/test_net_client.py::test_a_syn_ack_slower_than_the_rto_meets_the_syn_sent_again_once`
 checks with an RTT of 1.5 s.
 
-`Internet.accepting(port, *, address=None)` makes an `_Accepting`, which opens its first
-connection at once through `Internet._open`, the body of `connect`, its errors naming
+`Internet.accepting(port, *, address=None)` makes an `_Accepting`, which opens its first connection
+at once through `Internet._open`, the body of `connect`, its errors naming
 `network.accepting(<port!r>)`, and appends it to `_accepting`. `_Accepting.due()` is the last
 connection's `ended_at` plus `ACCEPT_RETRY_NS` (1 s) while that connection is `refused`, fewer than
 `ACCEPT_ATTEMPTS` (30) were opened and none raised, else `None`. `Internet._retry()`, called in
@@ -635,12 +635,14 @@ connection's `ended_at` plus `ACCEPT_RETRY_NS` (1 s) while that connection is `r
 one that is done: its last connection not `connecting` and no more due, or a `NotReachable` kept
 from `_open`. `Internet.quiet_until` takes every `due()`, with the link up or down, so that a retry
 due while the link is down raises then, kept for the condition. The condition's `find` returns the
-last connection once it is established, raises the kept `NotReachable`, raises `ConnectionEnded`
-when all 30 were refused, and otherwise reads the last connection's `established()`, which raises
-for a lost or timed-out one. Its description is `TCP <address>:<port> accepting a connection`, and
-its `waiting` is the refusals so far, `the device refused <n> connection(s), the last at <t>`,
-with `; the next goes at <t>` while one is due, or `; ` and the last connection's `unanswered()`
-while its SYN is out.
+last connection once it is established and, the first time, still open: one the device already
+reset, or closed its end of, raises `ConnectionEnded` instead; `returned` then keeps it returning
+that connection whatever becomes of it. Otherwise `find` raises the kept `NotReachable`, raises
+`ConnectionEnded` when all 30 were refused, and otherwise reads the last connection's
+`established()`, which raises for a lost or timed-out one. Its description is `TCP <address>:<port>
+accepting a connection`, and its `waiting` is the refusals so far, `the device refused <n>
+connection(s), the last at <t>`, with `; the next goes at <t>` while one is due, or `; ` and the
+last connection's `unanswered()` while its SYN is out.
 
 In `_tcp`, a segment for a client flow that is not established is the device's answer to the SYN
 only when it carries ACK with `ISN + 1` (RFC 9293, 3.10.7.3); anything else is ignored. With RST

@@ -387,7 +387,8 @@ end = board.wait_until(trip_end(broker, "car-1"), within=minutes(3))
   `TypeError: call the MQTT condition with (), or pass it to board.wait_until`.
 - The optional `waiting=`, a function of no arguments, says why the event has not happened yet.
   It is called once, when a wait on the condition times out, on both backends, in the test's
-  thread with the board held, as `find` is; what it returns, unless `None`, goes after the
+  thread, as `find` is. On esp32sim the board is held while it runs; the serial backend's board
+  keeps running, so what it reads may change meanwhile. What it returns, unless `None`, goes after the
   window's length, followed by `; `, and is the exception's `why`. With
   `waiting=lambda: None if broker.messages else "the broker has no message"`, the wait above times
   out as `NeverHappened: a trip/end from car-1 did not happen within 180 s: the broker has no

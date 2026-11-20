@@ -968,7 +968,10 @@ the device accepts or its 30 connections are used, and the connection it gets th
 no one to close it, in `network.connections`. On a server that takes one client at a time that idle
 connection holds back the next request until the server drops it, as `WebServer` does after
 `HTTP_MAX_DATA_WAIT`, 5 s. Keep the condition and close what it returns once it holds: it returns
-the accepted connection however late it is called. `accepting` raises `NotReachable` at the call as
+the accepted connection however late it is called, and whatever became of it since. A connection the
+device accepted and then reset or closed before the condition first saw it is not returned: the
+condition raises `ConnectionEnded`, as `TCP 10.64.0.1:49152 → 10.64.0.2:80 was accepted, then
+reset by the device, before TCP 10.64.0.2:80 accepting a connection returned it`. `accepting` raises `NotReachable` at the call as
 `connect` does, its message naming `network.accepting(80)`, and from the condition when a connection
 again finds the device out of reach; and `ConnectionEnded` once a connection ended another way, lost
 or timed out, or once the device refused all 30, as `TCP 10.64.0.2:80 accepting a connection: the

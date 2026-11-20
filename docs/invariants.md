@@ -2506,10 +2506,12 @@ clones, and rejection of serial distributed execution before accessing hardware.
 - **281.** `network.accepting(port)` connects at once and again 1 s after each refusal, on the
   board's clock whether a wait polls it or not, up to 30 connections; it returns the first
   connection the device accepts, open, and raises `ConnectionEnded` once a connection ended
-  another way or all 30 were refused, and `NotReachable` when a connection again finds the device
+  another way, the device reset or closed the accepted one before a poll saw it, or all 30 were
+  refused, and `NotReachable` when a connection again finds the device
   out of reach. On `arduino_shell` with `WebServer` 200 ms after the address, a `GET` at the lease
   is refused, and `accepting(80)` is accepted after one refusal, with no wait for a console line.
   `tests/test_net_client.py::test_accepting_connects_again_a_second_after_each_refusal`,
   `tests/test_net_client.py::test_accepting_gives_up_after_30_refusals`,
   `tests/test_net_client.py::test_accepting_raises_for_a_lost_connection_and_an_unreachable_device`,
+  `tests/test_net_client.py::test_accepting_refuses_a_connection_that_ended_before_it_was_seen`,
   `tests/test_arduino_shell.py::test_a_server_that_listens_after_its_address_is_waited_for_with_accepting`
