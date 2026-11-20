@@ -2317,6 +2317,13 @@ clones, and rejection of serial distributed execution before accessing hardware.
   its parameters, so that what waiting on it returns is checked too.
   `tests/test_public_api.py::test_every_type_a_test_meets_is_public`,
   `tests/test_public_api.py::test_all_names_what_the_package_exports`
+- **285.** No public method or property of a class `esp32tl` exports is annotated as returning
+  `Callable[[], …]`, alone or in a union as `Callable[[], …] | None`: what such a member hands
+  out to be called with no arguments is a described condition and is annotated `Condition[…]`,
+  as `Broker.next_message`'s `Condition[Message | None]` and `Broker.subscribed`'s
+  `Condition[bool]`, so that a type checker keeps its `description` and a helper typed with a
+  `Condition` accepts it.
+  `tests/test_public_api.py::test_a_public_method_returning_a_function_of_no_arguments_says_condition`
 
 ## A killed pytest session
 

@@ -206,7 +206,7 @@ class Internet:
         """The station's current lease, or None before DHCP acknowledges it."""
         return self.link.lease if isinstance(self.link, Station) else None
 
-    def when_leased(self) -> Callable[[], HostLease | None]:
+    def when_leased(self) -> Condition[HostLease | None]:
         """Current-state condition: the virtual station holds a DHCP lease."""
         if not isinstance(self.link, Station):
             raise ValueError("network.when_leased requires wifi.station()")

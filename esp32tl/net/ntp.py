@@ -48,7 +48,7 @@ class Ntp:
         """How many requests were answered: the `exchanges` with `answered`."""
         return sum(exchange.answered for exchange in self.exchanges)
 
-    def next_exchange(self, *, answered: bool | None = None) -> Callable[[], NtpExchange | None]:
+    def next_exchange(self, *, answered: bool | None = None) -> Condition[NtpExchange | None]:
         """A non-consuming condition for the first request recorded after this call; with
         `answered`, the first that was answered (`True`) or not (`False`). The boundary is append
         order, even at equal times, and polling never moves it."""

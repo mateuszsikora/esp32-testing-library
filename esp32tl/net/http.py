@@ -111,7 +111,7 @@ class HttpServer:
 
     def next_request(
         self, path: str | None = None, *, method: str | None = None
-    ) -> Callable[[], HttpRequest | None]:
+    ) -> Condition[HttpRequest | None]:
         """A non-consuming condition for the first request, for `path` and with `method` when
         given, appended after this call. The boundary is append order, even at equal
         timestamps. Polling never advances that boundary. A refused request is not recorded,

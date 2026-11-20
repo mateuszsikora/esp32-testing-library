@@ -398,7 +398,9 @@ end = board.wait_until(trip_end(broker, "car-1"), within=minutes(3))
   ([network](network-user.md#open-a-tcp-connection-to-the-device)).
 - It is a frozen `esp32tl.Condition`, generic in what `find` returns, for annotating helpers.
   The conditions of the network's services, of TLS, of `lines.output(...).is_on`, `.is_off`
-  and `.next_change()`, `lines.next_change()`, and `board.next_boot()` are the same type.
+  and `.next_change()`, `lines.next_change()`, and `board.next_boot()` are the same type, and
+  are annotated so: `broker.next_message(...)` is a `Condition[Message | None]`, which a helper
+  typed `def wait(c: Condition[Message | None])` accepts.
 - What it checks is up to `find`: the condition itself keeps nothing and consumes nothing; `find`
   may keep what it likes, as the package's own do. Capture a boundary, as `start` above, when the
   condition makes it, so that a message already received does not satisfy it. A wait on esp32sim

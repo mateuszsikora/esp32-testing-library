@@ -1,14 +1,16 @@
 """The public API is closed: every type a public method, property or attribute of an exported
 class takes or returns can be imported from `esp32tl`, or from the public `esp32tl.units` and
-`esp32tl.recording` modules (issue #247)."""
+`esp32tl.recording` modules (issue #247); and a public method that hands out a function of no
+arguments says it is a `Condition` (issue #285)."""
 
 import ast
 import contextlib
 import inspect
 import sys
 import textwrap
+import types
 import typing
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import esp32tl
 from esp32tl import recording, units
@@ -103,6 +105,21 @@ def backend_side(cls: type, name: str) -> bool:
     return any(issubclass(cls, owner) and name == member for owner, member in BACKEND_SIDE)
 
 
+def public_functions(cls: type) -> Iterator[tuple[str, types.FunctionType]]:
+    """The package's own functions behind the public members of `cls`, and its `__init__`:
+    methods, static and class methods, and the getters of properties and cached properties."""
+    for name, member in inspect.getmembers_static(cls):
+        if name.startswith("_") and name != "__init__":
+            continue
+        if isinstance(member, (staticmethod, classmethod)):
+            member = member.__func__
+        if isinstance(member, property):
+            member = member.fget
+        member = getattr(member, "func", member)  # a functools.cached_property
+        if inspect.isfunction(member) and member.__module__.startswith("esp32tl"):
+            yield name, member
+
+
 def public_types(cls: type) -> set[type]:
     found: set[type] = set()
     for owner in cls.__mro__:
@@ -114,21 +131,13 @@ def public_types(cls: type) -> set[type]:
     for name, annotation in assigned_attributes(cls):
         if not backend_side(cls, name):
             found.update(esp32tl_classes(annotation))
-    for name, member in inspect.getmembers_static(cls):
-        if name.startswith("_") and name != "__init__":
-            continue
+    for name, function in public_functions(cls):
         if backend_side(cls, name):
             continue
         if name == "__init__" and cls not in CONSTRUCTED:
             continue
-        if isinstance(member, (staticmethod, classmethod)):
-            member = member.__func__
-        if isinstance(member, property):
-            member = member.fget
-        member = getattr(member, "func", member)  # a functools.cached_property
-        if inspect.isfunction(member) and member.__module__.startswith("esp32tl"):
-            for annotation in typing.get_type_hints(member).values():
-                found.update(esp32tl_classes(annotation))
+        for annotation in typing.get_type_hints(function).values():
+            found.update(esp32tl_classes(annotation))
     return found
 
 
@@ -169,3 +178,31 @@ def test_all_names_what_the_package_exports() -> None:
         if not name.startswith("_") and not inspect.ismodule(value)
     }
     assert public == set(esp32tl.__all__)
+
+
+def test_a_public_method_returning_a_function_of_no_arguments_says_condition() -> None:
+    """A test waits on what a public method hands out to be called with no arguments: annotated
+    `Callable[[], T]`, a type checker loses the `Condition`'s description and does not know that
+    `bool()` of it raises, so `def wait(c: Condition[Message | None])` refuses it."""
+
+    def no_arguments(annotation: object) -> bool:
+        """`Callable[[], T]`, alone or in a union, as `Callable[[], T] | None`."""
+        origin = typing.get_origin(annotation)
+        if origin is typing.Union or origin is types.UnionType:
+            return any(no_arguments(each) for each in typing.get_args(annotation))
+        return origin is Callable and typing.get_args(annotation)[0] == []
+
+    callables: list[str] = []
+    for name in esp32tl.__all__:
+        cls = getattr(esp32tl, name)
+        if not inspect.isclass(cls):
+            continue
+        for member_name, function in public_functions(cls):
+            if member_name == "__init__":
+                continue
+            returned = typing.get_type_hints(function).get("return")
+            if no_arguments(returned):
+                callables.append(f"{cls.__qualname__}.{member_name} -> {returned}")
+    assert not callables, "annotate these as returning Condition[...]: " + ", ".join(
+        sorted(set(callables))
+    )

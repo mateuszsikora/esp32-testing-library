@@ -287,13 +287,21 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   `ethernet: dropped an IPv4 packet of <n> bytes: over the MTU`. A DHCP reply goes from
   `10.64.0.1:67` to `10.64.0.2:68`, or to `255.255.255.255` and `ff:ff:ff:ff:ff:ff` when `Dhcp`
   says broadcast, with its UDP and IPv4 checksums computed here.
-- The conditions that the MQTT, HTTP, DHCP and TLS condition factories return are
-  `Condition(find, description, service)` of `esp32tl/interfaces/condition.py`, the public
+- The conditions that the MQTT, HTTP, DHCP, TLS, NTP and DNS condition factories,
+  `network.when_leased()` and `network.accepting(port)` return are
+  `Condition(find, description, service)` of `esp32tl/interfaces/condition.py`, `accepting`'s
+  with its `waiting` too ([below](#connections-the-test-opens)), the public
   [described condition](pytest-plugin-user.md#described-conditions), not a class of `esp32tl/net/`.
+  Each method is annotated as returning `Condition[T | None]` (`Condition[bool]` for
+  `subscribed` and the four TLS conditions), not `Callable[[], …]`, so a type checker in a test
+  project keeps the `description` and accepts the condition where a helper asks for a
+  `Condition`; `tests/test_public_api.py` fails for a public method of an exported class
+  annotated `-> Callable[[], …]`, alone or in a union (invariant 285).
   Calling it calls `find`; `repr` is `description`, which `board.wait_until` takes because the
   object has no `__qualname__`; `__bool__` raises
   `TypeError("call the <service> condition with (), or pass it to board.wait_until")`, `service`
-  being `MQTT`, `HTTP`, `DHCP`, `TLS`, `NTP` or `DNS`.
+  being `MQTT`, `HTTP`, `DHCP`, `TLS`, `NTP`, `DNS`, `DHCP station` for `when_leased` or `TCP` for
+  `accepting`.
 - How a "next …" condition scans: MQTT's `next_message`, `next_delivery` and `next_subscribe`,
   HTTP's `next_request`, NTP's `next_exchange` and DNS's `next_question` take as their `find` a
   `FirstFrom` of `esp32tl/interfaces/condition.py`
