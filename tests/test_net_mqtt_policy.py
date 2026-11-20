@@ -122,11 +122,11 @@ def test_connack_codes_and_rejection_isolation(
     assert attempt() is result  # Polling does not consume the outcome.
     if result.accepted:
         assert connected() is not None and not client.closed
-        assert broker.subscribed("a/#")()
+        assert broker.is_subscribed("a/#")()
     else:
         assert reply == bytes([0x20, 2, 0, wire_code]) and client.closed
         assert connected() is None and not broker.clients
-        assert not broker.subscribed("a/#")() and broker.quiet_until() is None
+        assert not broker.is_subscribed("a/#")() and broker.quiet_until() is None
         assert not broker.messages and not broker.retained
         client.send(PUBLISH)
         client.lose_transport()
@@ -211,7 +211,7 @@ def test_rejected_takeover_keeps_old_client_and_will(
     assert rejected.send(WILL_CONNECT) == b"\x20\x02\0\x05"
     rejected.lose_transport()
     assert not broker.messages and len(broker.clients) == 1
-    assert broker.subscribed("a/#")()
+    assert broker.is_subscribed("a/#")()
     assert old.send(b"\xc0\0") == b"\xd0\0"
     now[0] = 20
     broker.connection_policy = None

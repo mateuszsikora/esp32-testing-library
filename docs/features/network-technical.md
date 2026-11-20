@@ -288,20 +288,29 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   `10.64.0.1:67` to `10.64.0.2:68`, or to `255.255.255.255` and `ff:ff:ff:ff:ff:ff` when `Dhcp`
   says broadcast, with its UDP and IPv4 checksums computed here.
 - The conditions that the MQTT, HTTP, DHCP, TLS, NTP and DNS condition factories,
-  `network.when_leased()` and `network.accepting(port)` return are
+  `network.is_leased`, `network.next_lease()` and `network.accepting(port)` return are
   `Condition(find, description, service)` of `esp32tl/interfaces/condition.py`, `accepting`'s
   with its `waiting` too ([below](#connections-the-test-opens)), the public
   [described condition](pytest-plugin-user.md#described-conditions), not a class of `esp32tl/net/`.
   Each method is annotated as returning `Condition[T | None]` (`Condition[bool]` for
-  `subscribed` and the four TLS conditions), not `Callable[[], …]`, so a type checker in a test
+  `is_subscribed` and the four TLS conditions), not `Callable[[], …]`, so a type checker in a test
   project keeps the `description` and accepts the condition where a helper asks for a
   `Condition`; `tests/test_public_api.py` fails for a public method of an exported class
-  annotated `-> Callable[[], …]`, alone or in a union (invariant 285).
+  annotated `-> Callable[[], …]`, alone or in a union (invariant 285), and for a condition whose
+  shape breaks the rule of [writing tests](../guides/writing-tests.md#which-shape-a-condition-has)
+  (invariant 291): `test_every_condition_has_the_shape_of_its_kind` finds every public method,
+  property and attribute of an exported class annotated as a `Condition` or a `LineCondition`,
+  on the class that defines it, and checks that a `next_*` one and an action in `ACTIONS` are
+  methods, that a state condition is a property with no parameter and a method with one, and
+  that its name takes `is_` unless `HAPPENED` lists it; `NAMED_FOR_IT` holds `console.line` and
+  `HttpExchange.response`, which are named for what they return. A new condition outside those
+  shapes fails it until it is renamed or listed, and an entry that names no condition fails it
+  too.
   Calling it calls `find`; `repr` is `description`, which `board.wait_until` takes because the
   object has no `__qualname__`; `__bool__` raises
   `TypeError("call the <service> condition with (), or pass it to board.wait_until")`, `service`
-  being `MQTT`, `HTTP`, `DHCP`, `TLS`, `NTP`, `DNS`, `DHCP station` for `when_leased` or `TCP` for
-  `accepting`.
+  being `MQTT`, `HTTP`, `DHCP`, `TLS`, `NTP`, `DNS`, `DHCP station` for `is_leased` and the
+  station's `next_lease()`, or `TCP` for `accepting`.
 - How a "next …" condition scans: MQTT's `next_message`, `next_delivery` and `next_subscribe`,
   HTTP's `next_request`, NTP's `next_exchange` and DNS's `next_question` take as their `find` a
   `FirstFrom` of `esp32tl/interfaces/condition.py`
@@ -647,7 +656,7 @@ last connection once it is established and, the first time, still open: one the 
 reset, or closed its end of, raises `ConnectionEnded` instead; `returned` then keeps it returning
 that connection whatever becomes of it. Otherwise `find` raises the kept `NotReachable`, raises
 `ConnectionEnded` when all 30 were refused, and otherwise reads the last connection's
-`established()`, which raises for a lost or timed-out one. Its description is `TCP <address>:<port>
+`established`, which raises for a lost or timed-out one. Its description is `TCP <address>:<port>
 accepting a connection`, and its `waiting` is the refusals so far, `the device refused <n>
 connection(s), the last at <t>`, with `; the next goes at <t>` while one is due, or `; ` and the
 last connection's `unanswered()` while its SYN is out.
@@ -704,31 +713,30 @@ the old connection, and sends its SYN again. A flow that is not orphaned takes o
 FIN, and drops such a SYN without an answer, as before.
 
 `TcpConnection` keeps `received` in a `bytearray`, `syns`, `established_at`, `closed_at` and
-`ended_at` as `Duration`s from `now()` at the callback, which is the segment's own time, `_end`,
-the kind, and `_why`, a loss's reason, which `_how` turns into `lost when <why>`, else takes
-`_HOW`'s sentence for the kind (`timed out with no answer to its 7 SYNs` for `"timed out"`).
-`write` hands the bytes on; `on_syn` appends to `syns`, `on_sent` records `in`, at the time the
-piece goes, and `on_data` records `out`. `unanswered()` is `None` unless `state` is
-`"connecting"`. Otherwise it splits `syns` into the ones sent again after, each of which got no
-answer in its RTO, and the last, whose age is `now()` less its time: `the SYN at <t> has had no
-answer in <age> (no SYN-ACK, no RST)` for one SYN, and for more `the SYN(s) at <t>, … and <t> got
-no answer (no SYN-ACK, no RST), and the SYN at <t> has had none in <age>`; an age of 0, a SYN
-sent at that instant, reads `has just gone`. Its conditions are
-`Condition(find, description, "TCP", self.unanswered)`, so that `board.wait_until` puts that
-clause in a timeout's `NeverHappened` ([the backend](esp32sim-backend-technical.md));
-each `find` returns the time or bytes it is after, `None` while it may still come, and raises
-`ConnectionEnded` once `_end` (or, for `closed` and `next_data`, `closed_at`) rules it out, its
-message built from `_how`; `refused()` and `timed_out()` raise it once `established_at` is set
-too. `next_data` validates its
-arguments at the call and captures `start`, `len(received)` unless given; each poll searches the
-`bytearray` in place (`find(until, searched)`, or its length) and copies only what it returns, so it
-consumes nothing, a repeated poll returns the same bytes, and a long stream is not copied at every
-turn. `searched` starts at `start`; a poll that does not find `until` moves it to
-`len(until) - 1` bytes before the end, where an `until` split across two arrivals begins, and one
-that finds it to the match. So a poll searches only the bytes since the last one, not all since
-`start`, as
-`tests/test_net_client.py::test_a_next_data_poll_searches_only_the_bytes_since_the_last_one`
-counts over 10 000 chunks.
+`ended_at` as `Duration`s from `now()` at the callback, which is the segment's own time, `_end`, the
+kind, and `_why`, a loss's reason, which `_how` turns into `lost when <why>`, else takes `_HOW`'s
+sentence for the kind (`timed out with no answer to its 7 SYNs` for `"timed out"`). `write` hands
+the bytes on; `on_syn` appends to `syns`, `on_sent` records `in`, at the time the piece goes, and
+`on_data` records `out`. `unanswered()` is `None` unless `state` is `"connecting"`. Otherwise it
+splits `syns` into the ones sent again after, each of which got no answer in its RTO, and the last,
+whose age is `now()` less its time: `the SYN at <t> has had no answer in <age> (no SYN-ACK, no RST)`
+for one SYN, and for more `the SYN(s) at <t>, … and <t> got no answer (no SYN-ACK, no RST), and the
+SYN at <t> has had none in <age>`; an age of 0, a SYN sent at that instant, reads `has just gone`.
+Its conditions, the properties `established`, `closed`, `refused`, `reset` and `timed_out`, each
+building a new one at every read, and `next_data(...)`, are `Condition(find, description, "TCP",
+self.unanswered)`, so that `board.wait_until` puts that clause in a timeout's `NeverHappened` ([the
+backend](esp32sim-backend-technical.md)); each `find` returns the time or bytes it is after, `None`
+while it may still come, and raises `ConnectionEnded` once `_end` (or, for `closed` and `next_data`,
+`closed_at`) rules it out, its message built from `_how`; `refused` and `timed_out` raise it once
+`established_at` is set too. `next_data` validates its arguments at the call and captures `start`,
+`len(received)` unless given; each poll searches the `bytearray` in place (`find(until, searched)`,
+or its length) and copies only what it returns, so it consumes nothing, a repeated poll returns the
+same bytes, and a long stream is not copied at every turn. `searched` starts at `start`; a poll that
+does not find `until` moves it to `len(until) - 1` bytes before the end, where an `until` split
+across two arrivals begins, and one that finds it to the match. So a poll searches only the bytes
+since the last one, not all since `start`, as
+`tests/test_net_client.py::test_a_next_data_poll_searches_only_the_bytes_since_the_last_one` counts
+over 10 000 chunks.
 
 ## Lifecycle and observability
 
@@ -1103,9 +1111,15 @@ ARP replies and requests addressed to the host populate
 the cache, and the host answers requests only for itself.
 
 `Internet.device_reset` and lease expiry clear the address, ARP cache and pending datagrams, reset
-IP connections and path queues. Reset waits for data-link readiness before acquisition; lease expiry restarts acquisition on the current link. `when_leased()` reads `Internet.lease`
-dynamically, including after a link replacement. There is no renewal/rebinding, conflict detection,
-or idle keep-alive. `tests/test_net_station.py` exercises the host against handmade packets;
+IP connections and path queues. Reset waits for data-link readiness before acquisition; lease expiry
+restarts acquisition on the current link. `is_leased` reads `Internet.lease` at each call.
+`Station.leases` appends each `HostLease` at its ACK and is never cleared, as `Station.stop` and
+`start` leave it and the station link is never replaced; `Internet.leases` returns that list itself,
+`next_lease()` captures its length at the call and returns the record at that index once there is
+one, and `find_lease()` its first. `Internet._station(member, dhcp)` returns the `Station`, or
+raises the `ValueError` naming `network.<member>` behind another link, with the pointer to
+`network.dhcp.<dhcp>` behind an access point. There is no renewal/rebinding, conflict detection, or
+idle keep-alive. `tests/test_net_station.py` exercises the host against handmade packets;
 `tests/test_arduino_softap.py` runs the actual Arduino DHCP server and HTTP endpoint.
 
 Station lifecycle is driven by protocol v2 `wifi_link` events, using the emulated slice-boundary time. The DHCP transaction ID advances on every acquisition and survives network stop/reset. Disconnected stations have no DHCP or ARP deadline and ignore incoming Ethernet. Link loss resets the IP transports and path queues. Lease history remains available, but only `lease` denotes the current lease.

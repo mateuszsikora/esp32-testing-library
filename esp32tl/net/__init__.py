@@ -206,11 +206,48 @@ class Internet:
         """The station's current lease, or None before DHCP acknowledges it."""
         return self.link.lease if isinstance(self.link, Station) else None
 
-    def when_leased(self) -> Condition[HostLease | None]:
-        """Current-state condition: the virtual station holds a DHCP lease."""
-        if not isinstance(self.link, Station):
-            raise ValueError("network.when_leased requires wifi.station()")
+    @property
+    def is_leased(self) -> Condition[HostLease | None]:
+        """A condition on current state: it returns the station's lease while it holds one, and
+        `None` before DHCP acknowledges one and once the station lost it."""
+        self._station("is_leased", "next_lease()")
         return Condition(lambda: self.lease, "the station has a DHCP lease", "DHCP station")
+
+    @property
+    def leases(self) -> list[HostLease]:
+        """Every lease the device's DHCP server acknowledged to the station, in order, renewed
+        ones after a reset, a rejoin or an expiry included: the station's side of
+        `network.dhcp.leases`."""
+        return self._station("leases", "leases").leases
+
+    def next_lease(self) -> Condition[HostLease | None]:
+        """A condition for the first lease the station gets after this call, the next one in
+        `leases`; it consumes nothing."""
+        station = self._station("next_lease()", "next_lease()")
+        start = len(station.leases)
+
+        def find() -> HostLease | None:
+            return station.leases[start] if len(station.leases) > start else None
+
+        return Condition(find, "the station's next DHCP lease", "DHCP station")
+
+    def find_lease(self) -> HostLease | None:
+        """The first lease the station got, or `None` before one."""
+        leases = self._station("find_lease()", "find_lease()").leases
+        return leases[0] if leases else None
+
+    def _station(self, member: str, dhcp: str) -> Station:
+        """The station link, or `ValueError` behind another link, which leases no address to the
+        harness: behind an access point the harness's DHCP server leases the device its."""
+        if isinstance(self.link, Station):
+            return self.link
+        instead = (
+            f"; behind an access point the harness leases the device its address:"
+            f" network.dhcp.{dhcp}"
+            if isinstance(self.link, Ethernet)
+            else ""
+        )
+        raise ValueError(f"network.{member} requires wifi.station(){instead}")
 
     def next_link_up(self) -> Condition[LinkChange | None]:
         """A described condition for the first time the link comes up after this call: IPCP
@@ -465,7 +502,7 @@ class Internet:
             if self.lease is None:
                 raise NotReachable(
                     f"{call}: the device has leased no address to the station yet; "
-                    "wait for network.when_leased()"
+                    "wait for network.is_leased"
                 )
         elif address is None and self.link.device_address is None:
             # Only once this link has leased an address: a fresh link has had none to lose.
@@ -895,8 +932,8 @@ class _Accepting:
             if len(self.attempts) >= ACCEPT_ATTEMPTS:
                 raise ConnectionEnded(f"{self.description}: {self._refusals()}, and no more go")
             return None
-        # Lost or timed out: it raises as `established()` does.
-        return None if last.established()() is None else last
+        # Lost or timed out: it raises as `established` does.
+        return None if last.established() is None else last
 
     def waiting(self) -> str | None:
         last = self.attempts[-1]

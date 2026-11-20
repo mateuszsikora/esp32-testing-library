@@ -164,7 +164,7 @@ def test_puback_faults_reconnect_and_other_network_activity(secure: bool) -> Non
     wire.poll()
     assert peer.closed and not observer.closed
     assert stale.status == "cancelled" and stale.puback_at is None
-    assert not broker.subscribed("a/#")()
+    assert not broker.is_subscribed("a/#")()
     assert not stale.release()
     # A different live stream still responds, before the MQTT client reconnects.
     observer.send(b"\xc0\0")
@@ -186,7 +186,7 @@ def test_puback_faults_reconnect_and_other_network_activity(secure: bool) -> Non
         b"\x3a\x0a\0\x03a/b\0\x02new"
         b"\x3a\x0a\0\x03a/b\0\x03new"
     )
-    assert broker.subscribed("a/#")()
+    assert broker.is_subscribed("a/#")()
     assert next_client() is not None
     assert next_client().connection_id != stale.connection_id  # type: ignore[union-attr]
     replacement.send(DUPLICATE)

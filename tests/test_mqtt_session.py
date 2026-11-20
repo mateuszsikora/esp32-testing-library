@@ -27,7 +27,7 @@ COUNT = 10
 
 def connected(board: Esp32Sim, broker: Broker) -> None:
     board.power_on()
-    board.wait_until(broker.subscribed(COMMANDS), within=seconds(60))
+    board.wait_until(broker.is_subscribed(COMMANDS), within=seconds(60))
 
 
 def last_packet(modem: Modem, connection: int) -> Duration:

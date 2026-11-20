@@ -1078,10 +1078,12 @@ The conditions follow [the rule of #108, #116 and
 #182](#mqtt-tls-http-and-dhcp-event-apis-name-history-queries-and-next-event-conditions-explicitly).
 A connection is established, closed by the device, refused or reset once at most, so
 `established()`, `closed()`, `refused()` and `reset()` are conditions on its state, each named for
-its event, and `received` is its history. `next_data(until=None, *, size=None, start=None)` is the
-next-event condition, its boundary the end of `received` at the call. Every one of them raises
-`ConnectionEnded` once it can no longer hold, a connection refused while the test waits for it to
-be established among them, so that a RST shows in the wait at once, not as a timeout.
+its event (properties since #292: [A condition's shape says what it waits
+for](#a-conditions-shape-says-what-it-waits-for)), and `received` is its history.
+`next_data(until=None, *, size=None, start=None)` is the next-event condition, its boundary the end
+of `received` at the call. Every one of them raises `ConnectionEnded` once it can no longer hold, a
+connection refused while the test waits for it to be established among them, so that a RST shows in
+the wait at once, not as a timeout.
 
 **Rejected:** a host socket the test connects to, relayed to the device, because it brings wall time
 back as a bridge does; retransmission and a persist timer, because the link loses nothing and
@@ -2692,11 +2694,13 @@ things. The rule for a queued message goes by the message's QoS, as MQTT-3.1.2-5
 message that matches a QoS 0 subscription is stored, and goes at QoS 0.
 
 A stored session outlives the network's reset, since the broker is the test's and not the link's,
-like its retained messages and histories. `subscribed()` keeps speaking of active clients, because
-tests use it to wait until a client is ready to receive. An incoming `Publication` keeps belonging
-to its connection: it is the test's control over one exchange on one stream, not state the client
-asked the broker to keep. `connection_policy` still runs before any state is installed or discarded,
-so that a refused CleanSession=1 CONNECT leaves a stored session alone.
+like its retained messages and histories. `subscribed()` (`is_subscribed(topic)` since #292, [A
+condition's shape says what it waits for](#a-conditions-shape-says-what-it-waits-for)) keeps
+speaking of active clients, because tests use it to wait until a client is ready to receive. An
+incoming `Publication` keeps belonging to its connection: it is the test's control over one exchange
+on one stream, not state the client asked the broker to keep. `connection_policy` still runs before
+any state is installed or discarded, so that a refused CleanSession=1 CONNECT leaves a stored
+session alone.
 
 `deliveries`, `next_delivery` and `find_delivery` take the names, boundary and condition object of
 [the other event APIs](#mqtt-tls-http-and-dhcp-event-apis-name-history-queries-and-next-event-conditions-explicitly).
@@ -3338,6 +3342,9 @@ other services, so the shared cursor rejected above stays rejected.
 
 Status: decided (#200)
 
+*Extended in #292 by [A condition's shape says what it waits
+for](#a-conditions-shape-says-what-it-waits-for).*
+
 A condition that sees only what happens after the call that makes it is named `next_*`, and nothing
 else is: the aliases MQTT's `message` and `connected`, HTTP's `requested` and DHCP's `leased` are
 gone, and MQTT's `connection_attempt()` is `next_connection_attempt()`. A first consumer used
@@ -3347,17 +3354,76 @@ as a state or a value that is there already, which `leased()` was not, since it 
 after it. With no users yet, the aliases go without a deprecation period. The names that stay:
 `find_*`, which returns a record now; the plural histories (`messages`, `clients`, `leases`,
 `connection_attempts`); and the conditions named for a state, which are true while it holds or once
-it has: MQTT's `subscribed(topic)`, TLS's `handshake_started` and `handshake_completed`, a TCP
-connection's `established`, `closed`, `refused` and `reset` (#199), which return their event's time
-however long ago it happened, and the output lines' `is_on` and `is_off`. A TCP connection's
-`next_data` is a condition for the next bytes and has the prefix. `console.line(pattern)` keeps its
-name: it is a condition for the next line, but it reads as one, and a `next_line` beside
-`lines()` would split the console's vocabulary from pytest-embedded's `expect`.
+it has: MQTT's `subscribed(topic)` (`is_subscribed(topic)` since #292), TLS's `handshake_started`
+and `handshake_completed`, a TCP connection's `established`, `closed`, `refused` and `reset` (#199),
+which return their event's time however long ago it happened, and the output lines' `is_on` and
+`is_off`. A TCP connection's `next_data` is a condition for the next bytes and has the prefix.
+`console.line(pattern)` keeps its name: it is a condition for the next line, but it reads as one,
+and a `next_line` beside `lines()` would split the console's vocabulary from pytest-embedded's
+`expect`.
 
 **Rejected:** keeping the aliases for one release with a `DeprecationWarning`, because nobody
 depends on them and every alias is one more name to explain beside the one the documentation
 recommends. Renaming `subscribed` to `next_subscription`, because it reads current state, not the
 next event, and the rename would make it say the wrong thing.
+
+## A condition's shape says what it waits for
+
+Status: decided (#292)
+
+[Only a condition for the next event has the next
+prefix](#only-a-condition-for-the-next-event-has-the-next-prefix) named one kind of condition; the
+others had no rule, and most followed one by habit while a few did not: a TCP connection's
+`established()`, `closed()`, `refused()`, `reset()` and `timed_out()` were methods with no
+argument where every other argument-less state was a property, `network.when_leased()` was the only
+`when_` name, and MQTT's `subscribed(topic)` lacked the `is_` that BLE's `is_subscribed(uuid)`
+for the same state had. A consumer writing a test from memory could not tell which to expect. The
+rule, in [writing tests](../guides/writing-tests.md#which-shape-a-condition-has), has four kinds:
+
+- the next event after the call is a `next_*` method, since the call is its boundary;
+- a state that holds now, and can stop holding, is `is_<state>`: a property with no argument, a
+  method with one (`line.is_on`, `network.is_leased`, `broker.is_subscribed(topic)`);
+- what has happened once and for good is named for it without `is_`, a property with no argument
+  and a method with one: a TCP connection's `established`, `closed`, `refused`, `reset` and
+  `timed_out`, which return its time however long ago, and TLS's `handshake_started` and
+  `handshake_completed`;
+- the outcome of an action is the action's own method, which acts at the call and returns the
+  condition for what came of it (`central.read(uuid)`, `central.disconnect()`,
+  `network.accepting(port)`), or the attribute of the record the action returned
+  (`http_client.get(path).response`).
+
+`is_` is what tells the second kind from the third: an `is_` condition can be false again, one
+without it cannot. The outliers changed to fit, with no aliases, as #200 did, since no test
+depends on the old names: `TcpConnection`'s five became properties, `network.when_leased()`
+became the property `network.is_leased`, and `broker.subscribed(topic)` became
+`broker.is_subscribed(topic)`. `console.line(pattern)` keeps the exception #200 gave it.
+`tests/test_public_api.py` checks the shapes over every public condition of the exported classes
+(invariant 291); which conditions are actions or what has happened it cannot tell from a name, so
+it lists them, and a new condition of either kind fails it until it is listed.
+
+The station's side of DHCP took the names of the access point's side: behind `wifi.station(...)` the
+leases the device acknowledged to the harness are `network.leases`, `network.next_lease()` and
+`network.find_lease()`, beside `network.lease` and `network.is_leased`, as the device's are
+`network.dhcp.leases`, `next_lease()` and `find_lease()` behind `wifi.access_point(...)`. They are
+on `network`, not `network.dhcp`, because `network.dhcp` is the harness's DHCP server, which this
+lease does not come from; behind another link they raise `ValueError` and, behind an access point,
+point to the member of `network.dhcp` of the same name, `next_lease()` for `is_leased`. The two
+properties raise `ValueError` too, not the `AttributeError` of `network.ppp` and `network.ethernet`:
+the four are one vocabulary and raise one exception, and for the two methods an `AttributeError`
+would read as a method that does not exist, which is why `next_link_up()` raises `ValueError` behind
+an access point too. A test does not ask `hasattr` of its network, whose link it chose. A test that
+waits for a fresh lease after a reset makes `next_lease()` before it, instead of waiting for the
+boot and then for `is_leased`.
+
+**Rejected:** `is_` on every state condition, `is_established` and `tls.is_handshake_completed`,
+because it would erase the difference between a state that can end and an event that stays
+happened, which is what a test needs to know before it asserts on one later; and no `is_` on
+any, `connection.connected` beside `connection.established`, because then nothing in a name says
+which of the two it is. Properties for the actions too, because an action does something at the
+call, which reading an attribute must not. Making `network.dhcp` behind a station an object of
+another class with the same names, because `network.dhcp` would then have two types and a type
+checker would make every test narrow it. A guard that guesses a condition's kind from its name,
+a past participle or a verb, because English does not mark either reliably (`reset` is both).
 
 ## A reset and a power cycle go on in the run they happen in, on its clock
 
@@ -3954,11 +4020,13 @@ separate change; this is that change. The runner attaches `StaConfig` through
 MAC: there are no four-address frames, and the emulator takes no lease of its own in relay mode.
 
 The host gets its address by DHCP and uses option 54, the selected server's identifier, as the
-default device address. A router in option 3 can be another host; it is used for off-subnet
-routing only. `address=` still overrides the TCP destination. `network.lease` exposes the current
-lease and `network.when_leased()` is a current-state condition, following #108/#116/#182 rather
-than giving a history query an event name. DNS, NTP, the broker, HTTP server and registered or
-bridged services remain usable, but only on the host's leased address; DNS answers with that
+default device address. A router in option 3 can be another host; it is used for off-subnet routing
+only. `address=` still overrides the TCP destination. `network.lease` exposes the current lease and
+`network.when_leased()` is a current-state condition, following #108/#116/#182 rather than giving a
+history query an event name. It is the property `network.is_leased` since #292, which also gave the
+station `network.leases`, `next_lease()` and `find_lease()`: [A condition's shape says what it waits
+for](#a-conditions-shape-says-what-it-waits-for). DNS, NTP, the broker, HTTP server and registered
+or bridged services remain usable, but only on the host's leased address; DNS answers with that
 address. ARP answers only for that address. IPv4 destined elsewhere is dropped before services.
 
 DHCP uses the broadcast flag, which ESP-IDF v5.5.4's
@@ -4510,27 +4578,28 @@ bookkeeping the issue's tests repeated, and got wrong when they took the boundar
 
 Status: decided (#242)
 
-The MQTT broker grants every filter, so a test is the only place that can check a device asks for
-no more than a production broker's ACL would grant. Until now it could read only the subscriptions
-that hold now, through `subscribed(topic)` and `session(client_id).subscriptions`: a filter
-unsubscribed later, or lost when a CleanSession=1 CONNECT discarded the stored session, left no
-trace, and neither the QoS asked for and granted nor the time was kept, so "subscribed before it
-published" or "subscribed again after the reconnect" could not be asserted.
+The MQTT broker grants every filter, so a test is the only place that can check a device asks for no
+more than a production broker's ACL would grant. Until now it could read only the subscriptions that
+hold now, through `subscribed(topic)` (`is_subscribed(topic)` since #292) and
+`session(client_id).subscriptions`: a filter unsubscribed later, or lost when a CleanSession=1
+CONNECT discarded the stored session, left no trace, and neither the QoS asked for and granted nor
+the time was kept, so "subscribed before it published" or "subscribed again after the reconnect"
+could not be asserted.
 
 `broker.subscribe_requests` is a list of frozen `SubscribeRequest` records, one per SUBSCRIBE and
 UNSUBSCRIBE packet, in arrival order: `at`, `client`, `connection_id`, `packet_id`, `kind`
 (`"SUBSCRIBE"` or `"UNSUBSCRIBE"`) and `filters`, a tuple of `RequestedFilter` with `filter`,
 `requested_qos` and `granted_qos`, both `None` in an UNSUBSCRIBE. Its name and shape follow
 `connection_attempts`: a plural history on the broker, not on the session, appended before the
-acknowledgement is written, with no `find_*` query beside it. The record fields follow `Message`
-and `Delivery` (`at`, `client`, `connection_id`, `packet_id`). One list holds both packet kinds
-because the order between them is what a test of "unsubscribed, then subscribed again" reads.
+acknowledgement is written, with no `find_*` query beside it. The record fields follow `Message` and
+`Delivery` (`at`, `client`, `connection_id`, `packet_id`). One list holds both packet kinds because
+the order between them is what a test of "unsubscribed, then subscribed again" reads.
 `next_subscribe(filter=None)` waits for the next SUBSCRIBE, optionally naming one filter, compared
-exactly as `subscribed(topic)` compares it; its name is the packet it waits for, which is why it
-is not `next_subscribe_request`: that would read as if an UNSUBSCRIBE matched too. A SUBSCRIBE or
-UNSUBSCRIBE is now parsed whole before it changes the session, so one refused part-way, which
-used to leave its earlier filters subscribed, or unsubscribed, on a stored session, changes
-nothing and is not recorded.
+exactly as `subscribed(topic)` (now `is_subscribed(topic)`) compares it; its name is the packet it
+waits for, which is why it is not `next_subscribe_request`: that would read as if an UNSUBSCRIBE
+matched too. A SUBSCRIBE or UNSUBSCRIBE is now parsed whole before it changes the session, so one
+refused part-way, which used to leave its earlier filters subscribed, or unsubscribed, on a stored
+session, changes nothing and is not recorded.
 
 **Rejected:** a history on `_State` or in `SessionState`, because a clean session discards it with
 the evidence; one list per packet kind, which loses the order between them; matching

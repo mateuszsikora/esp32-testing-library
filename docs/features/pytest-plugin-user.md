@@ -567,6 +567,12 @@ end = board.wait_until(trip_end(broker, "car-1"), within=minutes(3))
   and `.next_change()`, `lines.next_change()`, and `board.next_boot()` are the same type, and
   are annotated so: `broker.next_message(...)` is a `Condition[Message | None]`, which a helper
   typed `def wait(c: Condition[Message | None])` accepts.
+- The package's own conditions take their shape from what they wait for: a `next_*` method for
+  the next event, an `is_<state>` property for a state that holds now (`buzzer.is_on`), a
+  property named for what has happened (`connection.established`), a method when the state takes
+  an argument (`broker.is_subscribed(topic)`), and an action's method for its outcome
+  (`central.read(uuid)`): [which shape a condition
+  has](../guides/writing-tests.md#which-shape-a-condition-has).
 - What it checks is up to `find`: the condition itself keeps nothing and consumes nothing; `find`
   may keep what it likes, as the package's own do. Capture a boundary, as `start` above, when the
   condition makes it, so that a message already received does not satisfy it. A wait on esp32sim
@@ -1869,7 +1875,7 @@ request bytes to occurrence counts. See [matching](matching-user.md) for timing 
 `broker` selects the modem model and its simulated network before power-on and returns its
 MQTT 3.1.1 broker on port 1883. It requires a profile with `uart.modem`, such as
 `lilygo-t-a7670g-r2`. Use `board.wait_until(broker.next_message(topic), within=seconds(...))`,
-`broker.subscribed(topic)`, `broker.next_connection()` and `broker.publish(topic, payload)`.
+`broker.is_subscribed(topic)`, `broker.next_connection()` and `broker.publish(topic, payload)`.
 `broker.find_message(topic)` and `broker.find_connection()` query recorded history; TLS
 listeners add `next_handshake_started()` and `next_handshake_completed()`. Create a `next_*`
 condition before the action that may produce its event. The
@@ -1901,7 +1907,7 @@ def test_a_phone_joins_the_setup_network(board, wifi):
     suffix = ESP32SIM_STATION_MAC.replace(":", "")[-4:].upper()
     network = wifi.station(f"setup-{suffix}")
     board.power_on()
-    board.wait_until(network.when_leased(), within=seconds(20))
+    board.wait_until(network.is_leased, within=seconds(20))
 ```
 
 | Address | Value | Whose |
@@ -1928,7 +1934,7 @@ This is exclusive with `wifi.access_point(...)` and `wifi.nearby(...)`. A second
 `wifi.access_point_off(): wifi.station has no virtual access point to switch` and the corresponding
 `wifi.access_point_on()` message. Explicit station departure and rejoining are not implemented.
 
-Wait for `network.when_leased()` after power-on, then use `network.connect(80)` or
+Wait for `network.is_leased` after power-on, then use `network.connect(80)` or
 `network.http_client.get("/status")`. The lease and host-side services are described in
 [the network guide](network-user.md#joining-the-devices-own-access-point). Serial does not supply virtual air; Wi-Fi replay is not a supported source. Only the classic ESP32 has the virtual station: on the other chips `wifi.station(...)` skips the
 test, `esp32sim: wifi on esp32s3: esp32sim has no virtual station for a SoftAP on the ESP32-S3 (#229, G4)`.
@@ -1940,7 +1946,7 @@ disassociate the host after about 300 s; the emulator rejoins. Lease renewal is 
 expiry clears the address and connections and starts DHCP again. Radio extensions await upstream
 support, and renewal awaits a DHCP client extension.
 
-`board.wifi.station(...)` may be configured before power-on, including for a device that starts its SoftAP much later. DHCP begins when the emulator reports the data link ready, after the WPA2 key exchange where applicable. `network.when_leased()` remains a current-state condition and becomes false after link loss.
+`board.wifi.station(...)` may be configured before power-on, including for a device that starts its SoftAP much later. DHCP begins when the emulator reports the data link ready, after the WPA2 key exchange where applicable. `network.is_leased` remains a current-state condition and becomes false after link loss; `network.leases` keeps every lease the host got, and `network.next_lease()` waits for the next one.
 
 ## Parallel execution
 

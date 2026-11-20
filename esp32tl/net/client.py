@@ -173,8 +173,11 @@ class TcpConnection:
         self._closing = True
         self._close()
 
-    # Conditions.
+    # Conditions. What has happened to the connection, once and for good, is a property named for
+    # it, `established`, that returns when it happened however long ago; the next bytes are
+    # `next_data(...)`, a method, since the call is where it starts looking.
 
+    @property
     def established(self) -> Condition[Duration | None]:
         """A condition returning when the device accepted the connection. Raises
         `ConnectionEnded` once the device refused it, or it was lost (the link down, the device
@@ -189,6 +192,7 @@ class TcpConnection:
 
         return Condition(find, f"{self.name} established", "TCP", self.unanswered)
 
+    @property
     def closed(self) -> Condition[Duration | None]:
         """A condition returning when the device closed its end, a FIN, whoever closed first.
         Raises `ConnectionEnded` once the connection ended without it: refused, reset or lost."""
@@ -202,16 +206,19 @@ class TcpConnection:
 
         return Condition(find, f"{self.name} closed by the device", "TCP", self.unanswered)
 
+    @property
     def refused(self) -> Condition[Duration | None]:
         """A condition returning when the device answered the connection's SYN with a RST. Raises
         `ConnectionEnded` once the device accepted it instead, or it was lost first."""
         return self._ended_by("refused")
 
+    @property
     def reset(self) -> Condition[Duration | None]:
         """A condition returning when the device reset the established connection. Raises
         `ConnectionEnded` once it ended another way: closed, refused, lost or timed out."""
         return self._ended_by("reset")
 
+    @property
     def timed_out(self) -> Condition[Duration | None]:
         """A condition returning when the connection timed out with no answer to any of its SYNs,
         127 s after the first. Raises `ConnectionEnded` once the device answered instead,

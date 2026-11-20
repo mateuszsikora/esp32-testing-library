@@ -458,7 +458,7 @@ def test_a_tcp_wait_that_times_out_names_the_syns_sent_again_on_the_clock() -> N
         run.clock.wait(S)
         connection = network.connect(80)
         with pytest.raises(NeverHappened) as raised:
-            run.clock.wait_until(connection.established(), 3 * S, repr(connection.established()))
+            run.clock.wait_until(connection.established, 3 * S, repr(connection.established))
         # The SYN went again at the turns its RTO ran out at, the last at the wait's end.
         assert connection.syns == [Duration(S), Duration(2 * S), Duration(4 * S)]
         assert str(raised.value) == (

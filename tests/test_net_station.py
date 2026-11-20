@@ -64,11 +64,11 @@ class SoftAP:
 
 def test_lease_lost_offer_retries_nak_and_expiry() -> None:
     ap = SoftAP()
-    condition = ap.net.when_leased()
+    condition = ap.net.is_leased
     assert condition() is None
     with pytest.raises(TypeError):
         bool(condition)
-    with pytest.raises(NotReachable, match=r"wait for network.when_leased"):
+    with pytest.raises(NotReachable, match=r"wait for network.is_leased"):
         ap.net.connect(80, address="192.168.4.1")
     [(_, first)] = ap.net.poll(0)
     assert ap.net.quiet_until() == 4_000 * MS
@@ -92,6 +92,50 @@ def test_lease_lost_offer_retries_nak_and_expiry() -> None:
     ap.now = lease.expires.ns
     [(_, expired)] = ap.net.poll(ap.now)
     assert ap.net.lease is None and options(expired[42:])[53] == b"\x01"
+
+
+def test_the_station_keeps_its_leases_by_the_access_point_sides_names() -> None:
+    """`network.leases`, `next_lease()` and `find_lease()` are the station's side of
+    `network.dhcp.leases`, `next_lease()` and `find_lease()` (#292)."""
+    ap = SoftAP()
+    next_lease = ap.net.next_lease()
+    assert ap.net.leases == [] and ap.net.find_lease() is None and next_lease() is None
+    assert repr(next_lease) == "the station's next DHCP lease"
+    ap.up()
+    first = ap.net.lease
+    assert first is not None and ap.net.leases == [first]
+    assert ap.net.find_lease() is first and next_lease() is first and ap.net.is_leased() is first
+    after = ap.net.next_lease()
+    assert after() is None
+    ap.now = first.expires.ns
+    [(_, discover)] = ap.net.poll(ap.now)
+    assert ap.net.is_leased() is None and ap.net.leases == [first]
+    [(_, request)] = ap.reply(discover)
+    assert ap.reply(request) == []
+    second = ap.net.lease
+    assert second is not None and second is not first and ap.net.leases == [first, second]
+    assert ap.net.find_lease() is first and next_lease() is first and after() is second
+
+
+@pytest.mark.parametrize("link", ["ethernet", "ppp"])
+def test_the_stations_lease_needs_a_station(link: str) -> None:
+    net = Internet(lambda: 0, link=link)  # type: ignore[arg-type]
+    instead = (
+        "; behind an access point the harness leases the device its address: network.dhcp."
+        if link == "ethernet"
+        else ""
+    )
+    reads: list[tuple[str, str, Callable[[], object]]] = [
+        ("is_leased", "next_lease()", lambda: net.is_leased),
+        ("leases", "leases", lambda: net.leases),
+        ("next_lease()", "next_lease()", net.next_lease),
+        ("find_lease()", "find_lease()", net.find_lease),
+    ]
+    for member, dhcp, read in reads:
+        expected = f"network.{member} requires wifi.station()" + (instead + dhcp if instead else "")
+        with pytest.raises(ValueError) as raised:
+            read()
+        assert str(raised.value) == expected
 
 
 def test_arp_answers_only_our_address_and_resolves_before_tcp() -> None:
