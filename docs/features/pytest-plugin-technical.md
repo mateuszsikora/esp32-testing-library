@@ -121,13 +121,13 @@ are in [models-technical.md](models-technical.md).
    `esp32tl.net.tls.number_authorities_from_zero()` for every test, `board` or not: validates
    serial's artifact (and optional `app_recording` reference), then obtains `dut` with `request.getfixturevalue`. A `pytest_fixture_setup` hook
    validates before pytest-embedded's `app` too, covering tests that request `dut` directly.
-   The `Artifact`, the digest and the build's kind, is cached in the item's `SERIAL_ARTIFACT`
-   stash; for a PlatformIO build the hook also puts `PlatformioApp` in the place of `IdfApp` in
-   `_fixture_classes_and_options.classes["app"]`. It refuses a non-single `Dut`,
-   then constructs `Esp32Sim` or `Serial`, with the profile, the test file's directory and
-   `skip_at_the_test`. Serial requires an `IdfDut`; its fixture setup has already handled
-   flashing. `board_profile(request.node)` retrieves `BoardMarkers.loaded_profile` using the
-   definition's nodeid, without resolving a symlink or reading the marker again at setup.
+   The `Artifact`, the digest and the `Build`, is cached in the item's `SERIAL_ARTIFACT` stash,
+   and `Serial` gets it as `artifact`; for a PlatformIO build the hook also puts `PlatformioApp`
+   in the place of `IdfApp` in `_fixture_classes_and_options.classes["app"]`. It refuses a
+   non-single `Dut`, then constructs `Esp32Sim` or `Serial`, with the profile, the test file's
+   directory and `skip_at_the_test`. Serial requires an `IdfDut`; its fixture setup has already
+   handled flashing. `board_profile(request.node)` retrieves `BoardMarkers.loaded_profile` using
+   the definition's nodeid, without resolving a symlink or reading the marker again at setup.
    `backend_failed(error, name)` raises a short pytest failure prefixed with the chosen
    backend. [Serial lifecycle](serial-backend-technical.md#data-flow) gives the timing details.
 6. **A source or a tap the backend cannot give**, asked for in the body (`gnss.replay`,
@@ -161,9 +161,11 @@ are in [models-technical.md](models-technical.md).
    property is a JSON string because JUnit XML writes a property's `str()`, which for a `dict` is
    Python's `repr`. A test that failed on `RunEnded` and gets no teardown error has `FAILED` set,
    so its report shows the run too. The backend attributes `report_section` and
-   `report_property` supply these names. Serial uses `serial console` and `serial_console`:
+   `report_property` supply these names. Both sections start with the build the test loaded,
+   `build_line` ([run report](run-report-technical.md#schema)), and both properties have it as
+   `build`. Serial uses `serial console` and `serial_console`:
    its report gives console byte count, tap path and any error; failures include the tap, power-on
-   and wait steps and console lines. Its JSON property gives `clock`, `app_sha256`, `console_bytes`,
+   and wait steps and console lines. Its JSON property gives `build`, `clock`, `console_bytes`,
    `error` and `tap` ([serial schema](serial-backend-technical.md#schema)).
 9. **`console` fixture** returns the cached `board.console`. `Console.expect` and `Console.expect_exact`
    take a pattern or a list of them, compile each into a regular expression on bytes

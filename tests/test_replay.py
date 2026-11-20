@@ -10,6 +10,7 @@ import pytest
 
 from esp32tl import recording
 from esp32tl.boards.capabilities import Request
+from esp32tl.build import ESP_IDF, Build
 from esp32tl.interfaces import SourceError
 from esp32tl.interfaces.bluetooth import Bluetooth
 from esp32tl.interfaces.uart import Uart
@@ -241,6 +242,8 @@ def test_unseen_requests_are_in_the_backend_report_and_json_properties(tmp_path:
         "console", Wire(None, 3, 115200), clock=CLOCK, directory=tmp_path
     )
     backend._uarts = {"uart.gnss": gnss}
+    backend.app = Build(tmp_path, ESP_IDF, (), None, None, None, "esp32")
+    backend._app_sha256 = None
     backend._sd_card = None
     backend._wifi = Wifi(now=lambda: 0)
     backend._bluetooth = Bluetooth()

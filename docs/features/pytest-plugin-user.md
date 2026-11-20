@@ -1634,9 +1634,12 @@ A test that parametrises pytest-embedded's `count` itself above 1, as in
 Every test that uses `board` also reports what the run told: a section `esp32sim link`, which
 pytest prints with a failure or with `-rA`, and the `esp32sim_link` user property, a JSON string
 that `--junitxml` writes into the report
-([the link's report](esp32sim-backend-user.md#the-links-report)). For a test that failed,
-the section ends with the run on the board's clock: what the test did, what the firmware printed
-and the bytes on every route, in the order they happened
+([the link's report](esp32sim-backend-user.md#the-links-report)). Its first line names the build
+the test loaded, `build: {directory} ({kind} for {chip}); app_sha256 {sha256}`, so that a build
+directory other than the intended one shows
+([the run on the board's clock](run-report-user.md#the-run-on-the-boards-clock)). For a test that
+failed, the section ends with the run on the board's clock: what the test did, what the firmware
+printed and the bytes on every route, in the order they happened
 ([the run on the board's clock](run-report-user.md#the-run-on-the-boards-clock)).
 
 esp32tl automatically filters the exact warning

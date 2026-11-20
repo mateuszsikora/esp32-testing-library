@@ -1,7 +1,11 @@
 """The run on the board's clock, `esp32tl/report.py`: what goes into the log, and how the report
 of a test that did not pass shows it."""
 
-from esp32tl.report import RunLog, console_line, shown
+from pathlib import Path
+
+from esp32tl import build
+from esp32tl.build import Build
+from esp32tl.report import RunLog, build_line, build_properties, console_line, shown
 
 
 def test_entries_are_shown_in_the_order_of_the_board_s_time() -> None:
@@ -86,3 +90,22 @@ def test_a_console_line_cannot_move_the_cursor_over_the_report() -> None:
     assert log.lines()[1:] == [
         "  0.000000000 s  console  progress 10%\\rprogress 20%\t\\x1b[2Kok",
     ]
+
+
+def test_the_build_line_names_each_kind_as_its_tool_does() -> None:
+    pio = Path("/work/app/.pio/build/esp32dev")
+    platformio = Build(pio, build.PLATFORMIO, (), None, None, None, "esp32")
+    assert build_line(platformio, "ab" * 32) == (
+        f"build: {pio} (PlatformIO for esp32); app_sha256 {'ab' * 32}"
+    )
+    idf = Path("/work/app/build")
+    esp_idf = Build(idf, build.ESP_IDF, (), None, None, None, "esp32s3")
+    assert build_line(esp_idf, None) == f"build: {idf} (ESP-IDF for esp32s3); app_sha256 none"
+    assert build_properties(esp_idf, None) == {
+        "directory": str(idf),
+        "kind": "esp-idf",
+        "chip": "esp32s3",
+        "app_sha256": None,
+    }
+    # Every kind esp32tl.build loads has a name in the report.
+    assert set(build.KIND_NAMES) == {build.ESP_IDF, build.PLATFORMIO}

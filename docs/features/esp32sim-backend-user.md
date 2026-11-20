@@ -309,6 +309,7 @@ failure, or for every test with `-rA`:
 
 ```
 ----------------------- Captured esp32sim link teardown ------------------------
+build: /home/me/esp32-testing-library/firmware/hello_world/build (ESP-IDF for esp32); app_sha256 9a1f…
 board esp32-devkitc, watching GPIO 4, GPIO 5
 runner: protocol version 2, esp32sim 357b0e542dfe97d4c62ec4a15c01c4969164448c, clock emulated-fifo-write; 2 turns taken by the harness
 stats: the run ended at 0.100000000 s (stop); 2 turns, 0 resets
@@ -317,10 +318,14 @@ routes:
   uart.gnss: nothing at the far end; no bytes
 ```
 
-This is `tests/test_hello_world.py`'s. The first line names the test's
-[board profile](board-profiles-user.md#choosing-a-profile) and the pins the link watches, those of
-every UART route of the profile. It lists the runner's warnings, one line each with its emulated time, the statistics per UART
-port, and the harness's error with its traceback when an interface raised. `the runner never
+This is `tests/test_hello_world.py`'s, the hash shortened. The first line names the build the test
+loaded: its directory as an absolute path, `ESP-IDF` or `PlatformIO`, the chip it is built for and
+the SHA-256 of its app image
+([the run on the board's clock](run-report-user.md#the-run-on-the-boards-clock)). The next names
+the test's [board profile](board-profiles-user.md#choosing-a-profile) and the pins the link
+watches, those of every UART route of the profile. It lists the runner's warnings, one line
+each with its emulated time, the statistics per UART port, and the harness's error with its
+traceback when an interface raised. `the runner never
 connected`, which is what a test that never powered on gets, and `no stats: the link ended
 without them (the runner was killed, or died)` say what is missing. The statistics are those the
 runner sends as the run ends, one set per test. `routes:` gives, for every UART route of the
@@ -340,8 +345,8 @@ failed gets the run on the
 board's clock after it
 ([the run on the board's clock](run-report-user.md#the-run-on-the-boards-clock)). The same data,
 but the run, is in the test's `esp32sim_link` user property, a JSON string with `board`, `watch`,
-`warnings`, `stats`, `error`, `routes`, `sd_card`, `wifi` and `bluetooth`, which `--junitxml`
-writes as a `<property>`; `wifi` is `null` without an access point, `bluetooth` without
+`warnings`, `stats`, `error`, `build`, `routes`, `sd_card`, `wifi` and `bluetooth`, which
+`--junitxml` writes as a `<property>`; `wifi` is `null` without an access point, `bluetooth` without
 `board.bluetooth`, and
 `sd_card`, without a slot, else the
 card's `image` and its `faults`. With a slot the report also names the card and lists each fault

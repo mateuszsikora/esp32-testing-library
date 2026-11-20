@@ -803,6 +803,10 @@ def pytest_collection_modifyitems(items):
     )
 
 
+# The SHA-256 of `fake_build`'s empty app image.
+EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
+
+
 def fake_build(
     app: Path, target: str = "esp32", encrypted: bool = False, *, build_dir: str = "build"
 ) -> Path:
@@ -1128,6 +1132,42 @@ class TestRelease:
     cwd.mkdir()
     monkeypatch.chdir(cwd)
     fake_runner.runpytest_subprocess(str(suite), "-q").assert_outcomes(passed=3)
+
+
+def test_the_report_names_the_build_the_test_loaded(fake_runner: pytest.Pytester) -> None:
+    # A local build/ beside the one the marker selects: the report says which one ran.
+    app = fake_runner.path / "app source"
+    for name in ("build", "../CI builds/debug"):
+        (fake_build(app, build_dir=name) / "app.bin").write_bytes(name.encode())
+    debug = (app / "../CI builds/debug").resolve()
+    digest = hashlib.sha256(b"../CI builds/debug").hexdigest()
+    fake_runner.makepyfile(
+        test_fake="""
+        import pytest
+
+        @pytest.mark.app_path("app source", build_dir="../CI builds/debug")
+        def test_debug(board):
+            pass
+        """
+    )
+    result = fake_runner.runpytest_subprocess(
+        "-p", "no:cacheprovider", "-rA", "--junitxml", "report.xml"
+    )
+    result.assert_outcomes(passed=1)
+    result.stdout.fnmatch_lines(
+        [
+            "*Captured esp32sim link teardown*",
+            f"build: {debug} (ESP-IDF for esp32); app_sha256 {digest}",
+            "board esp32-devkitc, watching *",
+        ]
+    )
+    (prop,) = ElementTree.parse(fake_runner.path / "report.xml").iter("property")
+    assert json.loads(prop.get("value", ""))["build"] == {
+        "directory": str(debug),
+        "kind": "esp-idf",
+        "chip": "esp32",
+        "app_sha256": digest,
+    }
 
 
 def test_rom_is_the_one_make_setup_fetches() -> None:
@@ -2373,6 +2413,7 @@ def test_the_report_of_a_failing_test_shows_the_run_on_the_board_s_clock(
     result.stdout.fnmatch_lines(
         [
             "*Captured esp32sim link teardown*",
+            f"build: {link_runner.path / 'build'} (ESP-IDF for esp32); app_sha256 {EMPTY_SHA256}",
             "board esp32-devkitc, watching GPIO 3, GPIO 4, GPIO 5",
             "stats: the run ended at 3.000000000 s (stop); *",
             "routes:",
@@ -2405,6 +2446,34 @@ def test_the_report_of_a_failing_test_shows_the_run_on_the_board_s_clock(
         "tap": str(link_runner.path / "tap.jsonl"),
     }
     assert routes["uart.gnss"]["bytes_in"] > 0
+
+
+def test_the_report_names_the_image_the_runner_read_at_power_on(
+    link_runner: pytest.Pytester,
+) -> None:
+    # Built again before power-on, and again during the run: the report names the image the
+    # runner read as it started.
+    link_runner.makepyfile(
+        test_fake="""
+        from pathlib import Path
+        from esp32tl.units import seconds
+
+        def test_rebuilt(board):
+            image = Path(__file__).parent / "build" / "app.bin"
+            image.write_bytes(b"rebuilt")
+            board.power_on()
+            image.write_bytes(b"later")
+            board.wait(seconds(1))
+        """
+    )
+    result = link_runner.runpytest_subprocess(
+        "-p", "no:cacheprovider", "-rA", "--junitxml", "report.xml"
+    )
+    result.assert_outcomes(passed=1)
+    digest = hashlib.sha256(b"rebuilt").hexdigest()
+    result.stdout.fnmatch_lines([f"build: * (ESP-IDF for esp32); app_sha256 {digest}"])
+    (prop,) = ElementTree.parse(link_runner.path / "report.xml").iter("property")
+    assert json.loads(prop.get("value", ""))["build"]["app_sha256"] == digest
 
 
 def test_a_tap_that_cannot_be_written_fails_the_test_at_teardown(

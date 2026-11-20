@@ -441,8 +441,9 @@ cut at its start, rather than dropped. A log it cannot read gives
 6. `_write_taps()`: for every `Uart` whose `tapped` is set, `Tap.recording(board=profile.name,
    source=uart.source_kind or "none", clock=self.clock, app_sha256=..., tools=...)` written with
    `recording.write` to the tap's path. `app_sha256` is the SHA-256 of `app.app_image`, the file
-   `flasher_args.json` names under `app` or a PlatformIO build's `firmware.bin`, `None` when the
-   build names none or the file cannot be read; `tools` holds
+   `flasher_args.json` names under `app` or a PlatformIO build's `firmware.bin`, as the runner
+   read it: taken at setup and again as `power_on` starts the runner, not at the write; `None`
+   when the build names none or the file cannot be read; `tools` holds
    `esp32sim`, the runner's `hello`'s revision, when the runner said one, and `Tap.recording` adds
    `esp32tl`. An `OSError` from the write, or a `RecordingError` from a recording the format
    refuses, is a problem of its own, `the tap of {interface} cannot be written: {error}`, and the
@@ -458,12 +459,15 @@ cut at its start, rather than dropped. A log it cannot read gives
    after the runner has stopped: a runner that crashed just before the signal keeps its own code.
    With `--board` the runner exits 0 on `stop` and on `SIGTERM`, so a signal's code never passes.
 
-**The report.** `Esp32Sim.report(run=False)` is `link.report()`, then `routes:` and one line per
+**The report.** `Esp32Sim.report(run=False)` is `build_line(app, app_sha256)`
+([run-report-technical.md](run-report-technical.md#schema)), `link.report()`, then
+`routes:` and one line per
 UART route of the profile, `  {interface}: {source}; {bytes}{tap}`: `{source}` is
 `the {kind} of {detail}` (`the replay of gnss.jsonl`) or `nothing at the far end`, `{bytes}` is
 `{in} bytes in, {out} out` from `log.traffic`, or `no bytes`, and `{tap}` is
 `; tapped into {path}` for a tapped route. With `run`, `log.lines()` follows: the plugin passes it
-for a test that failed. `Esp32Sim.properties()` is `link.properties()` with `routes`, by
+for a test that failed. `Esp32Sim.properties()` is `link.properties()` with `build`,
+`build_properties(app, app_sha256)`, and `routes`, by
 interface: `source` (the kind, or `None`), `detail` (what the source was made from, as the test
 named it), `bytes_in`, `bytes_out` and `tap` (the path, or `None`); then `sd_card`, `None`
 without a slot, else `image` (`SdCard.held`, the card the run had at its end, or `None`),
@@ -680,10 +684,13 @@ no `flash_files` for instance, is not a `BackendError` and fails the setup with 
 
 `load_app(app_path, build_dir=build_dir, backend="esp32sim")` is also used by serial with
 `backend="serial"`: its target and encryption errors name that backend. The default retains the
-runner-specific messages above. `Esp32Sim.app_sha256` is that hash, `None` when the build has none, for a tap's header and
-[the card cache](pytest-plugin-technical.md#the-card-cache). `app_image_sha256(app)` in `esp32tl/tap.py` hashes `Build.app_image` for
-both backends; a build without one returns `None`, and read failures raise `OSError` (tap writing
-catches those).
+runner-specific messages above. `Esp32Sim.app_sha256` is that hash, `None` when the build has
+none, for the report's `build:` line, a tap's header and
+[the card cache](pytest-plugin-technical.md#the-card-cache). `Esp32Sim.__init__` takes it once
+`load_app` returns, and the first `power_on` takes it again just before it starts the runner,
+which reads the image then; the property returns the value held, without reading the file.
+`app_image_sha256(app)` in `esp32tl/tap.py` hashes `Build.app_image` for both backends; a build
+without one returns `None`, and read failures raise `OSError` (tap writing catches those).
 
 ## What a killed session leaves
 
@@ -713,6 +720,11 @@ keeps the runner running for as long as it lives. A board whose run ends without
 with pytest-embedded's own (`REDIRECT_CLS` set back), leaves the manager and the listener for good.
 
 ## Tests
+
+`tests/test_pytest_plugin.py::test_the_report_names_the_build_the_test_loaded` checks, with the
+fake runner, that the `esp32sim link` section starts with the build the marker's `build_dir`
+selected, absolute, and its image's hash, and that the `esp32sim_link` property's `build` says the
+same, for an app whose own `build/` holds another build.
 
 `tests/test_killed_session.py` checks the pieces without a runner: that `power_on` passes the
 pipe's read end as `--parent-fd` and in `pass_fds`, and that a start that fails leaves neither end

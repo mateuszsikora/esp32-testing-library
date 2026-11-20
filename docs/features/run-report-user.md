@@ -115,10 +115,13 @@ A recording, [version 1](../recording-format.md):
 ## The run on the board's clock
 
 A test that fails, in its body, at setup or at teardown, gets the run at the end of its
-`esp32sim link` report section, after the link's report and the routes
+`esp32sim link` report section, after the build, the link's report and the routes
 ([the link's report](esp32sim-backend-user.md#the-links-report)):
 
 ```
+build: /tmp/…/build (ESP-IDF for esp32); app_sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+board esp32-devkitc, watching GPIO 3, GPIO 4, GPIO 5
+…
 routes:
   uart.gnss: the replay of gnss.jsonl; 136 bytes in, 15 out; tapped into /tmp/…/tap.jsonl
 sd_card: empty
@@ -138,7 +141,22 @@ the run on the board's clock, 12 entries:
 ```
 
 This is `tests/test_pytest_plugin.py`'s fake runner, which prints one line and transmits one
-command. Each line is the board's time, who, and what:
+command, on a build whose app image is empty.
+
+The first line names the build the test loaded, so that a run from a stale or unrelated build
+directory shows in its report: `build: {directory} ({kind} for {chip}); app_sha256 {sha256}`.
+`{directory}` is the build directory as an absolute path, the one the closest `app_path`
+marker's `build_dir`, the `esp32tl_build_dir` ini option or the app's `build/` selected
+([project defaults](pytest-plugin-user.md#project-defaults)); `{kind}` is `ESP-IDF` or
+`PlatformIO` ([builds](builds-user.md)); `{chip}` the IDF target the build is for, as `esp32` or
+`esp32s3`; `{sha256}` the SHA-256 of its app image, the `app_sha256` a tap writes into its
+recording, or `none` when the build names no app image or it cannot be read. Every test that uses
+`board` has the line, a test that passed too, and the user property has the same as `build`:
+`{"directory": ..., "kind": "esp-idf" or "platformio", "chip": ..., "app_sha256": ... or null}`.
+On serial the `serial console` section starts with the same line, for the build the backend
+checked and flashed ([serial](serial-backend-user.md)).
+
+After the link's report and the routes, each line of the run is the board's time, who, and what:
 
 - `test`: what the test did. Before power-on everything is at 0. A call of the receiver model at
   the board's time it was made, as `uart.gnss.move(heading=NORTH, speed=m_s(10))`; its route's line
@@ -199,8 +217,8 @@ A rule that observes says `observed` where the others say `failed` or `delayed`.
 `sd_card.fail`, `sd_card.delay`, `sd_card.observe`, `clear()` and `sd_card.clear_faults()` are among
 the test's steps too ([pytest plugin](pytest-plugin-user.md#making-the-card-fail-or-slow-down)).
 
-A test that passed gets the `routes:` lines and the slot's, without the run; `pytest -rA` shows
-them.
+A test that passed gets the `build:` line, the `routes:` lines and the slot's, without the run;
+`pytest -rA` shows them.
 
 ### Unseen replay request history
 

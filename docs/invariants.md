@@ -2532,3 +2532,20 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_net_client.py::test_accepting_raises_for_a_lost_connection_and_an_unreachable_device`,
   `tests/test_net_client.py::test_accepting_refuses_a_connection_that_ended_before_it_was_seen`,
   `tests/test_arduino_shell.py::test_a_server_that_listens_after_its_address_is_waited_for_with_accepting`
+
+## The build a test loaded
+
+- **288.** The report section of every test that uses `board`, one that passed too, starts with
+  the build the test loaded, `build: {directory} ({kind} for {chip}); app_sha256 {sha256}`: the
+  build directory the `app_path` marker's `build_dir` selected, as an absolute path, not another
+  `build/` beside it, `ESP-IDF` or `PlatformIO`, the chip it is built for and the SHA-256 of its
+  app image, `none` when there is none; the user property has the same as `build`. On esp32sim
+  the hash is of the image the runner read as the first `power_on` started it: not the one the
+  directory held at setup, nor one written into it after; a test that never powers on reports
+  the image at setup. On serial the `serial console` section starts with the same line, of the
+  build `check_artifact` checked.
+  `tests/test_pytest_plugin.py::test_the_report_names_the_build_the_test_loaded`,
+  `tests/test_pytest_plugin.py::test_the_report_names_the_image_the_runner_read_at_power_on`,
+  `tests/test_pytest_plugin.py::test_the_report_of_a_failing_test_shows_the_run_on_the_board_s_clock`,
+  `tests/test_serial_backend.py::test_the_serial_report_names_the_build_the_test_loaded`,
+  `tests/test_run_report.py::test_the_build_line_names_each_kind_as_its_tool_does`
