@@ -141,9 +141,11 @@ across it, and the run's log gets `board.reset(): hard reset`. Before power-on i
 `BoardOff: the board is off; call board.power_on() first`. The backend cannot switch the board's
 supply, nor see the chip's resets: `board.power_off()` skips the test with
 `serial: the backend cannot switch the board's power`, and `board.boots`, `board.boot`,
-`board.next_boot()` and `board.wait_for_wake()` with
+`board.next_boot()`, `board.uptime_zero(boot)` and `board.wait_for_wake()` with
 `serial: the backend does not see the chip's resets`, at the line that asks, as an unsupported
-source does ([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)).
+source does ([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)). An
+argument of the wrong type to `board.next_boot()` or `board.uptime_zero()` raises its `TypeError`
+first, as on esp32sim.
 
 `board.clock` is `wall`. `board.now` uses monotonic elapsed time from the reset request, including
 reset latency, and advances while the test body runs. `board.utc` is the host's UTC at reset plus

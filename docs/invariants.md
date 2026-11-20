@@ -1904,6 +1904,16 @@ that references to its number keep their meaning.
      `runner/src/chip/tests.rs::the_classic_lact_reads_as_counting_from_its_load_once_enabled_and_a_reset_stops_it`,
      `runner/src/chip/tests.rs::the_s3_systimer_reads_zero_at_its_reset_and_where_it_is_loaded`,
      `tests/test_boardlink.py::test_each_boot_s_uptime_zero_is_the_runner_s_last_word_on_the_boot_it_came_in`
+- **287.** `board.next_boot(uptime_zero=True)` returns the first boot after the call (of `cause`)
+     only while its `uptime_zero` is known, read again at each poll: not before, and never a later
+     boot in its place, so a boot whose zero never comes times out as
+     `the next boot, with its uptime zero`. `board.uptime_zero(boot)` is the held boot's zero as the
+     backend knows it now, and refuses a boot unequal to the board's boot of its number.
+     `tests/test_condition.py::test_next_boot_with_uptime_zero_waits_for_the_zero_of_the_first_boot_after_it`,
+     `tests/test_condition.py::test_next_boot_with_uptime_zero_finds_nothing_for_a_boot_whose_zero_never_comes`,
+     `tests/test_condition.py::test_next_boot_with_uptime_zero_and_a_cause_passes_over_a_boot_of_another_cause`,
+     `tests/test_condition.py::test_board_uptime_zero_reads_the_boot_s_zero_now`,
+     `tests/test_power.py::test_the_boot_next_boot_returns_dates_the_firmware_s_stamps`
 
 ## Reading the flash
 

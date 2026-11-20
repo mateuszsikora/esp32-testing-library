@@ -249,7 +249,15 @@ cannot fail with this backend; it is there for another caller:
   `uptime_zero` from `BoardLink.uptimes`, which keeps the last `uptime` of each boot by number
   (the boot after the `reset`s read before it, [protocol 5.24](../protocol.md#524-uptime-ext-245)):
   `UptimeZero(Duration(earliest), Duration(latest))`, or `None` for a boot that has none yet and
-  for one whose last `uptime` has `null` for both.
+  for one whose last `uptime` has `null` for both. A `Boot` already read keeps what it had. The
+  `reset` comes before the boot's first `uptime`, on the classic ESP32 some tens of milliseconds
+  before, so the `Boot` that a wait on `next_boot()` or `wait_for_wake()` returns, read after the
+  turn that brought the `reset`, has the zero only if that turn ran past it: `wait_for_wake()`'s
+  ends `WAKE_LATENCY_NS` after the reset, before it; a turn of `wait_until` runs up to 100 ms and
+  often past it, and one cut short by `within` or by `wait` may not. `Board.uptime_zero(boot)` reads `boots` again for
+  it, and `next_boot(uptime_zero=True)` matches at the first poll, in the same turn or a later one,
+  at which the boot's last `uptime` has its zero, not `null` (`esp32tl/interfaces/board.py`);
+  neither is overridden here.
 
 `_on()`, which `now`, `utc`, `boots` and every wait go through, asks only that the runner has
 started, so the test can wait on a board that is off: the runner idles the guest and still takes
@@ -550,6 +558,7 @@ repository makes.
 | `Esp32Sim.nvs(namespaces, partition="nvs", *, merge=False)` | The test's keys in the named NVS partition: for the runner's start before the first `power_on`, into its flash while the supply is off after it; with `merge`, over the partition's values now; `BoardOff` with the supply on, `RunEnded` once the run has ended |
 | `Esp32Sim.powered`, `Esp32Sim.started` | Whether the supply is on, from `power_on` to `power_off`; whether `power_on` has started the runner |
 | `Esp32Sim.boots`, `Esp32Sim.boot` | The chip's boots as `Boot`s, the first at 0 with cause 1 and one per `reset` the link has read, each with the `uptime_zero` of the link's last `uptime` for it; the last. `BoardOff` before the first `power_on` |
+| `Esp32Sim.uptime_zero(boot)`, `Esp32Sim.next_boot(cause=None, *, uptime_zero=False)` | `Board`'s: a held `Boot`'s `uptime_zero` read again from `boots`; the next boot, with `uptime_zero=True` only once its `uptime_zero` is known |
 | `Esp32Sim.wait(duration)`, `Esp32Sim.wait_until(condition, *, within)`, `Esp32Sim.wait_on_clock(condition, within, description)` | The test's waits, each a `Duration` of the board's time, logged as steps of the test |
 | `Esp32Sim.wait_for_wake(*, within)` | Runs the board to the chip's next boot, for at most `within`, and returns its `Boot`; `AssertionError` when that boot is not a wake from deep sleep, `NeverHappened` and `RunEnded` as `wait_until`'s, `BoardOff` before `power_on` and while the supply is off |
 | `Esp32Sim.now`, `Esp32Sim.utc` | The board's time since the first power-on, a `Duration`, through every reset and while the board is off; the world's time, a `datetime` in UTC |

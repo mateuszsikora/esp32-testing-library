@@ -124,6 +124,41 @@ def test_each_boot_s_uptime_zero_puts_the_firmware_s_uptime_on_the_board_s_clock
     assert ms(48) <= first.earliest and first.latest <= ms(49)
 
 
+def test_the_boot_next_boot_returns_dates_the_firmware_s_stamps(
+    board: Esp32Sim, console: Console
+) -> None:
+    board.power_on()
+    console.expect_exact("persistence: done")
+    plain = board.next_boot()
+    counted = board.next_boot(uptime_zero=True)
+    # before the reset: the boot's line may end in the turn that brings its zero
+    printed = console.line(BOOT.decode())
+    board.reset()
+    # 10 ms into the boot, some 40 before its counter counts: the boot is there, its zero is not
+    board.wait(ms(10))
+    held = plain()
+    assert held is not None and held.number == 3 and held.uptime_zero is None
+    assert counted() is None and board.uptime_zero(held) is None
+    with pytest.raises(NeverHappened) as raised:
+        board.wait_until(counted, within=ms(10))
+    assert str(raised.value).startswith(
+        "the next boot, with its uptime zero did not happen within 0.01 s:"
+    )
+    assert "waits up to 0.01 s for the next boot, with its uptime zero" in board.report(run=True)
+
+    boot = board.wait_until(counted, within=seconds(1))
+    assert boot == held
+    line = board.wait_until(printed, within=seconds(5))
+    zero = boot.uptime_zero
+    assert zero is not None
+    # the record read before the zero keeps None; the lookup reads the zero now
+    assert held.uptime_zero is None
+    assert board.uptime_zero(held) == zero == board.uptime_zero(boot)
+    uptime = ms(int(line[7]))
+    assert zero.earliest + uptime <= line.at <= zero.latest + uptime + ms(2)
+    console.expect_exact("persistence: done")
+
+
 @pytest.mark.requires_mtools
 def test_the_card_keeps_its_power_and_its_files_through_board_reset(
     board: Esp32Sim, console: Console, sd_card: SdCard

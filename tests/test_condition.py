@@ -138,3 +138,74 @@ def test_next_boot_reads_only_the_boots_since_the_last_poll() -> None:
     boots.append(Boot(1002, Duration(1002), DEEPSLEEP_RESET))
     assert woke() is boots[-1] and woke() == Boot(1002, Duration(1002), DEEPSLEEP_RESET)
     assert boots.reads == 1000 + 1 + 1 + 1
+
+
+def test_next_boot_with_uptime_zero_waits_for_the_zero_of_the_first_boot_after_it() -> None:
+    boots = CountingList[Boot]([Boot(1, Duration(0), POWERON_RESET)])
+    board = SimpleNamespace(boots=boots)
+    counted = Board.next_boot(board, POWERON_RESET, uptime_zero=True)  # type: ignore[arg-type]
+    assert repr(counted) == "the next boot (POWERON_RESET), with its uptime zero"
+    assert repr(Board.next_boot(board, uptime_zero=True)) == (  # type: ignore[arg-type]
+        "the next boot, with its uptime zero"
+    )
+    # the boot has begun, its counter not yet counted: the boot is not returned without its zero
+    boots.append(Boot(2, Duration(5), POWERON_RESET))
+    assert counted() is None
+    # a later boot with a zero does not take its place: the condition is for the first one
+    boots.append(Boot(3, Duration(9), POWERON_RESET, UptimeZero(Duration(9), Duration(10))))
+    assert counted() is None
+    zero = UptimeZero(Duration(5), Duration(6))
+    boots[1] = Boot(2, Duration(5), POWERON_RESET, zero)
+    found = counted()
+    assert found == Boot(2, Duration(5), POWERON_RESET) and found is not None
+    assert found.uptime_zero == zero
+    # read again at each poll: a zero that is no longer known is none again
+    boots[1] = Boot(2, Duration(5), POWERON_RESET)
+    assert counted() is None
+
+
+def test_next_boot_with_uptime_zero_finds_nothing_for_a_boot_whose_zero_never_comes() -> None:
+    boots: list[Boot] = [Boot(1, Duration(0), POWERON_RESET)]
+    board = SimpleNamespace(boots=tuple(boots))
+    counted = Board.next_boot(board, uptime_zero=True)  # type: ignore[arg-type]
+    plain = Board.next_boot(board)  # type: ignore[arg-type]
+    board.boots = (*boots, Boot(2, Duration(5), DEEPSLEEP_RESET))
+    for _ in range(3):
+        assert counted() is None
+    assert plain() == Boot(2, Duration(5), DEEPSLEEP_RESET)
+    with pytest.raises(TypeError, match="uptime_zero is 1, not True or False"):
+        Board.next_boot(board, uptime_zero=1)  # type: ignore[arg-type]
+
+
+def test_board_uptime_zero_reads_the_boot_s_zero_now() -> None:
+    held = Boot(2, Duration(5), DEEPSLEEP_RESET)
+    zero = UptimeZero(Duration(5), Duration(6))
+    board = SimpleNamespace(boots=(Boot(1, Duration(0), POWERON_RESET), held))
+    assert Board.uptime_zero(board, held) is None  # type: ignore[arg-type]
+    board.boots = (board.boots[0], Boot(2, Duration(5), DEEPSLEEP_RESET, zero))
+    # the record the test holds keeps what was known when it was read; the lookup reads it now
+    assert held.uptime_zero is None
+    assert Board.uptime_zero(board, held) == zero  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match=r"boot is 2, not a Boot from board.boots"):
+        Board.uptime_zero(board, 2)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match=r"boot 3 at .* is not one of this board's 2 boots"):
+        Board.uptime_zero(board, Boot(3, Duration(9), POWERON_RESET))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match=r"boot 2 at .* \(reset cause 1\) is not one of"):
+        Board.uptime_zero(board, Boot(2, Duration(5), POWERON_RESET))  # type: ignore[arg-type]
+
+
+def test_next_boot_with_uptime_zero_and_a_cause_passes_over_a_boot_of_another_cause() -> None:
+    boots: list[Boot] = [Boot(1, Duration(0), POWERON_RESET)]
+    board = SimpleNamespace(boots=boots)
+    woke = Board.next_boot(board, DEEPSLEEP_RESET, uptime_zero=True)  # type: ignore[arg-type]
+    # a restart, its zero not yet known, then the wake, its zero not yet known either
+    boots.append(Boot(2, Duration(5), POWERON_RESET))
+    assert woke() is None
+    boots.append(Boot(3, Duration(9), DEEPSLEEP_RESET))
+    assert woke() is None
+    boots[1] = Boot(2, Duration(5), POWERON_RESET, UptimeZero(Duration(5), Duration(6)))
+    assert woke() is None
+    zero = UptimeZero(Duration(9), Duration(10))
+    boots[2] = Boot(3, Duration(9), DEEPSLEEP_RESET, zero)
+    found = woke()
+    assert found is not None and found.number == 3 and found.uptime_zero == zero

@@ -640,7 +640,11 @@ appended since the last one: a wait of N polls over N records reads N, not N × 
 poll costs besides is what `history()` costs: nothing for a list kept as it grows, but the whole
 history for one built anew, as `Esp32Sim.boots` is, every boot with its `uptime_zero`. Once it
 has a match it asks `wanted` nothing more and returns `history()[_found]` at every poll, read again
-rather than kept, so a `Boot` whose `uptime_zero` came after the match is returned with it. The
+rather than kept, so a `Boot` whose `uptime_zero` came after the match is returned with it.
+`board.next_boot(uptime_zero=True)` wraps the same `FirstFrom` in a `find` that returns its match
+only while the match's `uptime_zero` is not `None`: the zero is not part of `wanted`, which would
+refuse the boot for good at the first poll that saw it without one and go on to a later boot. Its
+description is the plain one with `, with its uptime zero` after it. The
 boundary never moves and nothing is consumed, unlike `LineCondition`, whose cursor moves past each
 match, so that the condition asked again finds the next line. Why, and what was not done:
 [the decision](../decisions/harness.md#history-conditions-scan-from-where-their-last-poll-ended).
@@ -652,9 +656,22 @@ the match, read again from a history built anew
 (`test_first_from_reads_each_record_once_and_keeps_its_match`,
 `test_first_from_reads_the_match_from_the_history_at_each_poll`), and that `next_boot` reads only
 the boots since the last poll (`test_next_boot_reads_only_the_boots_since_the_last_poll`), all
-through `CountingList` of `tests/conftest.py`. `tests/test_board_api.py::
-test_a_described_condition_names_its_timeout_and_refuses_bool` checks the `NeverHappened`
-message and the run report through `board.wait_until` on esp32sim, and
+through `CountingList` of `tests/conftest.py`; that `next_boot(uptime_zero=True)` returns the first
+boot after it once its zero is known, not a later one that has a zero, and finds nothing for one
+whose zero never comes
+(`test_next_boot_with_uptime_zero_waits_for_the_zero_of_the_first_boot_after_it`,
+`test_next_boot_with_uptime_zero_finds_nothing_for_a_boot_whose_zero_never_comes`), and passes over
+a boot of another cause for the next one of its own
+(`test_next_boot_with_uptime_zero_and_a_cause_passes_over_a_boot_of_another_cause`), and that
+`board.uptime_zero` reads a held boot's zero now and refuses what is not one of the board's boots
+(`test_board_uptime_zero_reads_the_boot_s_zero_now`). `tests/test_power.py::
+test_the_boot_next_boot_returns_dates_the_firmware_s_stamps` runs the sequence on
+`firmware/persistence`: 10 ms after `board.reset()`, by `board.wait`, the plain condition's boot
+has no zero, the condition with `uptime_zero` finds nothing and a 10 ms wait on it times out; the
+wait that follows returns the boot with its zero, which `board.uptime_zero` gives for the record
+read before it too.
+`tests/test_board_api.py::test_a_described_condition_names_its_timeout_and_refuses_bool` checks
+the `NeverHappened` message and the run report through `board.wait_until` on esp32sim, and
 `tests/test_serial_backend.py::test_console_reset_clock_tap_and_autoflash` the message and the
 refusal on the serial backend.
 
@@ -731,27 +748,35 @@ are abstract, as are the waits, `wait`, `wait_until`, `wait_for_wake` and `wait_
 same module, with `POWERON_RESET = 1` and `DEEPSLEEP_RESET = 5`, and so is
 `UptimeZero(earliest, latest)`, two `Duration`s. `uptime_zero` is a `field(compare=False)`, so that
 a boot read before its zero came and one read after are equal, and `next_boot()` keeps returning
-the same boot. `idf_reason` is one too: it follows from `cause` and the hint, which the backend
-knows and `Boot` does not keep, and a test that builds a `Boot` to compare, as
-`Boot(1, Duration(0), POWERON_RESET)`, need not name it. The backend fills it in with
+the same boot. `Board.uptime_zero(boot)`, not abstract, is `boots[boot.number - 1].uptime_zero`
+after two checks: `TypeError` for a `boot` that is not a `Boot`, and `ValueError` for one whose
+number is not among `boots` or whose record there is not equal to it (another `at` or `cause`).
+Equality is all it checks: a `Boot` of another board or run that equals this board's boot of its
+number is taken as this board's, and every board's first boot is
+`Boot(1, Duration(0), POWERON_RESET)`. It reads `boots` once, as `next_boot` does, and goes through
+the backend's `boots`: the serial backend skips it. `idf_reason` is one too: it follows from `cause`
+and the hint, which the backend knows and `Boot` does not keep, and a test that builds a `Boot` to
+compare, as `Boot(1, Duration(0), POWERON_RESET)`, need not name it. The backend fills it in with
 `idf_reset_reason(chip, cause, hint)`, in the same module: `_IDF_RESET_REASONS`, one table per
 ESP-IDF target name from each chip's `get_reset_reason()`, maps a cause to a name, a cause the table
 leaves out to `ESP_RST_UNKNOWN`, and causes 3 and 12 to `_SOFTWARE_RESET`, for which the hint
-decides as `esp_reset_reason_get_hint` does: a value with bit 31 set and its two 15-bit halves
-equal is the hint, and of the hints `_HINTED` names, 4, 5, 6 and 9, each is its own name; any other
-value gives `ESP_RST_SW`. A chip with no table gives `None`. `tests/test_reset_reasons.py` checks
-the decoding and each chip's causes that differ, without firmware, and the classic chip's five
-boots of `firmware/reset_reasons` with it. `next_boot(cause=None)`
-is concrete, on `boots` alone: it checks `cause` (an `int`, not a `bool`, or `None`), takes
-`len(self.boots)` as its boundary, and returns a `Condition` whose `find`, a
+decides as `esp_reset_reason_get_hint` does: a value with bit 31 set and its two 15-bit halves equal
+is the hint, and of the hints `_HINTED` names, 4, 5, 6 and 9, each is its own name; any other value
+gives `ESP_RST_SW`. A chip with no table gives `None`. `tests/test_reset_reasons.py` checks the
+decoding and each chip's causes that differ, without firmware, and the classic chip's five boots of
+`firmware/reset_reasons` with it. `next_boot(cause=None, *, uptime_zero=False)` is concrete, on
+`boots` alone: it checks `cause` (an `int`, not a `bool`, or `None`) and `uptime_zero` (a `bool`),
+takes `len(self.boots)` as its boundary, and returns a `Condition` whose `find`, a
 [`FirstFrom`](#described-conditions) over `boots`, gives the first boot from that index with that
 cause, or any, and `None` before. Each poll looks only at the boots since the last one, but on
 esp32sim reading `boots` builds them all, so a poll costs as many as there have been; boots are few
 beside messages or writes. Its description is `the next boot`, or
-`the next boot ({reset_reason(cause)})`. A backend whose `boots` raises or skips, before `power_on`
-on esp32sim and always on serial, does so at the `next_boot()` call. Interface properties reuse each
-backend's existing UART/line/slot objects; `console` is a `cached_property` wrapping that backend's
-console buffers.
+`the next boot ({reset_reason(cause)})`. With `uptime_zero=True` the `find` is a wrapper of that
+`FirstFrom` that returns the match only while its `uptime_zero` is not `None`, and the description
+ends `, with its uptime zero` ([described conditions](#described-conditions)). A backend whose
+`boots` raises or skips, before `power_on` on esp32sim and always on serial, does so at the
+`next_boot()` call. Interface properties reuse each backend's existing UART/line/slot objects;
+`console` is a `cached_property` wrapping that backend's console buffers.
 Fixture functions return the properties, preserving object identity and the console cursor.
 The `broker` fixture delegates to `modem.network().broker`, which selects a model source.
 `Board` has no broker property; tests selecting the service through the board explicitly call
