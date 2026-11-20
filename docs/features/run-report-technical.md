@@ -69,8 +69,9 @@ M2 asked for it.
    fails, or when the setup or the call failed (`FAILED` in the item's stash), and the user
    property `("esp32sim_link", json.dumps(backend.properties()))`
    ([pytest-plugin-technical.md](pytest-plugin-technical.md#data-flow), step 8).
-   `Esp32Sim.report(run)` is the link's report, `routes:` with one line per route, the slot's line
-   on a profile with an SD card slot, then, with `run`, `RunLog.lines()`.
+   `Esp32Sim.report(run)` is `build_line(...)` of the `Build` the runner flashes, the link's
+   report, `routes:` with one line per route, the slot's line on a profile with an SD card slot,
+   then, with `run`, `RunLog.lines()`.
 
 **`Tap.recording(board, source, clock, app_sha256=None, tools=None, created=None, extra=None)`**
 sorts the events by `t` with a stable sort, so that events of one time keep the order they were
@@ -140,7 +141,29 @@ opens. It writes the selected artifact's digest, including with skip-autoflash, 
 prove the device's flash contents. Console taps contain `out` events for firmware output
 and `in` events for test writes. The schema is unchanged (version 1): `console` was already a valid interface name.
 
-The esp32sim report section, after `BoardLink.report()`:
+**`build_line(app, app_sha256)`** (`esp32tl/report.py`) is the first line of both backends'
+sections, `build: {directory} ({kind} for {chip}); app_sha256 {app_sha256}`, of the `Build` `app`:
+`{directory}` is `Build.directory`, absolute (`load_app` resolves it), `{kind}` is
+`build.KIND_NAMES[Build.kind]`, `ESP-IDF` for `build.ESP_IDF` and `PlatformIO` for
+`build.PLATFORMIO`, `{chip}` is `Build.chip`, and `{app_sha256}` is `none` for `None`.
+**`build_properties(app, app_sha256)`** is the user property's `build`, `{"directory": str,
+"kind": "esp-idf" or "platformio", "chip": str, "app_sha256": str or null}`. esp32sim gives them
+`Esp32Sim.app` and `Esp32Sim.app_sha256`; serial `Artifact.build` and `Artifact.app_sha256`, which
+`check_artifact` refuses to leave `None`.
+
+On esp32sim the hash is taken at setup, as the backend loads the build, and again as the first
+`power_on` starts the runner, which reads the image then: the report names the image the runner
+flashed, not one written into the directory later in the run, and `report()`, `properties()` and
+the taps read the same value without hashing the file again. A build directory built again
+between those two points shows in the report as the image the runner read; a test that never
+powers on reports the image at setup. `None` when the build names no app image or the file cannot
+be read.
+
+`make determinism` runs both runs in one checkout, so the directory is the same in both
+`esp32sim_link` properties; `scripts/check-determinism.py` writes only the basetemp as
+`{basetemp}`, and the build directory is outside it.
+
+The esp32sim report section, `build_line`, then `BoardLink.report()`, then:
 
 ```
 routes:
@@ -184,7 +207,8 @@ the heading is `the run on the board's clock: nothing happened`. `{who}` is `tes
 The `console:` line and a JSON `console: {"bytes_out": n, "tap": path}` object appear only when
 the console is tapped. Serial instead uses the [serial schema](serial-backend-technical.md#schema).
 
-The esp32sim user property's `routes`, by interface: `{"source": kind or null, "detail": what
+The esp32sim user property's `build`, `build_properties(...)` as above; its `routes`, by
+interface: `{"source": kind or null, "detail": what
 the source was made from or null, "bytes_in": n, "bytes_out": n, "tap": path or null}`;
 and `sd_card`, `{"image": path or null, "changes": [{"t_ns": t, "image": path or null}, ...],
 "refused": [...], "not_reached": [{"t_ns": t, "image": path or null}, ...], "faults": [...]}`, `image` being
@@ -220,6 +244,8 @@ checks the timing and cancellation. The modem's separate command history is desc
 | `Traffic` | `bytes_in`, `bytes_out`, `events_in`, `events_out` |
 | `shown(data, limit=SHOWN_BYTES)`, `console_line(line)`, `board_time(t)`, `text(who, what)` | How the log writes bytes, console lines, times and an entry |
 | `ENTRIES`, `SHOWN_BYTES` | 200 entries of the console and the routes kept; 100 bytes shown of an event |
+| `build_line(app, app_sha256)`, `build_properties(app, app_sha256)` | `esp32tl/report.py`: the first line of a backend's report section, and its user property's `build`, of an `esp32tl.build.Build` and its app image's hash or `None` ([schema](#schema)) |
+| `KIND_NAMES` | `esp32tl/build.py`: a build's `kind` as the report names it, `{"esp-idf": "ESP-IDF", "platformio": "PlatformIO"}` |
 | `Esp32Sim.log`, `Esp32Sim.report(run=False)`, `Esp32Sim.properties()` | [esp32sim-backend-technical.md](esp32sim-backend-technical.md#interfaces) |
 
 ## Failure modes
@@ -294,7 +320,9 @@ Serial errors and its report properties are specified in
   came; the console cut into lines at their first byte's time, colour codes dropped, an unfinished
   line shown; every step and the last `entries` of the rest kept, with the heading that says so,
   and the bytes counted; a line the firmware drives, and stops driving; an empty log; `shown` and
-  `console_line`; a console line's `\r` and other escape sequences escaped.
+  `console_line`; a console line's `\r` and other escape sequences escaped;
+  `test_the_build_line_names_each_kind_as_its_tool_does`: `build_line` and `build_properties` of a
+  PlatformIO and an ESP-IDF build, `none` for a missing hash, and a name for every kind.
   `tests/test_lines.py::test_the_test_s_calls_and_the_firmware_s_changes_go_into_the_run_s_log`:
   the test's calls on the lines as steps, a call that changes nothing included, and the
   firmware's change as an entry.
@@ -302,8 +330,14 @@ Serial errors and its report properties are specified in
   `FAKE_LINK=tx`: `test_a_tap_records_what_crossed_the_route_both_ways` reads the file a passing
   test's tap wrote (header, `app_sha256` of the fake build's empty `app.bin`, tools, the `out`
   event and the replay's first two events) and finds the routes but not the run in its report;
-  `test_the_report_of_a_failing_test_shows_the_run_on_the_board_s_clock` matches the run line by
-  line and the routes in the `--junitxml` property;
+  `test_the_report_of_a_failing_test_shows_the_run_on_the_board_s_clock` matches the build line,
+  the run line by line and the routes in the `--junitxml` property;
+  `test_the_report_names_the_build_the_test_loaded`, with the plain fake runner, that a passing
+  test's section and its property name the `build_dir` the marker selected, absolute, and its
+  image's hash, not the app's own `build/` beside it;
+  `test_the_report_names_the_image_the_runner_read_at_power_on`, with the link-speaking fake
+  runner, that an image written before `power_on` is the one reported, and one written after it
+  is not;
   `test_a_tap_that_cannot_be_written_fails_the_test_at_teardown` makes the tap's path a
   directory, and finds the teardown error and the run in the report. With the fake runner that
   never connects:

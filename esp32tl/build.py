@@ -20,6 +20,8 @@ from esp32tl import flash
 
 ESP_IDF = "esp-idf"
 PLATFORMIO = "platformio"
+# Each kind as the run report names it, as the tool names itself.
+KIND_NAMES = {ESP_IDF: "ESP-IDF", PLATFORMIO: "PlatformIO"}
 
 # The files of a PlatformIO build the backend reads, by name. firmware.factory.bin is the whole
 # flash from 0x0, which pioarduino's builds have; boot_app0.bin, the otadata the platform flashes

@@ -614,7 +614,7 @@ def pytest_fixture_setup(
         and callspec.params.get("board") == Serial.name
         # pytest-embedded's IdfApp reads the files to flash from flasher_args.json, which a
         # PlatformIO build has none of: its own app class gives IdfSerial the build's files.
-        and serial_artifact(request).kind == build.PLATFORMIO
+        and serial_artifact(request).build.kind == build.PLATFORMIO
     ):
         classes = request.getfixturevalue("_fixture_classes_and_options").classes
         classes["app"] = PlatformioApp.for_chip(board_profile(request.node).chip)
@@ -632,7 +632,7 @@ def board(
     profile the test chose; off until the test calls `board.power_on()`."""
     name = request.param
     assert name in SERVICES, name
-    digest = serial_artifact(request).app_sha256 if name == Serial.name else ""
+    artifact = serial_artifact(request) if name == Serial.name else None
     # Resolve only after serial's artifact/recording check: dut opens and may flash the port.
     dut = request.getfixturevalue("dut")
     if not isinstance(dut, Dut):
@@ -641,7 +641,7 @@ def board(
     profile = board_profile(request.node)
     try:
         backend: Esp32Sim | Serial
-        if name == Serial.name:
+        if artifact is not None:
             if not isinstance(dut, IdfDut):
                 raise BackendError("the serial backend requires pytest-embedded's esp,idf services")
             reference = request.node.get_closest_marker("app_recording")
@@ -649,7 +649,7 @@ def board(
                 dut,
                 profile,
                 msg_queue,
-                app_sha256=digest,
+                artifact=artifact,
                 directory=request.path.parent,
                 reference=request.path.parent / reference.args[0] if reference else None,
                 skip=skip_at_the_test,

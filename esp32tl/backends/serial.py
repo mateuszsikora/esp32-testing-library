@@ -45,7 +45,7 @@ from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.uart import Uart
 from esp32tl.interfaces.wifi import Wifi
 from esp32tl.link.boardlink import Wire
-from esp32tl.report import RunLog
+from esp32tl.report import RunLog, build_line, build_properties
 from esp32tl.tap import Tap, app_image_sha256
 from esp32tl.units import Duration
 
@@ -57,11 +57,10 @@ READER_STOP_SECONDS = 1.0
 
 @dataclass(frozen=True)
 class Artifact:
-    """The build `check_artifact` validated: the hash of its application image, and its kind,
-    `build.ESP_IDF` or `build.PLATFORMIO`."""
+    """The build `check_artifact` validated, and the hash of its application image."""
 
     app_sha256: str
-    kind: str
+    build: build.Build
 
 
 def check_artifact(
@@ -93,7 +92,7 @@ def check_artifact(
                 )
     except (OSError, recording.RecordingError) as error:
         raise BackendError(str(error)) from error
-    return Artifact(digest, app.kind)
+    return Artifact(digest, app)
 
 
 # What a PlatformIO build gives esptool's write-flash: the resets and the stub ESP-IDF's
@@ -235,7 +234,7 @@ class Serial(Board):
         profile: BoardProfile,
         msg_queue: MessageQueue,
         *,
-        app_sha256: str,
+        artifact: Artifact,
         directory: Path,
         reference: Path | None = None,
         skip: Callable[[str], NoReturn] = refuse,
@@ -243,7 +242,7 @@ class Serial(Board):
         self.dut = dut
         self.profile = profile
         self.directory = directory
-        self._app_sha256 = app_sha256
+        self.artifact = artifact
         self._skip = skip
         self._msg_queue = msg_queue
         self._output = bytearray()
@@ -285,7 +284,7 @@ class Serial(Board):
     @property
     def app_sha256(self) -> str:
         """The app image's hash, checked before the port opened."""
-        return self._app_sha256
+        return self.artifact.app_sha256
 
     @property
     def powered(self) -> bool:
@@ -600,7 +599,10 @@ class Serial(Board):
             raise BackendError(self._error.removeprefix("serial: "))
 
     def report(self, run: bool = False) -> str:
-        lines = [f"serial: wall clock; {len(self._output)} console bytes"]
+        lines = [
+            build_line(self.artifact.build, self.app_sha256),
+            f"serial: wall clock; {len(self._output)} console bytes",
+        ]
         if self._console.tapped is not None:
             lines.append(f"console: tapped into {self._console.tapped.path}")
         if self._error:
@@ -612,8 +614,8 @@ class Serial(Board):
     def properties(self) -> dict[str, object]:
         tap = self._console.tapped
         return {
+            "build": build_properties(self.artifact.build, self.app_sha256),
             "clock": self.clock,
-            "app_sha256": self.app_sha256,
             "console_bytes": len(self._output),
             "error": self._error,
             "tap": str(tap.path) if tap else None,

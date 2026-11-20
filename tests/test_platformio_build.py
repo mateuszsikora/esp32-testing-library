@@ -382,7 +382,7 @@ def test_a_build_that_enables_flash_encryption_or_secure_boot_is_refused(tmp_pat
     )
     # ESP-IDF's configuration without it, or none at all, is not a refusal
     (directory / "config/sdkconfig.json").write_text('{"SECURE_FLASH_ENC_ENABLED": false}')
-    assert check_artifact(str(directory), build_dir=directory).kind == build.PLATFORMIO
+    assert check_artifact(str(directory), build_dir=directory).build.kind == build.PLATFORMIO
     (directory / "config/sdkconfig.json").write_text('{"SECURE_BOOT": true}')
     with pytest.raises(BackendError) as refused:
         check_artifact(str(directory), build_dir=directory)

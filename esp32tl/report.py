@@ -14,6 +14,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Literal
 
+from esp32tl.build import KIND_NAMES, Build
 from esp32tl.recording import Direction
 
 # How many entries of the console and the routes the log keeps, the last ones: what led to the
@@ -142,6 +143,27 @@ class RunLog:
             f"  {board_time(t)}  {who:<{width}}  {text(who, what)}".rstrip()
             for t, _, who, what in entries
         ]
+
+
+def build_line(app: Build, app_sha256: str | None) -> str:
+    """The first line of a backend's report section: the build the test loaded, its directory as
+    an absolute path, its kind (`KIND_NAMES`), the chip it is built for and `app_sha256`, the
+    SHA-256 of its application image as a recording's header has it, `none` when the backend has
+    no hash of it."""
+    return (
+        f"build: {app.directory} ({KIND_NAMES[app.kind]} for {app.chip});"
+        f" app_sha256 {app_sha256 or 'none'}"
+    )
+
+
+def build_properties(app: Build, app_sha256: str | None) -> dict[str, str | None]:
+    """The same as `build_line`, for a backend's user property: `kind` as `esp32tl.build` has it."""
+    return {
+        "directory": str(app.directory),
+        "kind": app.kind,
+        "chip": app.chip,
+        "app_sha256": app_sha256,
+    }
 
 
 def text(who: str, what: str | bytes) -> str:

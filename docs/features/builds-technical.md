@@ -118,6 +118,7 @@ in the build directory, which is why a build without `firmware.factory.bin` gets
 |---|---|
 | `load(app_path, directory, *, backend="esp32sim", chip="esp32")` | The `Build` in `directory`, which must be absolute, for `chip`, the board profile's; `backend` names the backend in the errors, and an encrypted ESP-IDF build gets `which the runner does not do` for `esp32sim`, `which {backend} does not support` otherwise |
 | `Build` | A frozen dataclass: `directory` (`Path`), `kind` (`ESP_IDF`, `"esp-idf"`, or `PLATFORMIO`, `"platformio"`), `flash_files` (a tuple of `FlashFile`, a later one over an earlier one where they overlap), `partition_table` (`int`, or `None` for an ESP-IDF build whose `flasher_args.json` names none), `app_image` (`Path` or `None`), `elf` (`Path` or `None`), `chip` (`str`) |
+| `KIND_NAMES` | `Build.kind` as the run report names it, `ESP-IDF` and `PlatformIO`: `build_line`'s `({kind} for {chip})` ([run report](run-report-technical.md#schema)) |
 | `Build.read(offset, size)` | Up to `size` bytes of the flash at `offset`, from the last flash file that holds `offset`, to that file's end at most; `BuildError` when no file holds it, `OSError` when the file cannot be read |
 | `Build.table()` | `read(partition_table, TABLE_SIZE)`; `BuildError` when `partition_table` is `None` |
 | `Build.file_at(offset)` | The last flash file that holds `offset`, or `None`; `OSError` when a file's size cannot be read. `read` uses it |

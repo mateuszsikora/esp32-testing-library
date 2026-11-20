@@ -32,10 +32,10 @@ the same indirect parametrisation. See [the user contract](serial-backend-user.m
    `load_app(app_path, build_dir=build_dir, backend="serial", chip=profile.chip)` for finished-build
    checks, then
    `app_image_sha256(app)` from `esp32tl/tap.py`, and returns an `Artifact` of that digest and the
-   `Build`'s `kind`. This hashes the app entry in `flasher_args.json` (`Build.app_image`) of an
-   ESP-IDF build, `firmware.bin` of a PlatformIO one, not `IdfApp.bin_file` (which may name another
+   `Build`. This hashes the app entry in `flasher_args.json` (`Build.app_image`) of an ESP-IDF
+   build, `firmware.bin` of a PlatformIO one, not `IdfApp.bin_file` (which may name another
    `.bin`), the ELF or its embedded digest. The item's `SERIAL_ARTIFACT` stash holds the `Artifact`.
-3. For a PlatformIO build (`Artifact.kind` is `esp32tl.build.PLATFORMIO`), the same
+3. For a PlatformIO build (`Artifact.build.kind` is `esp32tl.build.PLATFORMIO`), the same
    `pytest_fixture_setup` hook then sets `classes["app"]` of `_fixture_classes_and_options` to
    `PlatformioApp.for_chip(profile.chip)`, a subclass whose `chip` is the profile's (the class
    itself for `esp32`), before pytest-embedded's `app` fixture makes its app from `classes["app"]`
@@ -133,13 +133,15 @@ proves artifact/reference identity, not flash contents. It does not replay conso
 
 | Field | Value |
 |---|---|
+| `build` | `build_properties(artifact.build, artifact.app_sha256)`: `{"directory", "kind", "chip", "app_sha256"}` ([run report](run-report-technical.md#schema)); `app_sha256` is the required hash of the selected local app image, also `Serial.app_sha256`, the key of [the card cache](pytest-plugin-technical.md#the-card-cache) |
 | `clock` | `wall` |
-| `app_sha256` | Required hash of the selected local app image; also `Serial.app_sha256`, the key of [the card cache](pytest-plugin-technical.md#the-card-cache) |
 | `console_bytes` | Number of captured console bytes |
 | `error` | Connection/reader error string, or null |
 | `tap` | Console tap path, or null |
 
-The `serial console` section starts with `serial: wall clock; {n} console bytes`, followed by
+The `serial console` section starts with `build_line(artifact.build, artifact.app_sha256)`,
+`build: {directory} ({kind} for {chip}); app_sha256 {app_sha256}`, then
+`serial: wall clock; {n} console bytes`, followed by
 `console: tapped into {path}` if tapped, and the error when present. Failures also include the
 run log: the tap, power-on and wait steps, and received console lines.
 
@@ -147,7 +149,7 @@ run log: the tap, power-on and wait steps, and received console lines.
 
 | Name | Contract |
 |---|---|
-| `Serial(dut, profile, msg_queue, *, app_sha256, directory, reference=None, skip=refuse)` | Captures a real `IdfDut`; initialization itself does not start capture |
+| `Serial(dut, profile, msg_queue, *, artifact, directory, reference=None, skip=refuse)` | Captures a real `IdfDut`; initialization itself does not start capture; `artifact` is `check_artifact`'s, whose hash is `Serial.app_sha256` |
 | `name`, `clock`, `report_section`, `report_property` | `serial`, `wall`, `serial console`, `serial_console` |
 | `power_on(utc=None)` | Reset and begin capture; rejects a supplied UTC and repeated successful power-on |
 | `powered`, `started`, `now`, `utc` | Successful power-on (both), monotonic `Duration` since reset request, host-origin UTC plus elapsed time |
@@ -167,7 +169,7 @@ run log: the tap, power-on and wait steps, and received console lines.
 | `close()` | Stop capture, restore healthy redirection, write tap, report errors; idempotent |
 | `report(run=False)`, `properties()` | Human report (with run log when requested) and schema above |
 | `check_artifact(app_path, reference=None, *, build_dir=None)` | Validate build/reference before port setup, return an `Artifact` |
-| `Artifact(app_sha256, kind)` | A frozen dataclass: the app-image hash and the `Build`'s `kind`, `esp32tl.build.ESP_IDF` or `PLATFORMIO` |
+| `Artifact(app_sha256, build)` | A frozen dataclass: the app-image hash and the `esp32tl.build.Build` it is of, whose `kind` is `esp32tl.build.ESP_IDF` or `PLATFORMIO` |
 | `PlatformioApp(app_path=None, build_dir=None, part_tool=None, **kwargs)` | The `IdfApp` of a PlatformIO build (data flow, step 3); `build` is its `esp32tl.build.Build` |
 
 ## Configuration
@@ -248,6 +250,9 @@ separate flash-port rejection, fixture and cached-option overrides, missing seri
 autoflash, marker errors,
 reference hashes before port creation, console reset/capture, waits and their reports, capability
 skips, failed reset with retry, disconnected open ports and a blocked reader released after close.
+`test_the_serial_report_names_the_build_the_test_loaded` checks the section's first line, the
+build's absolute directory, kind, chip and hash, and the property's `build`, without a top-level
+`app_sha256`.
 `tests/test_pytest_plugin.py` covers console tap reports on esp32sim and ignoring references there.
 `tests/test_platformio_build.py` covers a PlatformIO build on serial:
 `test_serial_flashes_the_files_esp32sim_runs_with_the_otadata_erased`,

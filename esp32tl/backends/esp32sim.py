@@ -103,7 +103,7 @@ from esp32tl.link.boardlink import BoardLink, Wire
 from esp32tl.link.protocol import ChipReset, Power, Reset
 from esp32tl.net import Internet
 from esp32tl.net.ntp import DEFAULT_UTC
-from esp32tl.report import RunLog, board_time, shown
+from esp32tl.report import RunLog, board_time, build_line, build_properties, shown
 from esp32tl.sources.model.modem import Modem as ModemModel
 from esp32tl.sources.real import Real
 from esp32tl.sources.replay import Replay
@@ -625,6 +625,9 @@ class Esp32Sim(Board):
         self._meta = meta
         self._skip = skip or refuse
         self.app = load_app(app_path, build_dir=build_dir, chip=profile.chip)
+        # Hashed again as the runner starts, which reads the image then: a build directory built
+        # again before power-on is reported as the image the runner flashed.
+        self._app_sha256 = self._hash_app()
         # Refused here, at setup: a flash smaller than the build's header would only show as a
         # chip that reboots until the test's timeout.
         self.flash_mb = runner_flash_mb(profile, self.app)
@@ -1063,7 +1066,12 @@ class Esp32Sim(Board):
 
     @property
     def app_sha256(self) -> str | None:
-        """The app image's hash, as a recording's header has it; `None` if the build has none."""
+        """The app image's hash, as a recording's header has it, taken at setup and again as the
+        runner starts, so that a rebuild during the run does not change it; `None` if the build
+        has none or it cannot be read."""
+        return self._app_sha256
+
+    def _hash_app(self) -> str | None:
         try:
             return app_image_sha256(self.app)
         except OSError:
@@ -1147,6 +1155,7 @@ class Esp32Sim(Board):
         # the kernel closes the write end, which no other process holds (os.pipe's ends are not
         # inherited), and the run ends at once (protocol §9).
         end_of_parent, self._parent = os.pipe()
+        self._app_sha256 = self._hash_app()
         try:
             command = runner_command(
                 self._runner,
@@ -1564,10 +1573,10 @@ class Esp32Sim(Board):
         return problems
 
     def report(self, run: bool = False) -> str:
-        """The link's report, then the bytes on every route, the SD card slot's card when the
-        profile has a slot, and, with `run`, the run on the board's clock (`RunLog.lines`): for
-        the report of a test that failed."""
-        lines = [self.link.report(), "routes:"]
+        """The build the test loaded (`build_line`), the link's report, then the bytes on every
+        route, the SD card slot's card when the profile has a slot, and, with `run`, the run on
+        the board's clock (`RunLog.lines`): for the report of a test that failed."""
+        lines = [build_line(self.app, self.app_sha256), self.link.report(), "routes:"]
         for name, uart in self._uarts.items():
             traffic = self.log.traffic.get(name)
             source = (
@@ -1628,11 +1637,11 @@ class Esp32Sim(Board):
         return "\n".join(lines)
 
     def properties(self) -> dict[str, object]:
-        """The link's `properties()`, and the routes: for each, the kind of source at the far end
-        and what it was made from (a replay's recording, as the test named it), the bytes each way
-        and the tap's file; and `sd_card`, the card's image as the run has it, the changes the
-        runner acknowledged while the board was on and those it did not reach, or None without a
-        slot."""
+        """The link's `properties()`, `build` (`build_properties`), and the routes: for each, the
+        kind of source at the far end and what it was made from (a replay's recording, as the
+        test named it), the bytes each way and the tap's file; and `sd_card`, the card's image as
+        the run has it, the changes the runner acknowledged while the board was on and those it
+        did not reach, or None without a slot."""
         routes: dict[str, dict[str, object]] = {}
         for name, uart in self._uarts.items():
             traffic = self.log.traffic.get(name)
@@ -1691,6 +1700,7 @@ class Esp32Sim(Board):
             }
         )
         properties = self.link.properties() | {
+            "build": build_properties(self.app, self.app_sha256),
             "routes": routes,
             "sd_card": sd_card,
             "wifi": self._wifi.properties(),

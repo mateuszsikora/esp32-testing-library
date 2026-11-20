@@ -1,7 +1,9 @@
 """Serial's real pytest-embedded fixture chain, with an in-memory port instead of hardware."""
 
+import json
 from pathlib import Path
 from textwrap import dedent
+from xml.etree import ElementTree
 
 import pytest
 from test_pytest_plugin import SHOW_PARAMS, fake_build
@@ -177,6 +179,36 @@ def test_console_reset_clock_tap_and_autoflash(
     assert made.header.app_sha256 == sha256(pytester.path / "build/app.bin")
     assert b"Hello world!" in b"".join(event.data for event in made.events)
     assert [e.data for e in made.events if e.dir == "in"] == [b"next line\n"]
+
+
+def test_the_serial_report_names_the_build_the_test_loaded(pytester: pytest.Pytester) -> None:
+    fake_build(pytester.path)
+    pytester.makeconftest(FAKE_SERIAL)
+    pytester.makepyfile("""
+        def test_console(board, console):
+            board.power_on()
+            console.expect("Hello world!")
+    """)
+    digest = sha256(pytester.path / "build/app.bin")
+    result = run_serial(pytester, "-rA", "--junitxml", "report.xml")
+    result.assert_outcomes(passed=1)
+    result.stdout.fnmatch_lines(
+        [
+            "*Captured serial console teardown*",
+            f"build: {pytester.path / 'build'} (ESP-IDF for esp32); app_sha256 {digest}",
+            "serial: wall clock; * console bytes",
+        ]
+    )
+    (prop,) = ElementTree.parse(pytester.path / "report.xml").iter("property")
+    assert prop.get("name") == "serial_console"
+    properties = json.loads(prop.get("value", ""))
+    assert "app_sha256" not in properties
+    assert properties["build"] == {
+        "directory": str(pytester.path / "build"),
+        "kind": "esp-idf",
+        "chip": "esp32",
+        "app_sha256": digest,
+    }
 
 
 @pytest.mark.parametrize("local", [False, True])

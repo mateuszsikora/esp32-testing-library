@@ -170,10 +170,14 @@ recording or any flash artifact. Setup and flash-tool output are excluded.
 A tap without power-on fails teardown with
 `serial: the test set up the tap of console and never called board.power_on(): it ran no firmware`.
 
-The report section is `serial console`, with byte count and any connection error; failures also
-show the tap, power-on and wait steps, their outcomes, and received console lines. The JSON user
-property `serial_console` contains `clock`,
-`app_sha256`, `console_bytes`, `error` and `tap`.
+The report section is `serial console`. Its first line names the build the test checked and
+flashed, as on esp32sim:
+`build: /home/me/app/build (ESP-IDF for esp32); app_sha256 {sha256}`
+([the run on the board's clock](run-report-user.md#the-run-on-the-boards-clock)); under
+`--skip-autoflash y` it is the local build, not proof of what the board holds. Then the byte count
+and any connection error; failures also show the tap, power-on and wait steps, their outcomes, and
+received console lines. The JSON user property `serial_console` contains `build` (with the
+build's `app_sha256`), `clock`, `console_bytes`, `error` and `tap`.
 
 Teardown waits at most one second for esp32tl's reader. If it remains blocked, the test gets
 `serial: console reader did not stop within 1 s`. The capture stops accepting new bytes and
