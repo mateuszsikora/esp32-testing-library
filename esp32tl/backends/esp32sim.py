@@ -912,6 +912,14 @@ class Esp32Sim(Board):
             )
         if merge:
             current = self._partition_now(entry)
+            # NVS keeps a key written with two types as two, and the image takes one value a key
+            for (name, key), kinds in flash.nvs_types(current).items():
+                if key not in namespaces.get(name, {}):
+                    raise BackendError(
+                        f"board.nvs: {name}/{key} holds a {' and a '.join(kinds)} in partition"
+                        f" {partition!r}, which a merge cannot keep both of: give {name}/{key} a"
+                        " value in the test's keys, or write without merge"
+                    )
             merged = {name: dict(keys) for name, keys in flash.nvs_values(current).items()}
             for name, keys in namespaces.items():
                 merged.setdefault(name, {}).update(keys)

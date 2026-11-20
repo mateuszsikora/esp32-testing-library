@@ -88,3 +88,13 @@ def test_the_nvs_of_a_board_that_is_on_is_refused(board: Esp32Sim, console: Cons
             " it is off"
         )
     assert board.flash().nvs() == {"persistence": {"boots": u32(2)}}
+
+
+def test_a_note_longer_than_any_fixed_buffer_prints_whole(
+    board: Esp32Sim, console: Console
+) -> None:
+    note = "n" * 200
+    board.nvs({"persistence": {"boots": u32(1), "note": note}})
+    board.power_on()
+    console.expect_exact(f"persistence: note={note}")
+    console.expect_exact("persistence: done")

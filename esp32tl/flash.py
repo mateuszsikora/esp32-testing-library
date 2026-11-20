@@ -334,6 +334,34 @@ def nvs_values(image: bytes) -> dict[str, dict[str, Value]]:
     return values
 
 
+def nvs_types(image: bytes) -> dict[tuple[str, str], tuple[str, ...]]:
+    """The keys of a whole NVS partition that hold values of more than one type, as NVS keeps a
+    key written with two types, with the types in the order of their writes: `u16`, `string`,
+    `blob`. `nvs_values` reads each such key as the later write alone."""
+    items = [item for page in _nvs_pages(image) for item in _nvs_items(page)]
+    names = {i.data[0]: i.key for i in items if i.namespace == 0 and i.type == NVS_U8}
+    chunks = {(i.namespace, i.key, i.chunk): i.payload for i in items if i.type == NVS_BLOB_DATA}
+    types: dict[tuple[str, str], list[str]] = {}
+    for item in items:
+        if item.namespace == 0 or item.namespace not in names:
+            continue
+        value = _nvs_value(item, chunks)
+        if value is None:
+            continue
+        kind = (
+            value.type
+            if isinstance(value, Typed)
+            else "string"
+            if isinstance(value, str)
+            else "blob"
+        )
+        seen = types.setdefault((names[item.namespace], item.key), [])
+        if kind in seen:
+            seen.remove(kind)
+        seen.append(kind)
+    return {key: tuple(kinds) for key, kinds in types.items() if len(kinds) > 1}
+
+
 def _nvs_value(item: _Item, chunks: Mapping[tuple[int, str, int], bytes]) -> Value | None:
     """The value of `item`; `None` for a blob's chunk, and for an index whose chunks are not all
     there, which `Storage::eraseMismatchedBlobIndexes` erases."""

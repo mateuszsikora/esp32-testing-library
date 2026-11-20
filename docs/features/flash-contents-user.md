@@ -49,7 +49,10 @@ Firmware changes to emulated flash are not saved back to that image:
 
 A merge keeps the values, not how the firmware laid them out: the partition is written anew, so NVS
 items move, erased entries and old copies of a key are gone, and a blob the firmware wrote in the
-old single-entry format comes back in the chunked one, which `nvs_get_blob` reads alike.
+old single-entry format comes back in the chunked one, which `nvs_get_blob` reads alike. NVS keeps
+a key written with two types as two keys, `config/port` as a `u16` and as a string, and the new
+partition holds one value a key, so a merge that does not name such a key is refused before it
+writes anything; naming it replaces both.
 
 `board.nvs(...)` is supported on esp32sim only. On serial it skips with
 `serial: NVS contents cannot be configured on this backend`, without generating or writing a
@@ -65,10 +68,12 @@ changes a setting between two boots of the same run:
 ```python
 from esp32tl import u32
 
+
 def test_keeps_its_count_through_a_new_setting(board):
     board.power_on()
     board.console.expect_exact("persistence: done")  # the firmware's own message
-    board.power_off() board.nvs({"persistence": {"note": "from the test"}}, merge=True)
+    board.power_off()
+    board.nvs({"persistence": {"note": "from the test"}}, merge=True)
     assert board.flash().nvs()["persistence"] == {"boots": u32(2), "note": "from the test"}
     board.power_on()
     board.console.expect_exact("persistence: note=from the test")
@@ -123,6 +128,8 @@ It is installed with esp32tl; no local ESP-IDF install is needed.
 - A string that is not UTF-8, as `board.flash().nvs()` reads one the firmware wrote, and so as a
   merge would write it back: `ValueError: config/key: an NVS string is written as UTF-8, and this one holds bytes that are not (surrogates): give the key a value of its own`.
   Naming the key in the merge replaces it.
+- A merge over a key the firmware wrote with two types, which the test does not name:
+  `BackendError: board.nvs: config/port holds a u16 and a string in partition 'nvs', which a merge cannot keep both of: give config/port a value in the test's keys, or write without merge`.
 
 A failed validation or generation leaves a previous successful image for that partition intact,
 and writes nothing into the flash of a run. A passing test that sets up NVS without powering on
@@ -158,6 +165,10 @@ A test can read it at any time from `board.power_on()` on, as often as it likes:
 - **After `board.reset()` or `board.power_off()`.** The flash keeps what the firmware wrote through
   both, and reads the same with the supply off. `power_off()` comes into effect at the next wait,
   and a read in between sees the same flash.
+- **On the ESP32-S31**, while the board is on, `board.flash()` reads the flash as of the chip's
+  last reset: esp32sim keeps what the firmware wrote since apart, and gives it up only at a reset.
+  From `board.power_off()` on, and so for `board.nvs(..., merge=True)` between two boots, it reads
+  everything.
 - **At the end of a run.** After `RunEnded`, or with the runner gone for any reason short of a crash
   of its own, `board.flash()` reads what the run left, which covers what the firmware wrote after
   the test last looked. In a fixture's teardown it works until the `board` fixture's own teardown

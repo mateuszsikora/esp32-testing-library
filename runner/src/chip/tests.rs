@@ -617,3 +617,36 @@ fn a_flash_write_over_the_trampoline_lasts_through_the_reboot() {
     assert_eq!(m.bus.ble.original_flash, None);
     assert_eq!(&m.bus.flash[0x0fffe..0x1000c], b"peeriginalnext");
 }
+
+/// On the S31 what the guest programs stays in esp32sim's cache NOR array until a reset: with the
+/// supply off, `sync_flash` has `flash` give it, and a `write_flash` beside it keeps it.
+#[test]
+fn the_s31_flash_has_what_the_guest_wrote_once_synced() {
+    let mut s = <esp32s31::S31 as Target>::new(4 << 20);
+    // what the guest's SPI1 program leaves in the cache's array, which the outer flash lacks
+    let mut nor = Guest::flash(&s).into_owned();
+    nor[0x11000..0x11004].copy_from_slice(b"FW!!");
+    s.m.bus.inner.cache.set_flash(&nor).unwrap();
+    assert_eq!(
+        &Guest::flash(&s)[0x11000..0x11004],
+        &[0xff; 4],
+        "esp32sim's outer copy"
+    );
+    Guest::sync_flash(&mut s);
+    assert_eq!(&Guest::flash(&s)[0x11000..0x11004], b"FW!!");
+    Guest::write_flash(&mut s, 0x9000, b"NVS!").unwrap();
+    let flash = Guest::flash(&s);
+    assert_eq!(&flash[0x9000..0x9004], b"NVS!");
+    assert_eq!(
+        &flash[0x11000..0x11004],
+        b"FW!!",
+        "the guest's bytes outside the write stay"
+    );
+    // and the next boot finds both
+    Guest::power_on_reset(&mut s, &[]);
+    let flash = Guest::flash(&s);
+    assert_eq!(
+        (&flash[0x9000..0x9004], &flash[0x11000..0x11004]),
+        (&b"NVS!"[..], &b"FW!!"[..])
+    );
+}

@@ -406,9 +406,10 @@ CI's existing firmware glob includes its build in the cache.
 `firmware/persistence/main/main.c` depends on `nvs_flash`, `esp_timer`, `esp_driver_spi`, `fatfs`
 and `sdmmc`. `count_boot` calls `nvs_flash_init`, opens `persistence` with `NVS_READWRITE`, reads
 `boots` (absent is 0), writes it back one higher and commits. `print_note`, after the boot's line,
-opens the namespace again with `NVS_READONLY` and reads `note` into a 64-byte buffer with
-`nvs_get_str`: `ESP_ERR_NVS_NOT_FOUND` prints nothing, any other error aborts through
-`ESP_ERROR_CHECK`, so a note of 64 bytes or more (`ESP_ERR_NVS_INVALID_LENGTH`) ends the boot.
+opens the namespace again with `NVS_READONLY`, asks `nvs_get_str` for the length of `note` with a
+`NULL` buffer, then reads it into a buffer of that length from `malloc`: `ESP_ERR_NVS_NOT_FOUND`
+prints nothing, any other error aborts through `ESP_ERROR_CHECK`, so a note of any length NVS holds
+prints whole.
 `next` keeps a count beside a marker word, `0x5e5510f1`, in `.rtc_noinit` (`RTC_NOINIT_ATTR`, RTC
 slow memory) and in `.noinit` (`__NOINIT_ATTR`, DRAM): a marker that is not there, as after a
 power-on, restarts the count at 1. `log_boot` mounts the card as `examples/sd_data_logger` does

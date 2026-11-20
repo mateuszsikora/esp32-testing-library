@@ -1130,6 +1130,15 @@ that references to its number keep their meaning.
     `tests/test_nvs_between_boots.py::test_a_merge_after_a_power_off_keeps_the_firmware_s_count_and_adds_the_test_s_key`,
     `tests/test_nvs_between_boots.py::test_a_write_after_a_power_off_without_merge_replaces_the_partition`,
     `tests/test_nvs_between_boots.py::test_a_merge_before_power_on_goes_over_the_test_s_earlier_keys`
+- **286.** A merge never drops a value the firmware wrote without the test naming its key: a key
+    NVS holds with two types refuses the merge before anything is written, unless the test gives
+    it a value. On the ESP32-S31, whose esp32sim model keeps the firmware's flash writes apart until
+    a reset, a dump or a write with the supply off works on them, and a write keeps the firmware's
+    bytes outside its range.
+    `tests/test_flash.py::test_a_merge_over_a_key_of_two_types_is_refused_unless_the_test_names_it`,
+    `tests/test_flash.py::test_a_key_written_with_two_types_is_told_with_both_and_reads_as_the_later`,
+    `runner/src/chip/tests.rs::the_s31_flash_has_what_the_guest_wrote_once_synced`,
+    `runner/src/session/tests.rs::the_flash_is_synced_for_a_dump_or_a_write_only_with_the_supply_off_for_good`
 - **274.** `board.nvs` writes the runner's flash only while the board's supply is off, in the turn
     the test holds, and the firmware reads it at its next boot; the board's time does not move.
     While the supply is on it raises `BoardOff` naming `board.power_off()`, and the runner refuses a

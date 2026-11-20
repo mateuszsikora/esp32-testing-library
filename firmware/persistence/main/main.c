@@ -4,6 +4,7 @@
  * test wrote beside the count, `note`, it prints when there is one. */
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "driver/sdspi_host.h"
 #include "driver/spi_common.h"
@@ -50,17 +51,24 @@ static uint32_t count_boot(void) {
     return boots;
 }
 
-/* The string under `note` in the count's namespace, as a line, when there is one. */
+/* The string under `note` in the count's namespace, as a line, when there is one, of any
+ * length NVS holds. */
 static void print_note(void) {
     nvs_handle_t handle;
     ESP_ERROR_CHECK(nvs_open("persistence", NVS_READONLY, &handle));
-    char note[64];
-    size_t size = sizeof(note);
-    esp_err_t found = nvs_get_str(handle, "note", note, &size);
-    nvs_close(handle);
-    if (found == ESP_ERR_NVS_NOT_FOUND) return;
+    size_t size = 0;
+    esp_err_t found = nvs_get_str(handle, "note", NULL, &size);
+    if (found == ESP_ERR_NVS_NOT_FOUND) {
+        nvs_close(handle);
+        return;
+    }
     ESP_ERROR_CHECK(found);
+    char *note = malloc(size);
+    ESP_ERROR_CHECK(note != NULL ? ESP_OK : ESP_ERR_NO_MEM);
+    ESP_ERROR_CHECK(nvs_get_str(handle, "note", note, &size));
+    nvs_close(handle);
     printf("persistence: note=%s\n", note);
+    free(note);
 }
 
 /* The lines of BOOTS.TXT once this boot's is appended; -1 without a card. The pins are those of

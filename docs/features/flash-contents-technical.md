@@ -17,9 +17,11 @@
    reads them: before the first power-on, `0xff` over the partition's range with every flash file of
    the build, then every image in `_nvs`, copied over it where it overlaps, as the runner's
    `--flash-at` order would leave it; after it, the slice of the runner's flash that `_flash_now`
-   reads through a `flash_dump`, as `flash()` does. The test's namespaces are merged into those
-   values key by key (`dict.update` per namespace), and the result goes to step 3 in place of the
-   test's mapping.
+   reads through a `flash_dump`, as `flash()` does. `flash.nvs_types` first lists the keys that
+   hold values of two types, which NVS keeps apart and `nvs_values` reads as the later one: one
+   the test's mapping does not name is a `BackendError`, before anything is written. The test's
+   namespaces are merged into those values key by key (`dict.update` per namespace), and the
+   result goes to step 3 in place of the test's mapping.
 3. `flash.nvs_image(namespaces, size)` opens an NVS writer on `io.BytesIO` through
    `generator.nvs_open(output, size - 4096, generator.Page.VERSION2)`. The size excludes the
    final reserved page, which the writer adds on close. `_name` validates each namespace and
@@ -179,6 +181,7 @@ The backend raises `BackendError`:
 | `board.nvs: the runner cannot dump the flash to merge over it: ERROR` | With `merge` between boots, `flash_dump_ack` with an `error` |
 | `board.nvs: the run left no flash to read: STRERROR; its output is in LOG` | With `merge` after the run's first power-on, no flash file to read |
 | `board.nvs: cannot read FILE: STRERROR` | With `merge` before power-on, a flash file of the build or an earlier image cannot be read |
+| `board.nvs: NS/KEY holds a TYPE and a TYPE in partition 'NAME', which a merge cannot keep both of: give NS/KEY a value in the test's keys, or write without merge` | With `merge`, `flash.nvs_types` finds a key of two types the test's mapping does not name; nothing is written |
 | `board.nvs: BUILD/flasher_args.json names no partition table` | An ESP-IDF build without a `partition-table` entry |
 | `board.nvs: no file of BUILD is flashed at OFFSET` | None of the build's flash files holds the table's offset |
 | `board.nvs: cannot read the partition table of BUILD at OFFSET: ERROR` | File access or partition parsing failed; `OFFSET` as `0x8000` |

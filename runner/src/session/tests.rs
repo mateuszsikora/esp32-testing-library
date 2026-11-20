@@ -112,6 +112,8 @@ struct FakeGuest {
     lags: Vec<u64>,
     /// The flash.
     flash: Vec<u8>,
+    /// The bus cycle of each `sync_flash`.
+    flash_syncs: Vec<u64>,
     /// With `--bt`: the guest's Bluetooth controller, and what each `Act::HciPoll` read of it,
     /// with the cycle.
     hci: Option<hci::Shared>,
@@ -167,6 +169,7 @@ impl FakeGuest {
             paced: Vec::new(),
             lags: Vec::new(),
             flash: vec![0xff; 16],
+            flash_syncs: Vec::new(),
             hci: None,
             hci_read: Vec::new(),
             sleep: None,
@@ -398,6 +401,9 @@ impl Guest for FakeGuest {
     }
     fn flash(&self) -> Cow<'_, [u8]> {
         Cow::Borrowed(&self.flash)
+    }
+    fn sync_flash(&mut self) {
+        self.flash_syncs.push(self.now);
     }
     fn write_flash(&mut self, offset: usize, data: &[u8]) -> Result<(), String> {
         crate::chip::fits(self.flash.len(), offset, data.len())?;
@@ -3880,6 +3886,33 @@ fn a_flash_write_with_the_supply_off_is_in_the_flash_at_the_next_boot() {
     assert!(acks.iter().all(|m| m.get("error") == Some(&Json::Null)));
     assert_eq!(r.guest.power_resets, [cycles(5 * MS)]);
     assert_eq!(r.stats.turns, 4, "the writes took no turn of their own");
+}
+
+#[test]
+fn the_flash_is_synced_for_a_dump_or_a_write_only_with_the_supply_off_for_good() {
+    let out = FlashOut::new("sync");
+    let file = flash_file("sync-file", b"ab");
+    let peer = FakePeer::new(
+        &[],
+        scripted(vec![
+            // on: the guest runs on after the dump, so nothing of it is synced
+            (0, FLASH_DUMP.to_string()),
+            (MS, power(MS, false)),
+            (MS, FLASH_DUMP.to_string()),
+            (2 * MS, flash_write(0, &file.0)),
+        ]),
+    );
+    let r = run_with(
+        0.005,
+        FakeGuest::new(vec![]),
+        peer,
+        false,
+        None,
+        Some(out.0.as_path()),
+    );
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    assert_eq!(r.guest.flash_syncs.len(), 2, "{:?}", r.guest.flash_syncs);
+    assert!(r.guest.flash_syncs[0] >= cycles(MS));
 }
 
 #[test]

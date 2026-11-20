@@ -349,6 +349,24 @@ def test_a_merge_between_boots_keeps_what_the_firmware_wrote(device: Esp32Sim) -
     assert (run / "nvs-11000-t5000000000-2.bin").read_bytes() == hold.written[1][1]
 
 
+def test_a_merge_over_a_key_of_two_types_is_refused_unless_the_test_names_it(
+    device: Esp32Sim,
+) -> None:
+    port = [nvs_item(1, 0x02, "port", struct.pack("<H", 80)), *nvs_varlen(1, 0x21, "port", b"x\0")]
+    stored = nvs_page(0, [NS, *port]).ljust(0x6000, b"\xff")
+    hold = off_between_boots(device, b"\xff" * 0x11000 + stored)
+    with pytest.raises(BackendError) as refused:
+        device.nvs({"ns": {"other": u8(1)}}, partition="settings", merge=True)
+    assert str(refused.value) == (
+        "board.nvs: ns/port holds a u16 and a string in partition 'settings', which a merge cannot"
+        " keep both of: give ns/port a value in the test's keys, or write without merge"
+    )
+    hold.write_flash.assert_not_called()
+    device.nvs({"ns": {"port": u16(81)}}, partition="settings", merge=True)
+    ((_, image),) = hold.written
+    assert flash.nvs_values(image) == {"ns": {"port": u16(81)}}
+
+
 def test_a_write_between_boots_without_merge_replaces_the_partition(device: Esp32Sim) -> None:
     stored = flash.nvs_image({"app": {"boots": u32(2)}}, 0x6000)
     hold = off_between_boots(device, b"\xff" * 0x11000 + stored)
@@ -665,6 +683,14 @@ def test_pages_are_read_by_sequence_number_not_by_their_place_in_the_partition()
 def test_a_key_written_twice_reads_as_the_later_write() -> None:
     # as a power cut leaves it: the new value written, the old one not yet erased
     assert flash.nvs_values(nvs_page(0, [NS, boots(1), boots(2)])) == {"ns": {"boots": u32(2)}}
+
+
+def test_a_key_written_with_two_types_is_told_with_both_and_reads_as_the_later() -> None:
+    port = [nvs_item(1, 0x02, "port", struct.pack("<H", 80)), *nvs_varlen(1, 0x21, "port", b"x\0")]
+    image = nvs_page(0, [NS, *port, boots(1), boots(2)])
+    assert flash.nvs_values(image) == {"ns": {"port": "x", "boots": u32(2)}}
+    # a key written twice with one type is one value
+    assert flash.nvs_types(image) == {("ns", "port"): ("u16", "string")}
 
 
 def test_the_namespace_may_be_on_another_page_and_an_unknown_namespace_is_nothing() -> None:

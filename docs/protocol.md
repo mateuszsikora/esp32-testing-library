@@ -1008,6 +1008,14 @@ whole, or the file from before. `PATH` is the flash as the guest has it at the s
 turn was taken at, which may lie past the `sync`'s `t` (section 6.1): a write of the guest's after
 the block point is already there, though its `uart_tx` or `console` goes out after the `wait`.
 
+On the ESP32-S31 esp32sim keeps what the guest programs and erases in its cache's own copy of the
+NOR array, and hands it to the flash the runner reads only at a chip reset (`reboot`,
+`esp32s31/src/soc.rs`), with no other way to read it. So with the supply on, `PATH` there is the
+flash as of the chip's last reset. With the supply off from the bus's current cycle on, as for
+`flash_write` (5.25), the runner resets the chip first (`Guest::sync_flash`), which changes nothing
+the chip runs: its next instruction comes after the power-on reset. TODO(owner): the S31's flash
+while the supply is on, once esp32sim lets the runner read the cache's array.
+
 **At the end of the run** the runner writes `PATH` on its own, however the run ended, exit codes 1,
 3 and 4 included (section 9), before it sends `stats`: a peer that has read `stats` finds the file in
 place. That covers what the guest wrote after the peer's last turn, when no turn is left to ask in.
@@ -1232,7 +1240,9 @@ runner has read and that is due by the bus's current cycle, as the turn's own `p
 runs between the write and the switch. With the supply on, or switched on again by then,
 `flash_write` is a protocol error, `flash_write with the supply on` (section 9): the guest could
 read the bytes half written, or write over them. What the peer writes is what the guest reads from
-its next boot on, and what `flash_dump` writes from now on.
+its next boot on, and what `flash_dump` writes from now on. On the ESP32-S31 the runner first takes
+in what the guest wrote since its last reset, as for `flash_dump` (5.21), since esp32sim's
+`write_flash` replaces the cache's whole NOR array with the flash it writes into.
 
 The runner writes through esp32sim's `write_flash`, as it writes the `--flash-at` files at the
 start; on the classic ESP32, the ESP32-S3 and the ESP32-C3, bytes over esp32sim's Bluetooth

@@ -180,6 +180,10 @@ pub trait Guest {
     fn write_flash(&mut self, offset: usize, data: &[u8]) -> Result<(), String> {
         crate::chip::fits(0, offset, data.len())
     }
+    /// With the supply off from now until the next power-on reset: has `flash` and `write_flash`
+    /// work on what the guest wrote since its last reset, on a chip whose model keeps that apart
+    /// until a reset. The default is a chip whose flash is one array.
+    fn sync_flash(&mut self) {}
     // Deep sleep: the defaults are a chip that never sleeps.
 
     /// Whether the chip is in a deep sleep the run loop steps through: its digital domain off,
@@ -1394,6 +1398,10 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     let Some(path) = self.opts.flash_out else {
                         return Err(protocol_error("flash_dump without --flash-out", &line));
                     };
+                    // the guest runs no more before its power-on reset: what it wrote can be had
+                    if self.off_once_due(&inputs) {
+                        self.guest.sync_flash();
+                    }
                     let error = write_flash(path, &self.guest.flash())
                         .err()
                         .map(|e| format!("{}: {e}", path.display()));
@@ -1408,6 +1416,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     if !self.off_once_due(&inputs) {
                         return Err(protocol_error("flash_write with the supply on", &line));
                     }
+                    self.guest.sync_flash();
                     let error = std::fs::read(&path)
                         .map_err(|e| e.to_string())
                         .and_then(|data| {

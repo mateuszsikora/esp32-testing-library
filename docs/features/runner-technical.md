@@ -390,7 +390,8 @@ error. `Session::run` calls `write_flash_at_end` after `drive` has returned and 
 cycle, those queued in `self.inputs` from earlier turns and then those of this turn read so far
 (`inputs`), each in time order, over `self.off`: the supply as the next `apply_inputs` leaves it,
 before the guest runs again. With the supply on that is a protocol error, `flash_write with the
-supply on`. Otherwise `std::fs::read(path)` and `Guest::write_flash(offset, &data)`, and
+supply on`. Otherwise `Guest::sync_flash`, `std::fs::read(path)` and
+`Guest::write_flash(offset, &data)`, and
 `protocol::flash_write_ack` at the turn's `b`, flushed, with `PATH: ERROR` when either failed; the
 loop goes on reading the same turn, with a new deadline
 ([protocol 5.25](../protocol.md#525-flash_write-and-flash_write_ack-ext-278)). Each chip's
@@ -403,6 +404,14 @@ and on the C3, the C6 and the P4 of none. On the classic ESP32, the S3 and the C
 `Ble::original_flash`, which `reboot()` puts back; the C6 keeps that copy inside esp32sim, and the
 P4 and the S31 have no trampoline. The default, a scripted guest's, has no flash and refuses every
 write.
+
+`Guest::sync_flash` is a no-op on every chip but the S31, whose esp32sim model keeps the guest's
+program and erase results in `inner.cache`'s private NOR array and copies it into `bus.flash`, the
+array `Guest::flash` reads, only in `reboot()`; its `write_flash` then replaces the cache's array
+with `bus.flash` whole. The S31's `sync_flash` is `reboot()`. `take_turn` calls it before a
+`flash_write`, and before a `flash_dump` when `off_once_due` says the supply is off, so that both
+see and keep what the guest wrote; the power-on reset that comes before the chip's next instruction
+reboots it again. With the supply on a dump there is the flash as of the last reset.
 
 With `--console-port usb`, `Options.usb_console` is set. `collect`, at every slice boundary and
 before every reset, takes `Guest::take_usb_console` (on the S3, C3 and C6 `std::mem::take` of
