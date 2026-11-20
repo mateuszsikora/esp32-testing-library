@@ -10,6 +10,7 @@ namespaces and keys. esp32tl knows their NVS types, not what those keys mean to 
 ```python
 from esp32tl import u16
 
+
 def test_connects(board):
     board.nvs(
         {
@@ -138,6 +139,7 @@ from which the test reads a partition by name, NVS by namespace and key, and the
 
 ```python
 from esp32tl import u32
+
 
 def test_counts_its_boots(board):
     board.power_on()
