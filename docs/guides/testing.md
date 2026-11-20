@@ -76,7 +76,7 @@ reference. See [the real source](../features/real-source-user.md).
   `app_recording` and `board_profile` itself, and pytest-timeout `timeout`; `requires_docker` and
   `requires_mtools` are registered here.
 - `markers`: `requires_docker: needs a Docker daemon`, `requires_mtools: needs mtools (mformat,
-  mcopy, mdir, mtype, mmd)`.
+  mcopy, mdir, mtype)`.
 
 The esp32tl plugin is loaded through its `pytest11` entry point, so the suite needs the package
 installed in `.venv`, as `make setup` does. The suite needs no warning filter: the plugin
@@ -129,9 +129,9 @@ No test of the suite carries the marker. The only marked tests are the ones
 `tests/test_firmware_build.py` generates to test the marker itself.
 
 A test that makes or reads a FAT image carries `@pytest.mark.requires_mtools`: the same hook
-checks once (`mtools_missing`) that `mformat`, `mcopy`, `mdir`, `mtype` and `mmd` are on `PATH`, and
+checks once (`mtools_missing`) that `mformat`, `mcopy`, `mdir` and `mtype` are on `PATH`, and
 skips every marked test without them, with the reason `requires_mtools: no mformat, mcopy, mdir,
-mtype, mmd on PATH (mtools)`, naming those missing. The tests of `tests/test_sdspi.py` and
+mtype on PATH (mtools)`, naming those missing. The tests of `tests/test_sdspi.py` and
 `tests/test_sd_remount.py` carry it, and so do the three tests of `tests/test_power.py` with a card
 in the slot. In
 CI the test job installs mtools first, so there they run ([cicd.md](../cicd.md#test)).
@@ -220,8 +220,8 @@ A lower bound, at least `AT_LEAST_S` of wall time, only grows on a slow host, an
 | `tests/test_gnss_fixture.py` | `gnss.replay` and `gnss.tap` into `nmea_reader` through the `gnss` fixture, and, through `pytester`, a source given out of order with `board.power_on()`, and `test_nmea_reader.py`'s `test_reports_a_fix` failing on a changed recording and on a baud mismatch | The built `nmea_reader` image, the runner and the ROM ELF |
 | `tests/test_gnss_recordings.py` | `recordings/gnss-generated-*.jsonl` are what `scripts/generate-gnss-recordings.py` writes, `--check` names a stale one, and every recording is one valid sentence per emulated second | Nothing beyond Python |
 | `tests/test_pytest_plugin.py` | The plugin's parametrisation and refused options, the `board_profile` marker, the project defaults in `pyproject.toml` and their precedence below the markers, the wall-time timeout it gives, the runner's command line, `load_app`'s refusals, the runner and ROM paths, power-on, sources and taps, the `lines` fixture's refusals and how a runner's exit is reported (against a fake runner, a shell script), how the backend serves the link, holds it on the test's clock, ends the run, writes a tap and reports the run (against a fake runner that speaks the link protocol, a Python script) | Most tests nothing beyond the package; `test_hello_world_fails_on_an_image_that_prints_something_else` the built image, the runner and the ROM ELF |
-| `tests/test_determinism.py` | The runs the determinism job runs twice: `nmea_reader` fed each generated recording and the converted NEO-M8N log, and fed the receiver model through a fix, a move, a lost fix and a new one, each run tapped and ended at a time the test chose; `pppos_client` publishing to the broker; a TLS exchange without firmware; the `position_tracker` example publishing over TLS through the modem (`test_tls_on_the_device`); `mqtt_session` on a path with a backlog and a redelivery (`test_mqtt_session_on_a_path`); `http_request` fetching behind the access point (`test_wifi_http`); `bt_spp_initiator` streaming to an `SppPeer` through the `bt` fixture (`test_spp_to_a_peer`); `modem_recovery` redialling after a dropped call (`test_a_dropped_call_and_the_redial`) and `arduino_shell`'s SoftAP left and joined again (`test_device_softap_left_and_joined_again`), with the link's changes; each test leaves its console, its tap or its network transcript in its `tmp_path` ([Determinism](#determinism)) and checks that its run did what it should | The built `nmea_reader`, `pppos_client`, `modem_recovery`, `mqtt_session`, `http_request` and `bt_spp_initiator` images, the PlatformIO `arduino_shell` image and the `position_tracker` example, the runner and the ROM ELF |
-| `tests/test_check_determinism.py` | `scripts/check-determinism.py` on two runs made up in the test: the files, a tap's `created` left out, the links in the JUnit XML without the run's basetemp, and the check itself against a stand-in for pytest (its arguments, a run that fails, the `--out` it refuses) | Nothing beyond Python; milliseconds |
+| `tests/test_determinism.py` | The runs the determinism job runs twice: `nmea_reader` fed each generated recording and the converted NEO-M8N log, and fed the receiver model through a fix, a move, a lost fix and a new one, each run tapped and ended at a time the test chose; `pppos_client` publishing to the broker; a TLS exchange without firmware; the `position_tracker` example publishing over TLS through the modem (`test_tls_on_the_device`); `mqtt_session` on a path with a backlog and a redelivery (`test_mqtt_session_on_a_path`); `http_request` fetching behind the access point (`test_wifi_http`); `bt_spp_initiator` streaming to an `SppPeer` through the `bt` fixture (`test_spp_to_a_peer`); `modem_recovery` redialling after a dropped call (`test_a_dropped_call_and_the_redial`) and `arduino_shell`'s SoftAP left and joined again (`test_device_softap_left_and_joined_again`), with the link's changes; `sd_remount` with a failed write, slow writes and its card taken out and put back (`test_sd_card_faults`); each test leaves its console, its tap or its network transcript in its `tmp_path` ([Determinism](#determinism)) and checks that its run did what it should | The built `nmea_reader`, `pppos_client`, `modem_recovery`, `mqtt_session`, `http_request`, `bt_spp_initiator` and `sd_remount` images, the PlatformIO `arduino_shell` image and the `position_tracker` example, the runner, the ROM ELF and mtools (`requires_mtools`) for `test_sd_card_faults` |
+| `tests/test_check_determinism.py` | `scripts/check-determinism.py` on runs made up in the test: the files, a tap's `created` left out, an xdist worker's basetemp left out of a path and two workers that left the same one, the links in the JUnit XML without the run's basetemp or the worker's, and the check itself against a stand-in for pytest and for the busy loops (its arguments, `--runs` and `--load`, a run that fails, the first run that differs, the `--out`, `--runs` and `--load` it refuses) | Nothing beyond Python; milliseconds |
 | `tests/test_compare_backends.py` | `scripts/compare-backends.py` on JUnit XML made up in the test: the outcomes it reads, the ids without the backend, the line each test gets and the counts, and the script against a stand-in for pytest (the arguments of each run, the required `--port`, a run that cannot test, no test on both backends) ([comparing the two backends](../features/serial-backend-user.md#comparing-the-two-backends)) | Nothing beyond Python; milliseconds |
 | `tests/test_tap.py`, `tests/test_run_report.py` | A tap's recording and a tapped `Uart` on a `BoardLink`; the run's log and how the report shows it | Nothing beyond the package; milliseconds |
 | `tests/test_link_protocol.py`, `tests/test_boardlink.py` | The link protocol's codec and handshake; `BoardLink`'s turns, routing and errors, fed messages directly or over a socket pair | Nothing beyond the package; milliseconds |
@@ -279,20 +279,33 @@ test waits, and every time a peer sends comes from its recording or its model
 make determinism                                            # after make setup
 .venv/bin/python scripts/check-determinism.py               # the same
 .venv/bin/python scripts/check-determinism.py tests/test_nmea_reader.py -k fix
+# 21 runs, each compared with the first, in 8 xdist workers beside 8 busy loops
+.venv/bin/python scripts/check-determinism.py --runs 21 --load 8 tests/test_determinism.py -n 8
 ```
 
-`scripts/check-determinism.py` runs `python -m pytest` twice on its arguments, pytest's options
-included, or on `tests/test_determinism.py` when it is given none; arguments after a `--` go after
-the script's own options. Options alone, as `-k replay`, are no longer none: pytest then collects
-its `testpaths`, the whole suite, so name the file too
-(`scripts/check-determinism.py tests/test_determinism.py -k replay`). Each run has a `--basetemp` and a `--junitxml` of its own under
-`build/determinism/` (`--out DIR` names another directory): `run-1/` and `run-1.xml`, `run-2/` and
-`run-2.xml`. Those four are removed first, when an earlier check left them; a directory that holds
-anything else is refused, with exit code 2 and
+`scripts/check-determinism.py` runs `python -m pytest` twice, or `--runs N` times, on its
+arguments, pytest's options included, or on `tests/test_determinism.py` when it is given none;
+arguments after a `--` go after the script's own options. Options alone, as `-k replay`, are no
+longer none: pytest then collects its `testpaths`, the whole suite, so name the file too
+(`scripts/check-determinism.py tests/test_determinism.py -k replay`). Each run has a `--basetemp`
+and a `--junitxml` of its own under `build/determinism/` (`--out DIR` names another directory): `run-1/` and `run-1.xml`, `run-2/` and
+`run-2.xml`, and so on. Every `run-N/` and `run-N.xml` an earlier check left there is removed
+first; a directory that holds anything else is refused, with exit code 2 and
 `✗ <DIR> holds <names>, which no determinism check left there: name an empty or new directory with --out`,
 and so is a file, with `✗ <DIR> is not a directory: name an empty or new directory with --out`, so
-that a mistyped `--out` removes nothing. Both runs must pass; one that does not ends the check
-with `✗ run-1: pytest exited with code 1; the runs were not compared`. Then it compares:
+that a mistyped `--out` removes nothing. With `--runs N` it makes N runs, `run-1/` to `run-N/`,
+and compares each with `run-1` once it has run; fewer than 2 are refused, exit code 2,
+`✗ --runs 1: a check compares 2 runs or more`. With `--load N` it starts N busy loops, one
+Python process each, before the first run, so that the runs share the CPUs with neighbours as on
+a loaded host, and kills them after the last. A loop also ends by itself once the script is gone,
+killed by a signal that left it no time to: it looks every few milliseconds whether its parent is
+still the script. The script prints
+`determinism: 8 busy loops beside the runs` first, and after each run
+`determinism: run-2 took 13.8 s, load average 23.1`, the one-minute load average then. pytest's
+own `-n N` runs a run in N workers of pytest-xdist, which gives each worker a basetemp of its own
+under the run's, `popen-gw0/` and so on; which worker runs a test changes from run to run, so the
+comparison leaves that directory out of every path. Every run must pass; one that does not ends
+the check with `✗ run-1: pytest exited with code 1; the runs were not compared`. Then it compares:
 
 - Every file the two runs left under their basetemps, byte for byte, but for the `created` field of
   a recording's header, which says when the tap was written. With a fixed basetemp a test's
@@ -303,20 +316,27 @@ with `✗ run-1: pytest exited with code 1; the runs were not compared`. Then it
 - For each test, the `esp32sim_link` property the plugin gives every test that uses `board`
   ([the link's report](../features/esp32sim-backend-user.md#the-links-report)): the link's
   warnings and error, the runner's stats (the board's time the run ended at, its turns, the bytes
-  each UART moved) and the bytes on each route. The run's basetemp in a tap's path is left out.
+  each UART moved) and the bytes on each route. The run's basetemp in a tap's path is left out,
+  and so is a worker's under it.
 
 Each difference is one of these lines, and the check exits 1:
 
 - `✗ <file> differs:` or `✗ <test>: the link differs:`, with a unified diff of up to 40 lines
   under it;
-- `✗ <file>: only in run-1` or `✗ <test>: only in run-1` (or `run-2`), with no diff.
+- `✗ <file>: only in run-1` or `✗ <test>: only in run-1` (or `run-2`), with no diff;
+- `✗ <file>: left by two workers in run-1`: two tests whose names start with the same 30
+  characters, pytest's limit for a `tmp_path`'s name, ran in two workers, and which of their
+  files to compare with which is not known. The tests of `tests/test_determinism.py` have no two
+  such names.
 
-After them comes `determinism: the two runs differ in <n> places` (`1 place` for one). Two runs
-that left no file and no test that used the board compared nothing, and fail too:
-`✗ the runs left no file and no test that used the board: nothing was compared`.
+After them comes `determinism: the two runs differ in <n> places` (`1 place` for one), or with
+more runs `determinism: run-3 differs from run-1 in <n> places`, and the check ends there, leaving
+the runs for a look. Two runs that left no file and no test that used the board compared nothing,
+and fail too: `✗ the runs left no file and no test that used the board: nothing was compared`.
 Two identical runs end with
-`determinism: the two runs are identical: 19 files, and the link of 8 tests that used the board`,
-and exit 0. One run of the three GNSS tests took 2.3 to 5.3 s of wall time on an M2 Pro.
+`determinism: the two runs are identical: 40 files, and the link of 15 tests that used the board`,
+more with `determinism: the 21 runs are identical: …`, and exit 0. One run of the three GNSS tests
+took 2.3 to 5.3 s of wall time on an M2 Pro.
 
 A test of `tests/test_determinism.py` ends its run at a time it chose (`board.wait`), so that the
 two runs end at the same instant, and checks that its run printed its fixes, so that two runs that
@@ -350,12 +370,72 @@ the virtual station, stops the access point with the shell's `ap-off` and starts
 waits for the new lease and one more second, and leaves the same two files; it checks `station
 joined`, `station left` and `station joined`
 ([the link's changes](../features/network-user.md#when-the-link-comes-up-and-goes-down)).
+`test_sd_card_faults` runs `sd_remount` on a built card of 32 MiB holding a `README.TXT`, and,
+once it has printed `sd_remount: wrote 3`, fails one write (`sd_card.fail("write", count=1)`),
+which the firmware answers by mounting the card again, `sd_remount: mounted 2`; then it keeps
+four writes busy for 250 ms each (`sd_card.delay("write", ms(250), count=4)`), takes the card out
+once the four have come, waits for `sd_remount: no card`, puts the same card back, and waits for
+`sd_remount: mounted 3` and one more second. It leaves its `console.txt`, `sd_card.txt`, each
+operation a rule met as `<board time>  <rule id>  <operation>` and each change of card as
+`<board time>  True|False`, whether a card was in from then, and `LOG.TXT`, the file the firmware
+wrote on the card; it checks that the first rule failed one write and that the console printed
+`sd_remount: write failed (I/O error)` twice, for the rule and for the card taken out. It needs
+mtools, without which it skips, in both runs. The card's image is not compared: it is in the
+slot's temporary directory, gone with the board, and its path in the link's report is written as
+`{card 1}`, which leaves out the directory's random name. The builder gives it the same bytes in
+every run (`build()` in [pytest-plugin-user.md](../features/pytest-plugin-user.md)).
 
 Network transcripts (`"esp32tl_network": 1`) are compared exactly like any other file, times
 after a TLS handshake included: the harness's TLS server draws its keys and nonces from a seed,
 so the bytes on the wire, PPP's escapes of them and the device's work on them repeat
 ([the decision](../decisions/harness.md#the-harnesss-tls-server-draws-every-random-value-from-a-seed)).
 A tap of a TLS route holds the same ciphertext in both runs.
+
+### Under load
+
+A report (#287) had a test of an SD card fault end once with another result under eight xdist
+workers at a load average of 11 to 24, and pass alone and in the next full run. The check's
+`--runs`, `--load` and pytest's `-n` are there to look for that: run them on the same tests
+before taking a difference for the firmware's, and again for the next report.
+
+What can follow wall time was read in the code, at esp32sim 357b0e5:
+
+- The runner reads the socket only in the peer's turn, while the guest stands still
+  (`SocketLink::recv` in `runner/src/transport.rs`). `POLL` (20 ms) bounds a blocked read or
+  write, `LIVE` (20 ms) when the write buffer goes out between slices, and `TEARDOWN` (2 s) the
+  last writes; none of them changes a message, whose bytes and boundaries come from the board's
+  time. `--peer-timeout` is `0` on the backend, and only ends a run.
+- `--realtime`, `SocketLink::wait_until` and esp32sim's pacing (`rt_pace`) are only for a
+  run on wall time, `gnss.real` ([real-source-user.md](../features/real-source-user.md)); the
+  backend passes `--realtime` only then.
+- In esp32sim the one other read of the host's clock in a slice is the SNTP answer of its own
+  network (`esp-soc/src/net.rs`), which the runner's relay mode leaves off.
+- On the harness's side the link's thread takes each turn only once the test waits
+  (`HeldClock`), and the test's calls between waits go out in the turn it is held at; the
+  Bluetooth air runs on the board's clock under a lock; the log forwarder of #257 feeds
+  pytest-embedded's log, not the console the tests read.
+- `card_cache` is shared by xdist's workers: whether `get` finds a card depends on which test put
+  it there first, which the distribution of tests changes. A test that prepares its card when
+  `get` returns `None` runs on a fresh card in one run and a prepared one in another.
+- The SD card builder made cards that differed from run to run: mformat drew the volume's serial
+  number from the host's clock, and `mmd` and `mcopy` dated every entry with it. Fixed: the bytes
+  are now the same in every run (invariant 289). Whether that explains the report is not known: a
+  firmware that reads neither its card's serial nor a file's date saw the same behaviour before.
+
+Run on an Apple M2 Pro (10 cores, 16 GiB, macOS), with other work on the machine as well, on
+2026-11-20:
+
+| Command | Runs | Load average after each run | Wall time of a run |
+|---|---|---|---|
+| `make determinism` | 2 | 6.4 to 6.6 | 15.6 to 16.5 s |
+| `scripts/check-determinism.py --runs 21 --load 8 tests/test_determinism.py -n 8` | 21 | 13.4 to 83.9 | 10.0 to 24.4 s |
+| `scripts/check-determinism.py --runs 21 --load 10` | 21 | 61.2 to 164.6 | 25.4 to 48.3 s |
+
+Every run of the 16 tests passed and every run was identical to the first, 40 files and the link
+of 15 tests that used the board, `test_sd_card_faults` included: no difference showed. The first
+loaded runs found two differences of the check itself, not of a run: under xdist a worker's
+basetemp is `popen-gwN/`, and the cases of `test_a_replay` were numbered by the order they ran
+in, which their ids now avoid.
 
 ## The runner's Rust tests
 
@@ -382,7 +462,7 @@ each starting two `python -m pytest --shard=K/4` processes, for each K on Python
 Actions cache; the `determinism` job runs `make determinism` with the same builds; the `lint` job
 runs `make lint`. Both private and public repositories run the matrix on
 `ubuntu-24.04` (x64) and `macos-15` (ARM64). Linux test jobs start and check Docker;
-all test jobs install mtools and require `mformat`, `mcopy`, `mdir`, `mtype` and `mmd`.
+all test jobs install mtools and require `mformat`, `mcopy`, `mdir` and `mtype`.
 The existing capability markers are unchanged. [docs/cicd.md](../cicd.md) describes each job.
 
 ## See also

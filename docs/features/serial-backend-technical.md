@@ -294,8 +294,8 @@ which end the script before the esp32sim run.
 The plugin gives a test that uses `board` its backend as one parameter, whose id is the backend's
 name (`pytest_generate_tests` in `esp32tl/pytest_plugin.py`), and pytest joins the ids of a case's
 parameters with `-`. `without_backend` removes the first part equal to the run's backend from the
-bracket: `test_a_replay[esp32sim-gnss-generated-1]` and `test_a_replay[serial-gnss-generated-1]`
-both become `test_a_replay[gnss-generated-1]`. An id that is the same in both runs is left out
+bracket: `test_a_replay[esp32sim-gen-1]` and `test_a_replay[serial-gen-1]`
+both become `test_a_replay[gen-1]`. An id that is the same in both runs is left out
 first, so that a test without `board` parametrised over the backends' names by itself, as
 `tests/test_boards.py::test_a_backend_refuses_what_it_does_not_declare[esp32sim-request_0-None]`,
 is not taken for one of the esp32sim run's board tests. A parameter of another kind whose id is a

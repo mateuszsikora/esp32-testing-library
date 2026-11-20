@@ -148,6 +148,19 @@ jobs:
 
       - run: make PYTHON='${{ steps.python.outputs.python-path }}' .venv/.installed rom-elf
 
+      # As in the test job: test_sd_card_faults makes its card with mtools, and would skip in
+      # both runs without it, which compares nothing.
+      - name: mtools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mtools
+          for tool in mformat mcopy mdir mtype; do
+            command -v "$tool" >/dev/null || {
+              echo "::error::no $tool on PATH: install mtools on this runner (apt-get install mtools)"
+              exit 1
+            }
+          done
+
       - run: make determinism
 
   # Full changes run `make lint`, clippy included; version-only changes check packaging.

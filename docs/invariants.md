@@ -532,6 +532,12 @@ that references to its number keep their meaning.
     runs these tests twice and fails on any difference.
     `tests/test_determinism.py::test_a_replay`,
     `tests/test_determinism.py::test_the_receiver_model`
+- **290.** Two runs of `sd_remount` whose card fails one write, is kept busy by four, and is taken
+    out and put back give the same console at the same board times, the same operations the rules
+    met and changes of card at the same times, and the same `LOG.TXT`. `make determinism` runs it
+    twice; `scripts/check-determinism.py --runs N --load N` and pytest's `-n` run it more times in
+    xdist workers beside busy loops (#287).
+    `tests/test_determinism.py::test_sd_card_faults`
 
 ## Models, units and console lines
 
@@ -1393,6 +1399,11 @@ that references to its number keep their meaning.
     `tests/test_card_image.py::test_the_builder_makes_a_card_of_1_tib`,
     `tests/test_card_image.py::test_the_smallest_card_a_cluster_is_allowed_has_the_clusters_fat32_asks_for`,
     `tests/test_sdspi.py::test_the_example_mounts_a_32_gib_card_with_32_kib_clusters`
+- **289.** A card built again, by another slot, later on the host's clock and in another time
+    zone, is the same bytes, FAT16 and FAT32 alike: its files, its directories and their `.` and
+    `..` dated 1980-01-01 00:00, and the n-th card a slot builds has the volume serial number
+    `E32D` and n in four hex digits, so that the first two differ only there.
+    `tests/test_card_image.py::test_a_card_built_again_is_the_same_bytes_and_a_second_card_another_serial`
 - **196.** What a test takes from `card_cache` is its own: whether the file system clones or the harness
     copies, what is written to a clone reaches neither the cache nor another clone, nor does a later
     write to the image a card was kept from. The clone is writable, sparse where its source is, and gone

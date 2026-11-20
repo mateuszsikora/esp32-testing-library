@@ -380,7 +380,8 @@ No larger runners are needed. Private hosted usage can cost money; publication c
 
 Docker Engine comes with the Ubuntu image; the firmware cache-miss path and Linux test jobs
 start its service and require `docker info` to succeed as the job user. Test jobs install mtools
-through apt or Homebrew and require all five commands, including `mmd`. Firmware setup selects
+through apt or Homebrew and require four commands, `mformat`, `mcopy`, `mdir` and `mtype` (`mmd`
+was dropped in #287: the SD card builder makes directories with `mcopy -s`). Firmware setup selects
 Python explicitly. Existing rustup bootstrap and pinned toolchain remain, with the images' native
 compilers. Cold firmware builds remove unused hosted .NET, Android and Haskell SDK directories
 to make room for containers, PlatformIO packages and build trees. Disk use and timings still

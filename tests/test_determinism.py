@@ -23,6 +23,7 @@ from esp32tl.interfaces.bluetooth import Bluetooth
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.modem import Modem
+from esp32tl.interfaces.sd_card import SdCard
 from esp32tl.interfaces.wifi import Wifi
 from esp32tl.net import Internet
 from esp32tl.net.mqtt import Broker
@@ -38,8 +39,14 @@ WARSAW = Position(52.229677, 21.012233)
 FIX = r"^fix(?: acquired)? lat=\S+ lon=\S+$"
 
 
-# gnss-neo-m8n, a real receiver's log converted, has its first fix at 2 s.
-@pytest.mark.parametrize("recording", ["gnss-generated-1", "gnss-generated-2", "gnss-neo-m8n"])
+# gnss-neo-m8n, a real receiver's log converted, has its first fix at 2 s. The ids are short, so
+# that each case's tmp_path differs in the first 30 characters of its name, all pytest keeps: two
+# cases named alike would be numbered by the order they ran in, which xdist changes (#287).
+@pytest.mark.parametrize(
+    "recording",
+    ["gnss-generated-1", "gnss-generated-2", "gnss-neo-m8n"],
+    ids=["gen-1", "gen-2", "neo-m8n"],
+)
 def test_a_replay(
     recording: str, board: Esp32Sim, gnss: Gnss, console: Console, tmp_path: Path
 ) -> None:
@@ -215,6 +222,35 @@ def test_spp_with_simple_pairing(
     pairings = [(p.t.ns, p.initiator, p.method, p.number, int(p.status)) for p in peer.pairings]
     pairings += [(p.t.ns, p.initiator, p.method, p.number, int(p.status)) for p in bt.pairings()]
     (tmp_path / "pairings.json").write_text(json.dumps(pairings))
+
+
+@pytest.mark.app_path("../firmware/sd_remount")
+@pytest.mark.requires_mtools
+def test_sd_card_faults(board: Esp32Sim, sd_card: SdCard, console: Console, tmp_path: Path) -> None:
+    card = sd_card.image(size_mb=32).with_text("README.TXT", "the card\n").build()
+    sd_card.insert(card)
+    board.power_on()
+    board.wait_until(console.line(r"^sd_remount: wrote 3$"), within=seconds(10))
+    # One write fails: the firmware unmounts the card and mounts it again (#287).
+    failed = sd_card.fail("write", count=1)
+    board.wait_until(console.line(r"^sd_remount: mounted 2$"), within=seconds(10))
+    # Four writes keep the card busy, then the card goes out and comes back.
+    slowed = sd_card.delay("write", ms(250), count=4)
+    board.wait_until(lambda: len(slowed.hits) == 4, within=seconds(10))
+    sd_card.remove()
+    board.wait_until(console.line(r"^sd_remount: no card"), within=seconds(10))
+    sd_card.insert(card)
+    board.wait_until(console.line(r"^sd_remount: mounted 3$"), within=seconds(10))
+    board.wait(seconds(1))
+    write_console(tmp_path, console)
+    assert len(failed.hits) == 1 and not failed.hits[0].written
+    assert len(console.lines(r"^sd_remount: write failed \(I/O error\)$")) == 2
+    # Each operation a rule met and each change of card, at its board time; and what the card
+    # holds at the end.
+    faulted = (f"{board_time(hit.at.ns)}  {hit.fault.id}  {hit}\n" for hit in sd_card.faulted)
+    changes = (f"{board_time(c.t)}  {c.image is not None}\n" for c in sd_card.changes)
+    (tmp_path / "sd_card.txt").write_text("".join([*faulted, *changes]))
+    (tmp_path / "LOG.TXT").write_text(card.read_text("LOG.TXT"))
 
 
 @pytest.mark.app_path("../firmware/arduino_shell", build_dir=".pio/build/esp32dev")

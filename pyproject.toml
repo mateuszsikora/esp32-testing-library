@@ -81,7 +81,7 @@ addopts = ["-ra", "--strict-markers"]
 # tests/conftest.py skips these where Docker, or mtools, is absent.
 markers = [
     "requires_docker: needs a Docker daemon",
-    "requires_mtools: needs mtools (mformat, mcopy, mdir, mtype, mmd)",
+    "requires_mtools: needs mtools (mformat, mcopy, mdir, mtype)",
 ]
 
 [tool.ruff]
