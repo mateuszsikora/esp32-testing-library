@@ -789,9 +789,16 @@ the slot is open and call `asked(Request("sd_card", source="model"))`. A saved b
 cannot bypass the backend-capability check. On esp32sim `asked` is the backend's `_declared`,
 without the before-power-on check, so a test can build a card to put in while the firmware runs. Declaring files allocates no
 image. Each build creates a unique subdirectory of a lazily allocated `TemporaryDirectory`,
-truncates `card.img`, formats it with `mformat`, creates parents with
-`mmd`, and copies bytes through temporary host files using `mcopy`. Failed builds remove their
-partial directory. Duplicate and file/parent conflicts are checked case-insensitively.
+truncates `card.img`, formats it with `mformat -N`, the slot's next serial number
+(`SERIAL_BASE`, `0xE32D0000`, plus the count of cards the slot has built, `SdCard._next_serial`),
+creates each parent by copying an empty host directory to it with `mcopy -s -m`, and copies bytes
+through a temporary host file with `mcopy -m`, in a staging directory removed after the build.
+The host directory and files are dated `BUILT_AT`, 1980-01-01 00:00 UTC, and every mtools command
+runs with `TZ=UTC`, so the FAT entries say 1980-01-01 00:00 whatever the host's zone (#287):
+without `-N` mformat draws the serial from the host's clock, `mmd` and `mcopy` without `-m` stamp
+an entry with the host's time, and two runs of a test gave its firmware cards that differed in
+those bytes. Failed builds remove their partial directory. Duplicate and file/parent conflicts are
+checked case-insensitively.
 
 `CardImage` exposes `path`, `__fspath__`, `read_bytes`, `read_text` and `list_files`. Reads use
 `mtype`; listings use `mdir -b` and exclude directory entries. Before either operation,
@@ -800,7 +807,7 @@ type. Missing entries raise `FileNotFoundError`, non-directory parents or listin
 `NotADirectoryError`, and reading a directory raises `IsADirectoryError`. This uses actual
 entries rather than parsing locale-dependent tool errors. `_path` rejects `*`, `?`, `[` and `]`
 for both builder and reader calls, preventing mtools from expanding a requested single path
-into several files. No FAT state or file contents are cached. All commands run without a shell and with `MTOOLS_SKIP_CHECK=1`; command failure becomes
+into several files. No FAT state or file contents are cached. All commands run without a shell and with `MTOOLS_SKIP_CHECK=1` and `TZ=UTC`; command failure becomes
 `SourceError` including stderr. Text encoding/decoding defaults to UTF-8 with no newline
 translation. `SdCard.close()` invalidates handles and removes only builder-owned directories;
 backends call it after stopping the run, including on teardown errors. The path of the card in the

@@ -20,7 +20,7 @@ from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
-from tempfile import NamedTemporaryFile, TemporaryDirectory, mkdtemp
+from tempfile import TemporaryDirectory, mkdtemp
 from typing import Literal
 
 from esp32tl.boards import SdCardRoute
@@ -62,7 +62,16 @@ FAT32_RESERVED = 32
 FAT32_FATS = 2
 FAT32_ENTRIES = 128
 
-MTOOLS = ("mformat", "mcopy", "mmd", "mtype", "mdir")
+MTOOLS = ("mformat", "mcopy", "mtype", "mdir")
+
+# What a built card's files and directories say of when they were written: 1980-01-01 00:00, the
+# earliest time FAT holds, in UTC (#287). mcopy would stamp them with the host's clock, and
+# mformat would draw the volume's serial number from it, so that two runs gave the firmware
+# different bytes.
+BUILT_AT = 315_532_800
+# The volume serial number of the n-th card a slot builds: E32D0001 for the first (mdir shows
+# E32D-0001), so that two cards of one test differ and two runs of it give each card the same.
+SERIAL_BASE = 0xE32D0000
 
 # A block of the card, the unit its fault rules count in.
 BLOCK = 512
@@ -81,7 +90,8 @@ def _mtools(command: str, *args: str) -> bytes:
             [command, *args],
             capture_output=True,
             check=True,
-            env={**os.environ, "MTOOLS_SKIP_CHECK": "1"},
+            # In UTC: FAT holds local time, which mcopy takes from the host's zone.
+            env={**os.environ, "MTOOLS_SKIP_CHECK": "1", "TZ": "UTC"},
         )
     except FileNotFoundError:
         raise SourceError(f"sd_card: {command} is missing; install mtools") from None
@@ -228,6 +238,7 @@ class CardImageBuilder:
             raise SourceError(f"sd_card: missing {', '.join(missing)}; install mtools")
         directory = self._slot._image_directory()
         path = directory / "card.img"
+        serial = self._slot._next_serial()
         try:
             with path.open("wb") as image:
                 image.truncate(self._size_mb << 20)
@@ -237,6 +248,8 @@ class CardImageBuilder:
                 "mformat",
                 "-i",
                 str(path),
+                "-N",
+                f"{serial:08x}",
                 *(("-F",) if fat32 else ()),
                 "-T",
                 str(self._size_mb << 11),
@@ -248,16 +261,23 @@ class CardImageBuilder:
                 "::",
             )
             directories: set[str] = set()
-            for name, contents in self._files.items():
-                for parent in reversed(name.parents):
-                    if parent == PurePosixPath(".") or str(parent).casefold() in directories:
-                        continue
-                    _mtools("mmd", "-i", str(path), f"::{parent}")
-                    directories.add(str(parent).casefold())
-                with NamedTemporaryFile(dir=directory) as source:
-                    source.write(contents)
-                    source.flush()
-                    _mtools("mcopy", "-i", str(path), source.name, f"::{name}")
+            with TemporaryDirectory(dir=directory) as staging:
+                # An empty directory, copied with its time for each one the card holds: mmd
+                # would stamp it, and its `.` and `..`, with the host's clock.
+                empty = Path(staging, "empty")
+                empty.mkdir()
+                os.utime(empty, (BUILT_AT, BUILT_AT))
+                for name, contents in self._files.items():
+                    for parent in reversed(name.parents):
+                        if parent == PurePosixPath(".") or str(parent).casefold() in directories:
+                            continue
+                        _mtools("mcopy", "-s", "-m", "-i", str(path), str(empty), f"::{parent}")
+                        directories.add(str(parent).casefold())
+                    source = Path(staging, "file")
+                    source.write_bytes(contents)
+                    os.utime(source, (BUILT_AT, BUILT_AT))
+                    _mtools("mcopy", "-m", "-i", str(path), str(source), f"::{name}")
+                    source.unlink()
         except BaseException:
             shutil.rmtree(directory)
             raise
@@ -423,6 +443,8 @@ class SdCard(Interface):
         self._blocks = 0
         self._faults: dict[int, CardFault] = {}
         self._faulted: list[FaultedOperation] = []
+        # The cards the builder has made for this slot, which numbers their serials.
+        self._built = 0
 
     @property
     def card_slot(self) -> bool:
@@ -446,6 +468,12 @@ class SdCard(Interface):
     def _can_build(self) -> None:
         self._check_open()
         self.asked(Request(self.name, source="model"))
+
+    def _next_serial(self) -> int:
+        """The volume serial number of the next card built for this slot."""
+        with self._lock:
+            self._built += 1
+            return SERIAL_BASE + self._built
 
     def _image_directory(self) -> Path:
         if self._temporary is None:

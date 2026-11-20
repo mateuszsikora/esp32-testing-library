@@ -119,8 +119,8 @@ The Linux `firmware` job on a cache miss and every Linux `test` job run
 the job before pytest. Currently only generated marker tests use `requires_docker`; this also
 keeps the daemon available for future container tests. macOS has no Docker; the existing
 `requires_docker` marker still skips tests requiring it there.
-Every `test` job installs mtools (apt on Linux, Homebrew on macOS) and checks all five
-commands: `mformat`, `mcopy`, `mdir`, `mtype`, `mmd`.
+Every `test` job installs mtools (apt on Linux, Homebrew on macOS) and checks all four
+commands: `mformat`, `mcopy`, `mdir`, `mtype`.
 
 On a cache miss the firmware job reports free space, then removes unused SDKs only while less
 than 20 GiB is free: Android (`/usr/local/lib/android`), .NET (`/usr/share/dotnet`), then Haskell
@@ -284,7 +284,7 @@ then runs `make PYTHON=<that Python> .venv/.installed rom-elf`, which is `make s
 `build-runner`. Before `.venv/bin/python .github/scripts/test-pair.py K/4 J/4` the `mtools` step makes sure `mformat`,
 `mcopy`, `mdir` and `mtype` are on `PATH`, for the SD card tests, which skip without them: on macOS
 it installs mtools with Homebrew; on Linux it runs `sudo apt-get update` and
-`sudo apt-get install -y mtools`. The check includes `mmd`; a missing command fails the job.
+`sudo apt-get install -y mtools`. A missing command fails the job.
 Before the parallel phase, each job runs `tests/test_real_source.py` once for each of its two
 shard selections, sequentially. This keeps wall-clock measurements free of contention from the
 other pytest process. The parallel phase passes `--ignore=tests/test_real_source.py`, so every
@@ -313,7 +313,11 @@ host temporary path; shortening paths does not skip or alter the tests.
 Two runs of one recording must be identical (plan, section 6). The job restores the firmware and
 runner tarballs and the ROM ELF under the keys `test` uses, and fails on a miss of any tarball as
 `test` does; it unpacks them, checks that the runner starts (`esp32tl-runner --help`), runs
-`make PYTHON=<Python 3.11> .venv/.installed rom-elf`, then `make determinism`, which runs
+`make PYTHON=<Python 3.11> .venv/.installed rom-elf`, installs mtools with apt and checks that
+`mformat`, `mcopy`, `mdir` and `mtype` are on `PATH`, failing with
+`no <tool> on PATH: install mtools on this runner (apt-get install mtools)` otherwise:
+`test_sd_card_faults` builds its card with them, and would skip in both runs without them, which
+compares nothing. Then it runs `make determinism`, which runs
 `tests/test_determinism.py` twice and compares the consoles, the taps and the runner's stats of the
 two runs. Each difference is printed in the job's log as a `✗` line, with a diff where both runs
 have the file or the test; there is no artifact, since the account's artifact quota is full. What

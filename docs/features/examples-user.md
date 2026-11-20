@@ -123,7 +123,7 @@ firmware/build.sh --examples sd_data_logger
 ```
 
 Install mtools (`brew install mtools` or `sudo apt-get install mtools`) to prepare and read the
-test cards. The library's builder requires `mformat`, `mcopy`, `mmd`, `mdir` and `mtype` and
+test cards. The library's builder requires `mformat`, `mcopy`, `mdir` and `mtype` and
 raises `SourceError` naming missing commands. The empty-slot test needs no mtools.
 
 The `sd-data-logger` profile describes the assembly:

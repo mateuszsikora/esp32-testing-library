@@ -4,8 +4,10 @@ runner nor pytest runs."""
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import ModuleType
 
@@ -251,3 +253,175 @@ def test_a_network_transcript_compares_exactly_after_a_tls_handshake_too() -> No
 
     assert check.comparable(transcript(3)) == transcript(3)
     assert check.comparable(transcript(3)) != check.comparable(transcript(4))
+
+
+def test_an_xdist_worker_s_basetemp_is_left_out_of_a_file_s_path(tmp_path: Path) -> None:
+    first = run(
+        tmp_path / "run-1", {"popen-gw0/t0/console.txt": "a\n", "popen-gw1/t1/console.txt": "b\n"}
+    )
+    # The other run gave the two tests to the workers the other way round.
+    second = run(
+        tmp_path / "run-2", {"popen-gw1/t0/console.txt": "a\n", "popen-gw0/t1/console.txt": "b\n"}
+    )
+    assert check.compare_files(first, second) == ([], 2)
+    third = run(
+        tmp_path / "run-3", {"popen-gw0/t0/console.txt": "a\n", "popen-gw3/t1/console.txt": "c\n"}
+    )
+    failures, files = check.compare_files(first, third)
+    assert files == 2 and failures[0].splitlines()[:3] == [
+        "t1/console.txt differs:",
+        "    --- run-1/t1/console.txt",
+        "    +++ run-3/t1/console.txt",
+    ]
+
+
+def test_two_workers_that_left_the_same_path_are_named(tmp_path: Path) -> None:
+    first = run(
+        tmp_path / "run-1", {"popen-gw0/t0/console.txt": "a\n", "popen-gw1/t0/console.txt": "a\n"}
+    )
+    second = run(tmp_path / "run-2", {"popen-gw0/t0/console.txt": "a\n"})
+    assert check.compare_files(first, second) == (
+        ["t0/console.txt: left by two workers in run-1"],
+        1,
+    )
+
+
+def test_the_links_compare_without_an_xdist_worker_s_basetemp(tmp_path: Path) -> None:
+    junit(tmp_path / "run-1.xml", tmp_path / "run-1" / "popen-gw0", 1)
+    junit(tmp_path / "run-2.xml", tmp_path / "run-2" / "popen-gw5", 1)
+    assert check.compare_links(tmp_path, "run-1", "run-2") == ([], 1)
+
+
+class Loops:
+    """Stands in for `subprocess.Popen` of the busy loops: records each, and its kill."""
+
+    def __init__(self) -> None:
+        self.started: list[list[str]] = []
+        self.killed = 0
+
+    def __call__(self, command: list[str]) -> "Loops":
+        self.started.append(command)
+        return self
+
+    def kill(self) -> None:
+        self.killed += 1
+
+    def wait(self) -> int:
+        return 0
+
+
+def test_more_runs_are_each_compared_with_the_first_beside_busy_loops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pytest_ = Pytest([{"t0/console.txt": "a\n"}] * 4)
+    loops = Loops()
+    monkeypatch.setattr(check.subprocess, "run", pytest_)
+    monkeypatch.setattr(check.subprocess, "Popen", loops)
+    out = tmp_path / "out"
+    args = ["--out", str(out), "--runs", "4", "--load", "3", "tests/test_determinism.py", "-n", "8"]
+    assert check.main(args) == 0
+    assert [c[3:7] for c in pytest_.commands] == [
+        ["tests/test_determinism.py", "-n", "8", f"--basetemp={out / f'run-{n}'}"]
+        for n in range(1, 5)
+    ]
+    assert loops.started == [[sys.executable, "-c", check.busy_loop(os.getpid())]] * 3
+    assert loops.killed == 3
+    printed = capsys.readouterr().out.splitlines()
+    assert printed[0] == "determinism: 3 busy loops beside the runs"
+    assert sum(line.startswith("determinism: run-4 took ") for line in printed) == 1
+    assert printed[-1] == (
+        "determinism: the 4 runs are identical: 1 file, and the link of 0 tests that used the board"
+    )
+    # A later check removes every run an earlier one left, the fourth too.
+    monkeypatch.setattr(check.subprocess, "run", Pytest([{"t0/console.txt": "a\n"}] * 2))
+    assert check.main(["--out", str(out)]) == 0
+    assert sorted(p.name for p in out.iterdir()) == ["run-1", "run-1.xml", "run-2", "run-2.xml"]
+
+
+def test_the_first_run_that_differs_ends_the_check_and_the_loops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pytest_ = Pytest([{"c.txt": "1\n"}, {"c.txt": "1\n"}, {"c.txt": "2\n"}, {"c.txt": "1\n"}])
+    loops = Loops()
+    monkeypatch.setattr(check.subprocess, "run", pytest_)
+    monkeypatch.setattr(check.subprocess, "Popen", loops)
+    assert check.main(["--out", str(tmp_path / "out"), "--runs", "4", "--load", "1"]) == 1
+    assert len(pytest_.commands) == 3 and loops.killed == 1
+    assert capsys.readouterr().out.splitlines()[-7:] == [
+        "✗ c.txt differs:",
+        "    --- run-1/c.txt",
+        "    +++ run-3/c.txt",
+        "    @@ -1 +1 @@",
+        "    -1",
+        "    +2",
+        "determinism: run-3 differs from run-1 in 1 place",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (["--runs", "1"], "✗ --runs 1: a check compares 2 runs or more\n"),
+        (["--load", "-1"], "✗ --load -1: the busy loops are 0 or more\n"),
+    ],
+)
+def test_too_few_runs_or_loops_are_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], args: list[str], message: str
+) -> None:
+    assert check.main(["--out", str(tmp_path / "out"), *args]) == 2
+    assert capsys.readouterr().out == message
+    assert not (tmp_path / "out").exists()
+
+
+def test_a_card_the_builder_made_is_named_by_its_order_in_the_link(tmp_path: Path) -> None:
+    def link(run: str, first: str, second: str) -> None:
+        cards = [
+            f"/tmp/T/esp32tl-sd-{first}/tmp1/card.img",
+            f"/T/esp32tl-sd-{first}/{second}/card.img",
+        ]
+        value = {
+            "sd_card": {"image": cards[0], "changes": [{"image": cards[1]}, {"image": cards[0]}]},
+            "warnings": [f"sd_card: {cards[1]} is small"],
+        }
+        escaped = json.dumps(value).replace('"', "&quot;")
+        (tmp_path / f"{run}.xml").write_text(
+            '<testsuites><testsuite><testcase classname="t" name="test_sd">'
+            f'<properties><property name="esp32sim_link" value="{escaped}"/></properties>'
+            "</testcase></testsuite></testsuites>"
+        )
+
+    link("run-1", "abc", "x1")
+    link("run-2", "def", "y2")
+    assert check.links(tmp_path, "run-1") == {
+        "t::test_sd": {
+            "sd_card": {
+                "image": "{card 1}",
+                "changes": [{"image": "{card 2}"}, {"image": "{card 1}"}],
+            },
+            "warnings": ["sd_card: {card 2} is small"],
+        }
+    }
+    assert check.compare_links(tmp_path, "run-1", "run-2") == ([], 1)
+
+
+def test_a_busy_loop_ends_once_its_parent_is_gone() -> None:
+    # A parent that starts a loop and exits at once, as a check killed by SIGKILL would: the
+    # loop is the parent's child, and looks for it.
+    parent = (
+        "import os, subprocess, sys\n"
+        f"program = {check.busy_loop(0)!r}.replace('== 0', f'== {{os.getpid()}}')\n"
+        "print(subprocess.Popen([sys.executable, '-c', program]).pid, flush=True)\n"
+    )
+    started = subprocess.run([sys.executable, "-c", parent], capture_output=True, text=True)
+    pid = int(started.stdout)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        # Gone, or a zombie that a subreaper which reaps nothing keeps: either way it has ended.
+        state = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True
+        )
+        if not state.stdout.strip() or state.stdout.strip().startswith("Z"):
+            return
+        time.sleep(0.05)
+    os.kill(pid, 9)
+    pytest.fail(f"the busy loop {pid} outlived its parent by 10 s")

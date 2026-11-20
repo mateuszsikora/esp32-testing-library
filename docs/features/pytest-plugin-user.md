@@ -787,10 +787,14 @@ def test_the_example_writes_its_files_into_the_image(board: Board):
   the same path syntax, including literal names containing brackets created outside this API.
 - `build()` creates a fresh FAT image each time, without inserting it, before power-on or after
   it, for a card to put in while the firmware runs. Existing builds are unaffected by later
-  builder changes. The builder uses mtools (`mformat`, `mcopy`,
-  `mmd`, `mtype`, `mdir`); install it with `brew install mtools` or `sudo apt-get install mtools`.
-  Missing commands raise `SourceError`, for example
-  `sd_card: missing mformat, mcopy, mmd, mtype, mdir; install mtools`.
+  builder changes. The same builds in the same order give the same bytes in every run, whatever
+  the host's clock and time zone say: every file and directory the builder writes, with its `.`
+  and `..`, is dated 1980-01-01 00:00, the earliest FAT holds, and the volume serial number of
+  the n-th card a slot builds is `E32D` followed by n in four hex digits, `E32D-0001` for the
+  first, as `mdir` shows it, so that two cards of one test still differ. The builder uses mtools
+  (`mformat`, `mcopy`, `mtype`, `mdir`); install it with `brew install mtools` or
+  `sudo apt-get install mtools`. Missing commands raise `SourceError`, for example
+  `sd_card: missing mformat, mcopy, mtype, mdir; install mtools`.
 - `card.read_text(name, encoding="utf-8")` and `card.read_bytes(name)` reopen the current image
   every time, so they see firmware writes. Text decoding preserves line endings, including CRLF.
   Wait for firmware to finish and close a write before reading: the readers never mount the image

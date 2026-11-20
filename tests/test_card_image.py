@@ -1,9 +1,11 @@
 """FAT image preparation, byte fidelity and ownership through the public SD API."""
 
+import hashlib
 import os
 import re
 import struct
 import subprocess
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -215,11 +217,68 @@ def test_invalid_capacity_is_refused_before_allocating(slot: SdCard, size: int) 
     assert slot._temporary is None
 
 
+def digest(card: Path, serial: int | None = None) -> str:
+    """The SHA-256 of `card`, with its volume serial number `serial`, when given, written as
+    zeros: in the boot sector, and in FAT32's copy of it at sector 6, both in the first 64 KiB."""
+    hasher = hashlib.sha256()
+    with card.open("rb") as stream:
+        head = stream.read(64 << 10)
+        if serial is not None:
+            assert head.count(struct.pack("<I", serial)) == (2 if head[82:87] == b"FAT32" else 1)
+            head = head.replace(struct.pack("<I", serial), bytes(4))
+        hasher.update(head)
+        while chunk := stream.read(16 << 20):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+@pytest.mark.requires_mtools
+@pytest.mark.parametrize("size_mb", [32, 512], ids=["fat16", "fat32"])
+def test_a_card_built_again_is_the_same_bytes_and_a_second_card_another_serial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, size_mb: int
+) -> None:
+    def cards(directory: Path) -> list[Path]:
+        directory.mkdir()
+        slot = SdCard(SdCardRoute(sclk=18, mosi=23, miso=19, cs=5), directory=directory)
+        builder = slot.image(size_mb=size_mb).with_text("LOGS/DAY/FIRST.TXT", "first\n")
+        built = [builder.build().path for _ in range(2)]
+        # Kept past the slot's close, which removes what it built: moved, which keeps them sparse.
+        kept = [directory / f"card-{n}.img" for n in (1, 2)]
+        for card, keep in zip(built, kept, strict=True):
+            card.rename(keep)
+        slot.close()
+        return kept
+
+    first = cards(tmp_path / "a")
+    # Two seconds later, FAT's step, and fourteen hours east of UTC, so that a stamp from the
+    # host's clock or its zone would differ.
+    time.sleep(2.1)
+    monkeypatch.setenv("TZ", "Pacific/Kiritimati")
+    time.tzset()
+    try:
+        again = cards(tmp_path / "b")
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+    serials = [0xE32D0001, 0xE32D0002]
+    # Built again by another slot, as in a second run of the test: the same bytes.
+    for ours, theirs in zip(first, again, strict=True):
+        assert digest(ours) == digest(theirs)
+    # The two cards of one slot differ in their serial number only.
+    masked = {digest(card, serial) for card, serial in zip(first, serials, strict=True)}
+    assert len(masked) == 1
+    env = {**os.environ, "MTOOLS_SKIP_CHECK": "1"}
+    for card, serial in zip(first, ["E32D-0001", "E32D-0002"], strict=True):
+        args = ["mdir", "-i", os.fspath(card), "::LOGS/DAY"]
+        listing = subprocess.run(args, check=True, capture_output=True, text=True, env=env).stdout
+        assert f"Volume Serial Number is {serial}" in listing
+        # `.`, `..` and the file, each at 1980-01-01 00:00, the earliest FAT holds.
+        assert len(re.findall(r" 1980-01-01 +0:00 ", listing)) == 3, listing
+
+
 def test_missing_mtools_names_the_dependency(slot: SdCard, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("esp32tl.interfaces.sd_card.shutil.which", lambda command: None)
-    with pytest.raises(
-        SourceError, match="missing mformat, mcopy, mmd, mtype, mdir; install mtools"
-    ):
+    with pytest.raises(SourceError, match="missing mformat, mcopy, mtype, mdir; install mtools"):
         slot.image().build()
     assert slot._temporary is None
 

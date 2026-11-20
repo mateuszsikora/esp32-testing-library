@@ -1648,8 +1648,8 @@ it; the slot would then drive it through `Lines` at the same instant as the chan
 
 Status: decided (#32)
 
-`tests/test_sdspi.py` carries `requires_mtools`, which skips it where `mformat`, `mcopy`, `mdir`,
-`mtype` or `mmd` is missing, as `requires_docker` does for Docker. The CI test job installs mtools on
+`tests/test_sdspi.py` carries `requires_mtools`, which skips it where `mformat`, `mcopy`, `mdir` or
+`mtype` is missing, as `requires_docker` does for Docker. The CI test job installs mtools on
 macOS and fails on a runner without it, so that the tests cannot skip there unnoticed.
 
 **Rejected:** failing the tests without mtools, because a checkout without it could run nothing
