@@ -47,8 +47,10 @@ a tuple. `_set_power(t, powered, cause)` is the one place power changes: `power_
 `powered=True`) call it. It appends a `ModemRestart` when the modem was on, and a `ModemPower` when
 `powered` differs from `self.powered`, both only after the board's first instant (`t > 0`). So a
 RESET restart and `power_on` on a running modem, which pass `True` to a modem already on, append
-a restart and no power change, and a call on a modem that is off appends neither; `lose_power` and
-`power_off` on such a modem still clear its state as before. Why a second history rather than
+a restart and no power change. `power_off` and `lose_power` on a modem that is off pass `False` to
+one already off and append neither, though they still clear its state as before; `reset_driven`
+does not call it for a modem that is off. `power_on` on a modem that is off, with the board's
+supply on, appends a power change and no restart. Why a second history rather than
 changing `restarts`: [the decision](../decisions/harness.md#the-modems-power-changes-are-a-history-beside-its-restarts).
 
 `_mode_changes` holds every `ModeChange` under the same lock, and `mode_changes` returns it as a
