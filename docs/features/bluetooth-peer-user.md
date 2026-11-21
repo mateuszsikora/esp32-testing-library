@@ -502,14 +502,22 @@ async def hang_up(peer: SppPeer) -> None:
         await connection.disconnect()
 
 
-board.bluetooth.air.start(hang_up(peer))
-board.wait_until(peer.is_closed, within=ms(100))
+hung_up = board.bluetooth.air.start(hang_up(peer))
+board.wait_until(hung_up.done, within=ms(100))  # The peer's end of each link is gone.
+board.wait_until(board.console.line("obd_reader: disconnected"), within=ms(100))
 ```
+
+Wait for the task `air.start` returns, not for `peer.is_closed`: after the device's own close the
+channel is closed already while the link is still up, so `is_closed` says nothing about the link.
+On the air the hang-up completes at the instant it starts, and `peer.device.connections` is then
+empty. What the firmware makes of it comes later, at its own events: wait for one of those, here
+the console line it prints at `ESP_SPP_CLOSE_EVT`.
 
 Measured on the same example: the firmware's host gets `Disconnection_Complete`, reason `0x13`, 0.1
 ms after, and `ESP_SPP_CLOSE_EVT` reaches the firmware 10.6 ms after; no RFCOMM or L2CAP frame goes
 before it, since the link's end closes them all. After the device's own close, a test that does not
-want to wait for the firmware's 4 s waits for `peer.is_closed` and then hangs up.
+want to wait for the firmware's 4 s hangs up the same way, and waits for the firmware's own sign of
+the link's end, such as `ESP_BT_GAP_ACL_DISCONN_CMPL_STAT_EVT`, if it has one.
 
 These times hold for that build and esp32tl's pinned Bumble; to measure them again, as after a
 bump of either, tap a run of `examples/obd_reader` with an adapter it has nothing to read on, such
