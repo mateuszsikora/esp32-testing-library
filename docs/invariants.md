@@ -1938,10 +1938,10 @@ that references to its number keep their meaning.
      into it, with what the firmware armed to wake it by ESP-IDF's names: the runner sends one
      `sleep` a boot, never as an event, at the first slice boundary that finds the chip asleep, or
      at the reset of its wake when the sleep began in that slice, before the `reset`, with the
-     boundary before it as `earliest`; `latest − earliest` is at most 1 ms. A sleep the RTC
-     watchdog counts through is a sleep too, and an awake chip sends none. On `firmware/timer_wake`
-     the next boot's `at − latest` is the 2 s it armed, within 2 ms short and 1 ms long, and a
-     second `sleep` in one boot is a link error.
+     boundary before it as `earliest`; `latest − earliest` is at most 1 ms and the few bus cycles a
+     slice can end past its millisecond. A sleep the RTC watchdog counts through is a sleep too, and
+     an awake chip sends none. On `firmware/timer_wake` the next boot's `at − latest` is the 2 s it
+     armed, within 2 ms short and 1 ms long, and a second `sleep` in one boot is a link error.
      `tests/test_timer_wake.py::test_each_sleep_is_recorded_with_the_timer_it_armed_and_the_wake_comes_at_its_interval`,
      `runner/src/session/tests.rs::each_deep_sleep_is_sent_once_between_the_boundary_before_and_the_one_that_saw_it`,
      `runner/src/session/tests.rs::a_deep_sleep_the_rtc_watchdog_counts_through_is_a_sleep_too`,

@@ -5426,13 +5426,13 @@ the interval a firmware armed it had to take the sleep's start from the last thi
 before it, a console line or a line's last change, which comes some unknown time before
 `esp_deep_sleep_start()` enters the sleep, and assert the interval with a tolerance of a second or
 more. The runner now sends `sleep` at the first slice boundary that finds the classic chip asleep
-([protocol 5.26](../protocol.md#526-sleep-ext-308)), with the boundary before it, at most 1 ms
-apart, and the wake sources the firmware armed by ESP-IDF's names, read from `WAKEUP_ENA`; a sleep
-that its wake ends within the same slice is sent at the wake's reset. The harness keeps them as
-`board.sleeps`, a tuple of frozen `Sleep(boot, earliest, latest, wakes)` records, oldest first, and
-`board.next_sleep()` is the `next_*` condition for the next one ([A condition's shape says what it
-waits for](#a-conditions-shape-says-what-it-waits-for)). `wake.at - sleep.latest` is then the time
-the chip slept, to within the millisecond between two boundaries.
+([protocol 5.26](../protocol.md#526-sleep-ext-308)), with the boundary before it, at most 1 ms and a
+few nanoseconds apart, and the wake sources the firmware armed by ESP-IDF's names, read from
+`WAKEUP_ENA`; a sleep that its wake ends within the same slice is sent at the wake's reset. The
+harness keeps them as `board.sleeps`, a tuple of frozen `Sleep(boot, earliest, latest, wakes)`
+records, oldest first, and `board.next_sleep()` is the `next_*` condition for the next one ([A
+condition's shape says what it waits for](#a-conditions-shape-says-what-it-waits-for)). `wake.at -
+sleep.latest` is then the time the chip slept, to within the millisecond between two boundaries.
 
 The record has no due time of the RTC timer: the wake's `Boot.at` gives it, since the wake comes at
 the alarm within one of esp32sim's rounds ([A deep sleep runs in long steps of the RTC, to just

@@ -13,7 +13,7 @@ from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.interfaces import BoardOff, NeverHappened
 from esp32tl.interfaces.board import DEEPSLEEP_RESET, POWERON_RESET
 from esp32tl.interfaces.console import Console
-from esp32tl.units import ms, seconds
+from esp32tl.units import Duration, ms, seconds
 
 pytestmark = pytest.mark.app_path("../firmware/timer_wake")
 
@@ -135,6 +135,10 @@ def test_wait_for_wake_fails_on_a_boot_that_is_no_wake(board: Esp32Sim) -> None:
     assert "a wake from deep sleep: boot 2 is SW_CPU_RESET, not a wake" in board.report(run=True)
 
 
+# The most two slice boundaries are apart while the chip runs: a millisecond, and the few bus cycles
+# by which `run` can return past the slice's end at a CPU clock below 240 MHz (protocol 6.1); 13 ns
+# on CI's ESP-IDF v5.3.6 image. 1 us is room for that.
+SLICE = ms(1) + Duration(1_000)
 # How much shorter than the interval it printed the wake can come after the sleep's `latest`:
 # ESP-IDF counts the interval from `esp_deep_sleep_start()`, less DEEP_SLEEP_TIME_OVERHEAD_US,
 # 400 us at 160 MHz (`components/esp_hw_support/sleep_modes.c`), and the sleep begins up to the
@@ -160,7 +164,7 @@ def test_each_sleep_is_recorded_with_the_timer_it_armed_and_the_wake_comes_at_it
     assert asleep == board.sleeps[0] and asleep.boot == 1
     assert asleep.wakes == {"timer"}
     # between two slice boundaries, the second after the line that came before it
-    assert asleep.earliest <= asleep.latest <= asleep.earliest + ms(1)
+    assert asleep.earliest <= asleep.latest <= asleep.earliest + SLICE
     assert line.at <= asleep.latest
     # the condition looks at sleeps after its call only, and returns the same one again
     assert first() == asleep

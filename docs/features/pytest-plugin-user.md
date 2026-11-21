@@ -1377,12 +1377,12 @@ def test_sleeps_for_the_two_seconds_it_armed(board: Board):
 - `board.sleeps` are the chip's deep sleeps, oldest first, a `tuple` of `Sleep`s (from `esp32tl`),
   at most one per boot, since the wake is a reset. A `Sleep` is a frozen record: `boot`, the
   `number` of the boot that went to sleep, as in `board.boots`; `earliest` and `latest`, the
-  `Duration`s between which the sleep began on the board's clock, at most 1 ms apart; and `wakes`,
-  a `frozenset` of what the firmware armed, by ESP-IDF's names: `"ext0"`, `"ext1"`, `"timer"`,
-  `"touch"` and `"ulp"`, empty for a sleep that armed none of them. The wake, when it comes, is
-  the next boot, `board.boots[sleep.boot]`, a `DEEPSLEEP_RESET`. For a timer wake, `wake.at -
-  sleep.latest` is the interval `d` the firmware armed, give or take what ESP-IDF and the
-  emulator add. ESP-IDF counts the interval from `esp_deep_sleep_start()`, not from
+  `Duration`s between which the sleep began on the board's clock, 1 ms apart at most and a few
+  nanoseconds more; and `wakes`, a `frozenset` of what the firmware armed, by ESP-IDF's names:
+  `"ext0"`, `"ext1"`, `"timer"`, `"touch"` and `"ulp"`, empty for a sleep that armed none of them.
+  The wake, when it comes, is the next boot, `board.boots[sleep.boot]`, a `DEEPSLEEP_RESET`. For a
+  timer wake, `wake.at - sleep.latest` is the interval `d` the firmware armed, give or take what
+  ESP-IDF and the emulator add. ESP-IDF counts the interval from `esp_deep_sleep_start()`, not from
   `esp_sleep_enable_timer_wakeup()`, which only keeps it, so what the firmware does between the two
   changes nothing; it takes a fixed `DEEP_SLEEP_TIME_OVERHEAD_US` off it, `250 + 100 * 240 /
   CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ` µs, 400 µs at the default 160 MHz
@@ -1391,9 +1391,8 @@ def test_sleeps_for_the_two_seconds_it_armed(board: Board):
   200 to 250 ppm slow on esp32sim, which makes a sleep late by as much
   ([`tests/test_deep_sleep.py`](../../tests/test_deep_sleep.py)). So `wake.at - sleep.latest` lies
   between about `d - 0.4 ms - 1 ms` and `d` plus the RTC's lag, as the example above checks with a
-  margin. A sleep armed for
-  EXT1, touch or the ULP alone is recorded with what it armed and never wakes on esp32sim. A
-  sleep with the RTC watchdog on is a sleep too.
+  margin. A sleep armed for EXT1, touch or the ULP alone is recorded with what it armed and never
+  wakes on esp32sim. A sleep with the RTC watchdog on is a sleep too.
 - `board.next_sleep()` is a [described condition](#described-conditions), a
   `Condition[Sleep | None]`, for the first sleep after the call. It consumes nothing, and returns
   the same `Sleep` each time it is asked. A timeout names it: `NeverHappened: the next deep sleep

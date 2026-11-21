@@ -1294,14 +1294,15 @@ that began and ended within one slice, sent at the reset of its wake.
 is on, as it reads the uptime counter (5.24): at most one emulated millisecond apart while the chip
 runs (section 6.1). The first boundary of a boot that finds the chip in deep sleep sends `sleep`:
 `latest` is that boundary, `earliest` the boundary before it, which found the chip awake, or the
-reset that started the boot; the two are at most 1 ms apart. A sleep that the reset of its wake ends
-before the next boundary is sent at that reset, before the `reset`, with the reset as `latest`. A
-boot sleeps once, since its wake is a reset, so the runner sends at most one `sleep` a boot, and the
-harness takes a second one as the runner breaking the protocol (`the runner sent a second sleep in
-boot 3`). The runner sends the timer's due time in no field: the wake's `reset` comes at it, within
-one of esp32sim's rounds (6.1). A sleep with the RTC watchdog on is a sleep too, though the runner
-does not step through it in long steps (6.1); `--realtime` (12.1) changes nothing here. While the
-supply is off the chip does not sleep.
+reset that started the boot; the two are 1 ms apart at most, and the few bus cycles by which a slice
+can end past its millisecond at a CPU clock below 240 MHz (6.1), 13 ns on `firmware/timer_wake`. A
+sleep that the reset of its wake ends before the next boundary is sent at that reset, before the
+`reset`, with the reset as `latest`. A boot sleeps once, since its wake is a reset, so the runner
+sends at most one `sleep` a boot, and the harness takes a second one as the runner breaking the
+protocol (`the runner sent a second sleep in boot 3`). The runner sends the timer's due time in no
+field: the wake's `reset` comes at it, within one of esp32sim's rounds (6.1). A sleep with the RTC
+watchdog on is a sleep too, though the runner does not step through it in long steps (6.1);
+`--realtime` (12.1) changes nothing here. While the supply is off the chip does not sleep.
 
 **What the runner reads.** On the classic ESP32 the chip is in deep sleep when `SLEEP_EN` (bit 31 of
 RTC_CNTL_STATE0) and `DG_WRAP_PD_EN` (bit 31 of RTC_CNTL_DIG_PWC) are set, which esp32sim's
