@@ -242,9 +242,10 @@ ESP32-S3, -C3 and -C6 they are 60 ns apart at most, and on the ESP32-P4 65 ns, a
 `reset` itself. On the ESP32-S31 the runner sends no `uptime`: esp32sim keeps the rate of its
 counter to itself. A stamp the
 firmware took from its uptime then has a time on the run's clock. When the zero it sent no longer
-holds, because the counter stopped or counts from a zero that may lie before power-on, it sends
-`uptime` with neither. [The protocol](../protocol.md#524-uptime-ext-245) says what the runner reads
-on each chip.
+holds, because the counter counts from a zero that may lie before power-on, it sends `uptime` with
+neither. A counter that stops, as the classic ESP32's does in deep sleep, sends nothing: the zero
+sent still dates every stamp taken before the stop, so the boot that slept keeps it. [The
+protocol](../protocol.md#524-uptime-ext-245) says what the runner reads on each chip.
 
 With `--flash-out PATH` what the firmware wrote can be read: the file holds the whole flash, as big
 as `--flash-mb` says, once the run has ended, however it ended short of a panic. A peer can also ask

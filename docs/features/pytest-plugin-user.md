@@ -687,16 +687,18 @@ def test_the_count_survives_a_power_cut(board: Board):
 - `boot.uptime_zero` is where the boot's uptime counter, the one `esp_timer_get_time()` reads,
   counted zero on the board's clock, an `UptimeZero` (from `esp32tl`) of two
   `Duration`s, `earliest` and `latest`; `None` until the backend has seen the counter count, for a
-  firmware that never starts it, and again while the zero is not known: after the counter stopped,
-  or once it counts from a zero that may lie before power-on, as a load of more than the run has
-  lasted gives. A load while it counts, as ESP-IDF makes after a light sleep, gives the boot a new
-  `uptime_zero`. A stamp of `uptime` the firmware took from the counter, an `esp_timer_get_time()`
-  it sent, was taken between `earliest + uptime` and `latest + uptime` on the board's clock, the
-  clock of `board.now`, the console's lines and the run's log. On esp32sim the runner reads the
-  counter at every slice boundary ([protocol 5.24](../protocol.md#524-uptime-ext-245)). On the
-  classic ESP32 the zero is known to within a millisecond, the slice in which ESP-IDF started the
-  counter, after the ROM, the bootloader and the application's start-up, some tens of milliseconds
-  after `boot.at`: for `firmware/persistence`'s first boot, between 48 and 49 ms after power-on. A
+  firmware that never starts it, and again once it counts from a zero that may lie before
+  power-on, as a load of more than the run has lasted gives. A counter that stops keeps its zero,
+  which still dates every stamp taken before the stop: a boot that went to deep sleep keeps the
+  `uptime_zero` it had, and the wake's boot gets its own. A load while it counts, as ESP-IDF makes
+  after a light sleep, gives the boot a new `uptime_zero`. A stamp of `uptime` the firmware took
+  from the counter, an `esp_timer_get_time()` it sent, was taken between `earliest + uptime` and
+  `latest + uptime` on the board's clock, the clock of `board.now`, the console's lines and the
+  run's log. On esp32sim the runner reads the counter at every slice boundary ([protocol
+  5.24](../protocol.md#524-uptime-ext-245)). On the classic ESP32 the zero is known to within a
+  millisecond, the slice in which ESP-IDF started the counter, after the ROM, the bootloader and
+  the application's start-up, some tens of milliseconds after `boot.at`: for
+  `firmware/persistence`'s first boot, between 48 and 49 ms after power-on. A
   load while it counts is known to within two milliseconds. On the ESP32-S3, -C3 and -C6 the zero is
   known to within 60 ns, on the ESP32-P4 within 65 ns, and `earliest ≤ boot.at ≤ latest`: esp32sim does not model the
   application's reset of the counter, which counts from the reset; on the chip the zero comes at the
