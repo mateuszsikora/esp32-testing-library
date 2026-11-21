@@ -904,6 +904,10 @@ that references to its number keep their meaning.
     `tests/test_bt_spp_initiator.py::test_a_peer_with_simple_pairing_and_no_display_pairs_by_just_works_and_streams`,
     `tests/test_bt_spp_initiator.py::test_a_peer_that_shows_a_passkey_waits_for_the_firmware_s_user_until_bluedroid_gives_up`,
     `tests/test_determinism.py::test_spp_with_simple_pairing`
+- **295.** At the device's DISC for the SPP channel the peer answers UA at the DISC's instant and
+    the channel is closed; it ends nothing else by itself: 60 s later the device's multiplexer and
+    its L2CAP channel are still open, and the link is up on both sides.
+    `tests/test_spp_peer.py::test_after_the_device_closes_the_channel_the_peer_ends_nothing_itself`
 
 ## The esp32tl command
 

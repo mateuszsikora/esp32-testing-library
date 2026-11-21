@@ -39,7 +39,9 @@ from esp32tl.units import Duration
 
 
 class ChannelEvent(NamedTuple):
-    """Bytes crossing SPP at a Duration on the air's clock."""
+    """Bytes crossing SPP at a Duration on the air's clock, `direction` said from the firmware's
+    side, as a tap's recording names it: `"out"`, written by the firmware to the peer; `"in"`,
+    sent by the peer to the firmware."""
 
     at: Duration
     direction: Direction
@@ -472,9 +474,15 @@ class SppPeer(BluetoothDevice):
     time and why. What the device writes reaches `source.receive` at the board's time it arrives,
     and what `source` returns, or sends from `poll`, goes out on the channel at its own time,
     never earlier. What the source sends while no channel is open is lost, as it would be on the
-    air; `lost` counts its bytes. `events` holds what crossed the channel, in order: `out` of the
-    device, `in` to it, as a tap's recording names them. `written_lines` cuts what the device
-    wrote into lines at a separator, a carriage return unless the test gives another.
+    air; `lost` counts its bytes. `events` holds what crossed the channel, in order, its direction
+    said from the firmware's side, as a tap's recording names it: `out`, written by the firmware;
+    `in`, sent by the peer to the firmware. `written_lines` cuts what the device wrote into lines
+    at a separator, a carriage return unless the test gives another.
+
+    At the device's DISC the peer answers UA and the channel is closed; it never sends DISC
+    itself, and, while it stays on the air, never ends its multiplexer, its L2CAP channel or its
+    link by itself: those are the device's host's to end, or the test's, through
+    `device.connections`.
 
     The source gets `supply` on a power loss, when it is `Supplied`; out of range it runs on, and
     what it sends is lost. A `Model` states its times in `Duration`s; any other source in

@@ -369,6 +369,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A black hole is a value of the path, and a port is blocked by dropping or refusing](harness.md#a-black-hole-is-a-value-of-the-path-and-a-port-is-blocked-by-dropping-or-refusing) | `harness.md` | decided (#277) |
 | [board.nvs merges by values, before power-on and between boots](harness.md#boardnvs-merges-by-values-before-power-on-and-between-boots) | `harness.md` | decided (#278) |
 | [The boot next_boot returns has its uptime zero on request, and a held boot's zero is read again](harness.md#the-boot-next_boot-returns-has-its-uptime-zero-on-request-and-a-held-boots-zero-is-read-again) | `harness.md` | decided (#286) |
+| [The SPP peer ends nothing itself after the device closes the channel](harness.md#the-spp-peer-ends-nothing-itself-after-the-device-closes-the-channel) | `harness.md` | decided (#309) |
 
 ## The runner crate and esp32sim
 
