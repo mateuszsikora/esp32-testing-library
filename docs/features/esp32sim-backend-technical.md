@@ -62,8 +62,10 @@ without starting anything:
    `ended=lambda: hold.ended`, the `HeldClock`'s word that the run is over, after which it refuses
    fault rules; it is on the link, last, as the one interface whose `card_slot` is true. The chip's
    station becomes a
-   `Wifi(now=lambda: hold.now, world=lambda: self._utc, asked=self._asked, log=self.log)`
-   (`esp32tl/interfaces/wifi.py`), on every profile, and the chip's Bluetooth a
+   `Wifi(now=lambda: hold.now, world=lambda: self._utc, chip=profile.chip, asked=self._asked,
+   log=self.log, bridging=self._bridging)` (`esp32tl/interfaces/wifi.py`), on every profile, whose
+   `wifi.station` refuses the profile's chip's `EMULATED_MACS` as its own `mac`
+   ([the device's MACs](pytest-plugin-user.md#the-devices-macs)), and the chip's Bluetooth a
    `Bluetooth(asked=self._asked, log=self.log, directory=self.directory, files=self._files,
    chip=profile.chip)` (`esp32tl/interfaces/bluetooth.py`), which shares the routes' files for its
    tap and makes the firmware's controller of the profile's chip, LE only on the S3, the C3 and the

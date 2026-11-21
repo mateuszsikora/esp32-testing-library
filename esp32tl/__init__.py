@@ -93,13 +93,13 @@ from esp32tl.interfaces.sd_card import FaultedOperation as FaultedOperation
 from esp32tl.interfaces.sd_card import SdCard as SdCard
 from esp32tl.interfaces.uart import Source as Source
 from esp32tl.interfaces.uart import Uart as Uart
-from esp32tl.interfaces.wifi import ESP32SIM_SOFTAP_MAC as ESP32SIM_SOFTAP_MAC
-from esp32tl.interfaces.wifi import ESP32SIM_STATION_MAC as ESP32SIM_STATION_MAC
 from esp32tl.interfaces.wifi import AccessPoint as AccessPoint
 from esp32tl.interfaces.wifi import AirEvent as AirEvent
+from esp32tl.interfaces.wifi import EmulatedMacs as EmulatedMacs
 from esp32tl.interfaces.wifi import Nearby as Nearby
 from esp32tl.interfaces.wifi import StationConfig as StationConfig
 from esp32tl.interfaces.wifi import Wifi as Wifi
+from esp32tl.interfaces.wifi import emulated_macs as emulated_macs
 from esp32tl.matching import AT as AT
 from esp32tl.matching import GNSS as GNSS
 from esp32tl.matching import PMTK as PMTK
@@ -165,8 +165,6 @@ from esp32tl.tap import Tap as Tap
 __all__ = [
     "AT",
     "DEEPSLEEP_RESET",
-    "ESP32SIM_SOFTAP_MAC",
-    "ESP32SIM_STATION_MAC",
     "GNSS",
     "PMTK",
     "POWERON_RESET",
@@ -219,6 +217,7 @@ __all__ = [
     "Discovery",
     "Dns",
     "DnsQuestion",
+    "EmulatedMacs",
     "Ethernet",
     "FaultedOperation",
     "FlashFile",
@@ -306,6 +305,7 @@ __all__ = [
     "Wifi",
     "WrittenLine",
     "condition",
+    "emulated_macs",
     "i8",
     "i16",
     "i32",

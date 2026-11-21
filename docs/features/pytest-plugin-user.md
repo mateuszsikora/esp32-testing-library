@@ -416,7 +416,7 @@ A test imports from three modules, and from no other:
 
 | Module | What it holds |
 |---|---|
-| `esp32tl` | Every class, exception and constant a test names: the board (`Board`, `Boot`, `UptimeZero`, `POWERON_RESET`, `DEEPSLEEP_RESET`, `RESET_REASONS`, `Condition`, `condition`), its profile (`BoardProfile`, `UartRoute`, `LineRoute`, `SdCardRoute`), the interfaces and what they return (`Console`, `ConsoleLine`, `Uart`, `Gnss`, `Modem`, `Lines`, `OutputLine`, `LineEvent`, `SdCard`, `CardImage`, `Wifi`, `Bluetooth`, `Tap`, ...), the sources and models (`Replay`, `Real`, `Model`, `ReactiveModel`, `IdleFramedModel`, `Timed`, `GnssReceiver`, `ModemModel`, `ModemCommand`, `ModemRestart`, `ModeChange`, `Protocol`, `AT`, `PMTK`, `UBX`, `GNSS`), the build and the flash (`Build`, `FlashSnapshot`, `Namespaces`, `Typed`, `u8` to `i64`), the network and its services (`Internet`, `LinkChange`, `Broker`, `Message`, `MqttClient`, `ConnectionEnd`, `TEST_CLIENT`, `Publication`, `HttpServer`, `HttpRequest`, `NtpExchange`, `DnsQuestion`, `TcpConnection`, `CertificateAuthority`, ...), Bluetooth (`Air`, `SppPeer`, `BluetoothDevice`, `ChannelEvent`, `WrittenLine`, `Refusal`, `Pairing`, `BlePeripheral`, `BleCentral`, `BleDevice`, `GattService`, `GattCharacteristic`, `Advertisement`, `LeConnection`, `Disconnection`, `GattRead`, `GattWrite`, `Notification`, `Subscription`, `LePairing`, `Discovery`, `DiscoveredService`, `DiscoveredCharacteristic`, `LeEvent`, ...) and the exceptions (`NeverHappened`, `RunEnded`, `BoardOff`, `SourceError`, `BackendError`, `PeerError`, `AirError`, `BleError`, `ConnectionEnded`, `NotReachable`, ...). `esp32tl.__all__` lists them all |
+| `esp32tl` | Every class, exception and constant a test names: the board (`Board`, `Boot`, `UptimeZero`, `POWERON_RESET`, `DEEPSLEEP_RESET`, `RESET_REASONS`, `Condition`, `condition`), its profile (`BoardProfile`, `UartRoute`, `LineRoute`, `SdCardRoute`), the interfaces and what they return (`Console`, `ConsoleLine`, `Uart`, `Gnss`, `Modem`, `Lines`, `OutputLine`, `LineEvent`, `SdCard`, `CardImage`, `Wifi`, `EmulatedMacs` and `emulated_macs`, `Bluetooth`, `Tap`, ...), the sources and models (`Replay`, `Real`, `Model`, `ReactiveModel`, `IdleFramedModel`, `Timed`, `GnssReceiver`, `ModemModel`, `ModemCommand`, `ModemRestart`, `ModeChange`, `Protocol`, `AT`, `PMTK`, `UBX`, `GNSS`), the build and the flash (`Build`, `FlashSnapshot`, `Namespaces`, `Typed`, `u8` to `i64`), the network and its services (`Internet`, `LinkChange`, `Broker`, `Message`, `MqttClient`, `ConnectionEnd`, `TEST_CLIENT`, `Publication`, `HttpServer`, `HttpRequest`, `NtpExchange`, `DnsQuestion`, `TcpConnection`, `CertificateAuthority`, ...), Bluetooth (`Air`, `SppPeer`, `BluetoothDevice`, `ChannelEvent`, `WrittenLine`, `Refusal`, `Pairing`, `BlePeripheral`, `BleCentral`, `BleDevice`, `GattService`, `GattCharacteristic`, `Advertisement`, `LeConnection`, `Disconnection`, `GattRead`, `GattWrite`, `Notification`, `Subscription`, `LePairing`, `Discovery`, `DiscoveredService`, `DiscoveredCharacteristic`, `LeEvent`, ...) and the exceptions (`NeverHappened`, `RunEnded`, `BoardOff`, `SourceError`, `BackendError`, `PeerError`, `AirError`, `BleError`, `ConnectionEnded`, `NotReachable`, ...). `esp32tl.__all__` lists them all |
 | `esp32tl.units` | The units: `Duration`, `Speed`, `Distance`, `Rate`, `Heading`, `Position`, their constructors (`ms`, `seconds`, `km_h`, `m`, ...), the compass points and `about` ([units](models-user.md#units)) |
 | `esp32tl.recording` | The recording format: reading and writing a recording, and its `Recording`, `Header`, `Event` and `ClockSwitch` ([the recording format](../recording-format.md)) |
 
@@ -1890,44 +1890,87 @@ See [the network guide](network-user.md) for complete examples and condition sem
 before `board.power_on()`, once per test. The SSID has 1 to 32 UTF-8 bytes and no comma; passwords
 have 8 to 63 ASCII bytes and no comma, matching esp32sim's parser. Without a password the AP must
 be open. The MAC defaults to `02:53:54:41:00:01`, must be six hexadecimal octets, unicast, and must
-differ from the device's station and SoftAP MACs (`24:6f:28:00:11:22` and `24:6f:28:00:11:23`).
+differ from the device's station and SoftAP MACs on esp32sim, those of the profile's chip
+([the device's MACs](#the-devices-macs)): `24:6f:28:00:11:22` and `24:6f:28:00:11:23` on the
+classic ESP32. Either raises `ValueError: wifi.station: mac must differ from the device's station
+and SoftAP MACs, 24:6f:28:00:11:22 and 24:6f:28:00:11:23`, with the chip's two MACs, in any case of
+hexadecimal digits.
 
 #### The device's MACs
 
-A firmware that names its SoftAP after its MAC needs the device's MAC before power-on, to give
-`wifi.station` the SSID. `esp32tl` names the emulated device's two Wi-Fi MACs:
+A firmware that names its SoftAP or its hostname after its MAC needs the device's MAC before
+power-on, to give `wifi.station` the SSID or to check the name. `esp32tl.emulated_macs(chip)` gives
+the emulated device's two Wi-Fi MACs on esp32sim for a profile's chip, as an `EmulatedMacs` with
+`station` and `softap`, lowercase and colon-separated:
 
 ```python
-from esp32tl import ESP32SIM_STATION_MAC
+from esp32tl import emulated_macs
 from esp32tl.units import seconds
 
 
 def test_a_phone_joins_the_setup_network(board, wifi):
     # The firmware names its SoftAP "setup-" and the last two octets of its station MAC.
-    suffix = ESP32SIM_STATION_MAC.replace(":", "")[-4:].upper()
+    station = emulated_macs(board.profile.chip).station
+    suffix = station.replace(":", "")[-4:].upper()
     network = wifi.station(f"setup-{suffix}")
     board.power_on()
     board.wait_until(network.is_leased, within=seconds(20))
 ```
 
+The same test runs on every chip with Wi-Fi: `board.profile.chip` is the profile's, and the
+function needs no board, so it also serves a module-level table or a parametrization. It raises
+`ValueError: emulated_macs: the ESP32-P4 has no Wi-Fi` on `esp32p4`, and `ValueError:
+emulated_macs: 'esp32s2' is not one of esp32, esp32s3, esp32c3, esp32c6, esp32p4, esp32s31` on a
+chip esp32tl does not run.
+
+| `chip` | `station` | `softap` | Checked against a running firmware |
+|---|---|---|---|
+| `esp32` | `24:6f:28:00:11:22` | `24:6f:28:00:11:23` | The station's |
+| `esp32s3` | `44:1b:f6:75:dc:e0` | `44:1b:f6:75:dc:e1` | The station's |
+| `esp32c3` | `60:55:f9:00:11:22` | `60:55:f9:00:11:23` | The station's |
+| `esp32c6` | `dc:1e:d5:6e:8c:dc` | `dc:1e:d5:6e:8c:dd` | The station's |
+| `esp32p4` | none | none | The chip has no Wi-Fi |
+| `esp32s31` | `10:20:30:40:50:60` | `12:20:30:40:50:60` | Neither |
+
+Where each value comes from:
+
+- `station` is the base MAC the runner gives the chip's machine, `MAC` in
+  `runner/src/chip/<chip>.rs`, the one esp32sim's CLI gives the chip. `tests/test_wifi.py` reads
+  each `MAC` and compares.
+- `softap` is derived from it as ESP-IDF's `esp_read_mac(…, ESP_MAC_WIFI_SOFTAP)` derives it with
+  the chip's default `CONFIG_<CHIP>_UNIVERSAL_MAC_ADDRESSES`
+  (`components/esp_hw_support/mac_addr.c` and `port/<chip>/Kconfig.mac`, the same in ESP-IDF
+  v5.3.6, v5.5.4 and v6.1, the versions of the validation images). The classic ESP32, the S3, the
+  C3 and the C6 default to four universal MACs (station, SoftAP, Bluetooth, Ethernet), so the SoftAP
+  gets the base with one added to its last octet. The S31 defaults to two, so the SoftAP gets a
+  locally administered MAC, the base with bit 1 of its first octet set (`esp_derive_local_mac`). A
+  firmware built with another `UNIVERSAL_MAC_ADDRESSES`, or one that sets its own base MAC, has
+  other MACs; an Arduino or PlatformIO build takes the setting its framework's libraries were built
+  with. No firmware in this repository prints its SoftAP MAC, so no test reads one from a running
+  firmware.
+- "The station's" means that `tests/test_http_request.py` (the classic ESP32) and
+  `tests/test_chips.py` (the S3, C3 and C6) run the `http_request` validation image against
+  `wifi.access_point` and check that the DHCP lease's `Lease.mac` is `station`. The S31's station
+  has no such test: esp32sim's S31 has no Ethernet relay for the test's network (#229, G7).
+
 | Address | Value | Whose |
 |---|---|---|
-| `ESP32SIM_STATION_MAC` | `24:6f:28:00:11:22` | The emulated device's Wi-Fi station interface: the base MAC the runner gives the machine, the one esp32sim's CLI gives the classic chip |
-| `ESP32SIM_SOFTAP_MAC` | `24:6f:28:00:11:23` | The emulated device's SoftAP interface: the base MAC plus one, as ESP-IDF derives it on the classic ESP32 (four universal MACs: station, SoftAP, Bluetooth, Ethernet) |
+| `emulated_macs(chip).station` | in the table above | The emulated device's Wi-Fi station interface |
+| `emulated_macs(chip).softap` | in the table above | The emulated device's SoftAP interface |
 | `wifi.station(mac=...)` | `02:53:54:41:00:01` unless given | The harness's virtual station, the client that joins the device's SoftAP |
 | `wifi.access_point(bssid=...)` | `02:53:49:4d:00:01` unless given | The harness's virtual access point, which the device's station joins |
 
-The harness's own two addresses have no constant: a test that checks either names it, as
+The harness's own two addresses have no function: a test that checks either names it, as
 `wifi.station(mac=...)` or `wifi.access_point(bssid=...)`, so that what it checks is in the test.
 
-The two `ESP32SIM_*` constants are the emulated classic ESP32's on esp32sim, the same in every run
-and on every board profile whose chip is `esp32`. The ESP32-S3, C3 and C6 get other MACs from
-esp32sim, and have no virtual station to join their SoftAP. They are not a physical board's: on the serial backend the MACs come
-from the board's eFuses, and nothing in esp32tl reads them. A firmware that reads the station MAC
-while its station interface does not exist (Arduino's `WiFi.macAddress()` in `WIFI_AP` mode) can
-get something else, on esp32sim as on hardware. `tests/test_wifi.py` checks the station MAC
-against `MAC` in `runner/src/chip/esp32.rs`, and the SoftAP MAC as that plus one; no test reads the
-SoftAP MAC from a running firmware. `wifi.station` refuses both as its own `mac`.
+The emulated MACs are the same in every run and on every board profile of the chip. They are not
+a physical board's: on the serial backend the MACs come from the board's eFuses, nothing in esp32tl
+reads them, and `wifi.station` there refuses no MAC for being the device's. A firmware that reads
+the station MAC while its station interface does not exist (Arduino's `WiFi.macAddress()` in
+`WIFI_AP` mode) can get something else, on esp32sim as on hardware. Only the classic ESP32 has a
+virtual station to join its SoftAP; on the S3, C3, C6 and S31 `wifi.station` checks the `mac`
+against the chip's MACs and then skips with the gap, and on the P4 it only skips
+([chips other than the classic ESP32](esp32sim-backend-user.md#chips-other-than-the-classic-esp32)).
 
 This is exclusive with `wifi.access_point(...)` and `wifi.nearby(...)`. A second call raises
 `wifi has its station already: one per test`. `access_point_off()` and `access_point_on()` raise

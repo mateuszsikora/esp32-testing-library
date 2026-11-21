@@ -6,12 +6,21 @@ import struct
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
+from pytest_embedded.dut import Dut
+from pytest_embedded.log import MessageQueue
+from pytest_embedded.utils import Meta
 
+from esp32tl import boards
+from esp32tl.backends import esp32sim
+from esp32tl.backends.esp32sim import Esp32Sim
+from esp32tl.boards import CHIPS
 from esp32tl.boards.capabilities import Request
+from esp32tl.build import ESP_IDF, Build
 from esp32tl.interfaces import SourceError
-from esp32tl.interfaces.wifi import ESP32SIM_SOFTAP_MAC, ESP32SIM_STATION_MAC, Wifi
+from esp32tl.interfaces.wifi import EMULATED_MACS, Wifi, emulated_macs
 from esp32tl.link.protocol import WifiAp
 from esp32tl.net.ntp import DEFAULT_UTC, NTP_EPOCH
 from esp32tl.net.station import DEFAULT_MAC
@@ -181,8 +190,6 @@ def test_station_flags_properties_and_exclusions(wifi: Wifi, asked: list[Request
         ({"ssid": "x" * 33}, "1 to 32 bytes"),
         ({"ssid": "x", "password": "short"}, "8 to 63 ASCII"),
         ({"ssid": "x", "mac": "ff:00:00:00:00:01"}, "unicast"),
-        ({"ssid": "x", "mac": "24:6f:28:00:11:23"}, "differ from the device"),
-        ({"ssid": "x", "mac": "24:6f:28:00:11:22"}, "differ from the device"),
         ({"ssid": "x", "mac": "bad"}, "six hexadecimal"),
     ],
 )
@@ -191,21 +198,117 @@ def test_station_validation(kwargs: dict[str, str], why: str) -> None:
         Wifi(now=lambda: 0).station(**kwargs)
 
 
-def test_the_device_s_macs_are_the_runner_s_base_mac_and_the_one_after_it() -> None:
-    # The runner gives the classic ESP32's machine its base MAC; ESP-IDF's SoftAP MAC is that
-    # plus one.
-    source = (ROOT / "runner" / "src" / "chip" / "esp32.rs").read_text()
+# How many universally administered MACs ESP-IDF gives each chip with Wi-Fi by default:
+# `CONFIG_<CHIP>_UNIVERSAL_MAC_ADDRESSES` in `components/esp_hw_support/port/<chip>/Kconfig.mac`,
+# the same in v5.3.6, v5.5.4 and v6.1 (the S31's only in v6.1).
+UNIVERSAL_MACS = {"esp32": 4, "esp32s3": 4, "esp32c3": 4, "esp32c6": 4, "esp32s31": 2}
+
+
+def runner_mac(chip: str) -> bytes:
+    """`MAC` in `runner/src/chip/<chip>.rs`, the base MAC the runner gives the chip's machine."""
+    source = (ROOT / "runner" / "src" / "chip" / f"{chip}.rs").read_text()
     match = re.search(r"const MAC: \[u8; 6\] = \[([^\]]*)\];", source)
-    assert match is not None
-    base = bytes(int(octet, 16) for octet in match[1].split(","))
-    assert base.hex(":") == ESP32SIM_STATION_MAC
-    softap = (int.from_bytes(base, "big") + 1).to_bytes(6, "big")
-    assert softap.hex(":") == ESP32SIM_SOFTAP_MAC
+    assert match is not None, chip
+    return bytes(int(octet, 16) for octet in match[1].split(","))
+
+
+def esp_idf_softap(base: bytes, universal: int) -> bytes:
+    """`esp_read_mac(…, ESP_MAC_WIFI_SOFTAP)` in ESP-IDF's `mac_addr.c`: with four universal MACs
+    the base with one added to its last octet, which does not carry; with two
+    `esp_derive_local_mac`, the base with its locally administered bit set (or, on a base that
+    has it already, bit 2 of its first octet flipped)."""
+    if universal == 4:
+        return base[:5] + bytes([(base[5] + 1) & 0xFF])
+    first = base[0] | 0x02
+    if first == base[0]:
+        first ^= 0x04
+    return bytes([first]) + base[1:]
+
+
+def test_every_chip_esp32tl_runs_has_its_macs_or_none() -> None:
+    assert set(EMULATED_MACS) == set(CHIPS)
+    assert [chip for chip, macs in EMULATED_MACS.items() if macs is None] == ["esp32p4"]
+
+
+@pytest.mark.parametrize("chip", sorted(UNIVERSAL_MACS))
+def test_the_device_s_macs_are_the_runner_s_base_mac_and_the_softap_mac_esp_idf_derives(
+    chip: str,
+) -> None:
+    base = runner_mac(chip)
+    macs = emulated_macs(chip)
+    assert macs == EMULATED_MACS[chip]
+    assert macs.station == base.hex(":")
+    assert macs.softap == esp_idf_softap(base, UNIVERSAL_MACS[chip]).hex(":")
     # The virtual station's default is neither of them.
-    assert DEFAULT_MAC not in (ESP32SIM_STATION_MAC, ESP32SIM_SOFTAP_MAC)
+    assert DEFAULT_MAC not in (macs.station, macs.softap)
 
 
-@pytest.mark.parametrize("mac", [ESP32SIM_STATION_MAC, ESP32SIM_SOFTAP_MAC.upper()])
-def test_the_virtual_station_refuses_the_device_s_macs(mac: str) -> None:
-    with pytest.raises(ValueError, match="differ from the device's station and access point"):
-        Wifi(now=lambda: 0).station("x", mac=mac)
+def test_esp_idf_s_derivations_on_bases_at_their_edges() -> None:
+    assert esp_idf_softap(bytes.fromhex("2462ab0000ff"), 4).hex() == "2462ab000000"
+    assert esp_idf_softap(bytes.fromhex("102030405060"), 2).hex() == "122030405060"
+    assert esp_idf_softap(bytes.fromhex("122030405060"), 2).hex() == "162030405060"
+
+
+@pytest.mark.parametrize(
+    "chip,why",
+    [
+        ("esp32p4", "^emulated_macs: the ESP32-P4 has no Wi-Fi$"),
+        ("esp32s2", "^emulated_macs: 'esp32s2' is not one of esp32, esp32s3, esp32c3"),
+    ],
+)
+def test_a_chip_without_wifi_or_unknown_has_no_emulated_macs(chip: str, why: str) -> None:
+    with pytest.raises(ValueError, match=why):
+        emulated_macs(chip)
+
+
+@pytest.mark.parametrize("chip", sorted(UNIVERSAL_MACS))
+@pytest.mark.parametrize("which", ["station", "softap"])
+def test_the_virtual_station_refuses_the_board_s_chip_s_macs(chip: str, which: str) -> None:
+    macs = emulated_macs(chip)
+    mac = getattr(macs, which)
+    with pytest.raises(ValueError) as refused:
+        Wifi(now=lambda: 0, chip=chip).station("x", mac=mac.upper())
+    assert str(refused.value) == (
+        "wifi.station: mac must differ from the device's station and SoftAP MACs,"
+        f" {macs.station} and {macs.softap}"
+    )
+
+
+def test_the_virtual_station_takes_another_chip_s_macs_and_any_without_a_chip() -> None:
+    classic = emulated_macs("esp32")
+    Wifi(now=lambda: 0, chip="esp32s3").station("x", mac=classic.station)
+    Wifi(now=lambda: 0).station("x", mac=classic.softap)
+    Wifi(now=lambda: 0, chip="esp32p4").station("x", mac=classic.station)
+
+
+def test_a_wifi_on_a_chip_the_table_does_not_name_is_refused() -> None:
+    with pytest.raises(KeyError, match="esp32s2"):
+        Wifi(now=lambda: 0, chip="esp32s2")
+
+
+def test_the_emulated_board_s_wifi_refuses_its_own_chip_s_macs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = Build(
+        directory=tmp_path,
+        kind=ESP_IDF,
+        flash_files=(),
+        partition_table=None,
+        app_image=None,
+        elf=None,
+        chip="esp32s3",
+    )
+    monkeypatch.setattr(esp32sim, "load_app", lambda _, *, build_dir=None, chip="esp32": app)
+    monkeypatch.setattr(esp32sim, "runner_path", lambda: Path("runner"))
+    monkeypatch.setattr(esp32sim, "rom_path", lambda chip="esp32", app=None: Path("rom"))
+    run = tmp_path / "run"
+    run.mkdir()
+    board = Esp32Sim(
+        Mock(spec=Dut, logfile=str(run / "dut.log")),
+        "app",
+        Mock(spec=MessageQueue),
+        Meta(str(run), {}, {}),
+        boards.profile("esp32-s3-devkitc"),
+    )
+    with pytest.raises(ValueError, match=r"44:1b:f6:75:dc:e0 and 44:1b:f6:75:dc:e1$"):
+        board.wifi.station("x", mac="44:1b:f6:75:dc:e1")

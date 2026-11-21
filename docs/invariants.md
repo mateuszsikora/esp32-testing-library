@@ -2278,11 +2278,26 @@ clones, and rejection of serial distributed execution before accessing hardware.
 
 ## The emulated device's Wi-Fi MACs
 
-- **247.** `ESP32SIM_STATION_MAC` is the base MAC the runner gives the classic ESP32's machine, and
-  `ESP32SIM_SOFTAP_MAC` that plus one; the virtual station's default MAC is neither, and
-  `wifi.station` refuses both as its own.
-  `tests/test_wifi.py::test_the_device_s_macs_are_the_runner_s_base_mac_and_the_one_after_it`,
-  `tests/test_wifi.py::test_the_virtual_station_refuses_the_device_s_macs`
+- **247.** Every chip esp32tl runs has an entry in `EMULATED_MACS`, `None` only for the ESP32-P4,
+  which has no Wi-Fi. A chip's station MAC is the base MAC the runner gives its machine, and its
+  SoftAP MAC is derived from that as ESP-IDF derives it with the chip's default number of universal
+  MACs: four (the classic ESP32, S3, C3, C6) adds one to the last octet, two (the S31) sets the
+  locally administered bit. The virtual station's default MAC is none of them, and `wifi.station`
+  refuses the board's own chip's two as its own, and only those; a `Wifi` given a chip the table
+  does not name raises `KeyError`.
+  `tests/test_wifi.py::test_every_chip_esp32tl_runs_has_its_macs_or_none`,
+  `tests/test_wifi.py::test_the_device_s_macs_are_the_runner_s_base_mac_and_the_softap_mac_esp_idf_derives`,
+  `tests/test_wifi.py::test_the_virtual_station_refuses_the_board_s_chip_s_macs`,
+  `tests/test_wifi.py::test_the_virtual_station_takes_another_chip_s_macs_and_any_without_a_chip`,
+  `tests/test_wifi.py::test_a_wifi_on_a_chip_the_table_does_not_name_is_refused`,
+  `tests/test_wifi.py::test_the_emulated_board_s_wifi_refuses_its_own_chip_s_macs`
+- **292.** The station MAC `emulated_macs` gives for the profile's chip before power-on is the MAC the
+  firmware's DHCP lease from the virtual access point carries, on the classic ESP32, the S3, the C3
+  and the C6.
+  `tests/test_http_request.py::test_joins_and_fetches_from_the_tests_server`,
+  `tests/test_chips.py::TestOnESP32S3::test_http_request_joins_and_fetches_from_the_tests_server`,
+  `tests/test_chips.py::TestOnESP32C3::test_http_request_joins_and_fetches_from_the_tests_server`,
+  `tests/test_chips.py::TestOnESP32C6::test_http_request_joins_and_fetches_from_the_tests_server`
 
 ## Runtime download errors
 

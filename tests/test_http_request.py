@@ -11,7 +11,7 @@ from esp32tl import recording
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.interfaces import NeverHappened, SourceError
 from esp32tl.interfaces.console import Console
-from esp32tl.interfaces.wifi import ESP32SIM_STATION_MAC, Wifi
+from esp32tl.interfaces.wifi import Wifi, emulated_macs
 from esp32tl.units import kbit_s, ms, seconds
 
 pytestmark = pytest.mark.app_path("../firmware/http_request")
@@ -34,7 +34,7 @@ def test_joins_and_fetches_from_the_tests_server(
     board.wait_until(done, within=seconds(5))
     assert network.dns.asked == ["example.com"]
     [lease] = network.dhcp.leases
-    assert (lease.mac, lease.address) == (ESP32SIM_STATION_MAC, "10.64.0.2")
+    assert (lease.mac, lease.address) == (emulated_macs("esp32").station, "10.64.0.2")
     assert board.link.warnings == [] and board.link.error is None
     assert "http: GET / → 200" in board.report()
 

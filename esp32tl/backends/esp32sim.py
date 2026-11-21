@@ -682,6 +682,7 @@ class Esp32Sim(Board):
         self._wifi = Wifi(
             now=lambda: self._hold.now,
             world=lambda: self._utc,
+            chip=profile.chip,
             asked=self._asked,
             log=self.log,
             bridging=self._bridging,

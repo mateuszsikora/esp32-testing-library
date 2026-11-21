@@ -4435,7 +4435,7 @@ not give.
 
 ## The emulated device's Wi-Fi MACs are constants of the wifi interface
 
-Status: decided (#237)
+Status: superseded (#291)
 
 `esp32tl.interfaces.wifi` exports `ESP32SIM_STATION_MAC`, `24:6f:28:00:11:22`, and
 `ESP32SIM_SOFTAP_MAC`, `24:6f:28:00:11:23`, which `wifi.station`'s check of its own `mac` uses. A
@@ -4454,6 +4454,39 @@ eFuses and which esp32tl does not read. Reading the MACs from the runner at run 
 test needs them before power-on, before the runner starts. Constants for the ESP32-S3, C3 and
 C6, which have MACs of their own but no virtual station attachment yet (#229), so no test of theirs
 can join a SoftAP named after one.
+
+They gave way to [one function of the chip for every chip](#the-emulated-devices-wi-fi-macs-are-a-function-of-the-chip-for-every-chip):
+a firmware also names its hostname after its MAC, and a test needs the MAC before power-on on every
+chip, not only to join a SoftAP.
+
+## The emulated device's Wi-Fi MACs are a function of the chip, for every chip
+
+Status: decided (#291)
+
+`esp32tl.emulated_macs(chip)` returns the emulated device's `EmulatedMacs(station, softap)` on
+esp32sim for a profile's chip, from one table, `EMULATED_MACS` in `esp32tl/interfaces/wifi.py`,
+with an entry for every chip of `esp32tl.boards.CHIPS`: `None` for the ESP32-P4, which has no
+Wi-Fi, on which the function raises. A test calls it with `board.profile.chip`, before power-on. The
+station's is the runner's `MAC` for the chip, which a test reads from `runner/src/chip/<chip>.rs`;
+the SoftAP's is derived as ESP-IDF's `esp_read_mac(…, ESP_MAC_WIFI_SOFTAP)` derives it with the
+chip's default `CONFIG_<CHIP>_UNIVERSAL_MAC_ADDRESSES`, four on the classic ESP32, S3, C3 and C6,
+two on the S31, which `components/esp_hw_support/mac_addr.c` and `port/<chip>/Kconfig.mac` give
+alike in ESP-IDF v5.3.6, v5.5.4 and v6.1. A test of the S3, C3 and C6 images checks the station's
+against a DHCP lease, as one of the classic chip's does. `Wifi` takes the chip, and `wifi.station`
+refuses that chip's two MACs, not the classic chip's on every chip. The two `ESP32SIM_*` constants
+are dropped: with one source per chip, the classic chip's would be a second name for one entry.
+
+**Rejected:** `board.station_mac` and `board.softap_mac`, because a property of the board says
+"this board's MAC", which on the serial backend is the board's eFuses', which esp32tl does not read:
+it would raise or answer with the emulator's MAC for a board that has another, while the function
+says whose MACs it gives in its name, and needs no board, so a module-level table or a
+parametrization can use it. Returning `None` for the P4, because a test that wants a Wi-Fi MAC on a
+chip without Wi-Fi would fail later on `None.station` instead of on the cause. Deriving the SoftAP
+MAC at run time from the station MAC and a number of universal MACs per chip, because the literal
+table says each value where a reader looks for it, and the test derives it independently. Reading
+a firmware's own `UNIVERSAL_MAC_ADDRESSES` from its `sdkconfig`, because a build need not carry it
+(an Arduino or PlatformIO build's framework libraries were built with theirs), and the defaults are
+what the validation images use.
 
 ## A missing release manifest names possible causes, not a diagnosis or a fallback
 

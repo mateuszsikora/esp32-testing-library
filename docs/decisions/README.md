@@ -339,7 +339,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Project defaults are esp32tl ini options that the markers override](harness.md#project-defaults-are-esp32tl-ini-options-that-the-markers-override) | `harness.md` | decided (#237) |
 | [One suite runs on several chips as one pytest session per build and profile](harness.md#one-suite-runs-on-several-chips-as-one-pytest-session-per-build-and-profile) | `harness.md` | decided (#290) |
 | [A model that frames by silence tells on_frame when the frame's data came](harness.md#a-model-that-frames-by-silence-tells-on_frame-when-the-frames-data-came) | `harness.md` | decided (#237) |
-| [The emulated device's Wi-Fi MACs are constants of the wifi interface](harness.md#the-emulated-devices-wi-fi-macs-are-constants-of-the-wifi-interface) | `harness.md` | decided (#237) |
+| [The emulated device's Wi-Fi MACs are constants of the wifi interface](harness.md#the-emulated-devices-wi-fi-macs-are-constants-of-the-wifi-interface) | `harness.md` | superseded (#291) |
+| [The emulated device's Wi-Fi MACs are a function of the chip, for every chip](harness.md#the-emulated-devices-wi-fi-macs-are-a-function-of-the-chip-for-every-chip) | `harness.md` | decided (#291) |
 | [A missing release manifest names possible causes, not a diagnosis or a fallback](harness.md#a-missing-release-manifest-names-possible-causes-not-a-diagnosis-or-a-fallback) | `harness.md` | decided (#237) |
 | [A virtual access point and a virtual station together wait for esp32sim's AP+STA](harness.md#a-virtual-access-point-and-a-virtual-station-together-wait-for-esp32sims-apsta) | `harness.md` | postponed (#237) |
 | [The runner's flash is the profile's flash_mb, else the build's headers, refused at setup when too small](harness.md#the-runners-flash-is-the-profiles-flash_mb-else-the-builds-headers-refused-at-setup-when-too-small) | `harness.md` | decided (#240) |
