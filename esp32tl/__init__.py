@@ -157,6 +157,7 @@ from esp32tl.sources.model.gnss import ModelError as ModelError
 from esp32tl.sources.model.modem import ModeChange as ModeChange
 from esp32tl.sources.model.modem import Modem as ModemModel
 from esp32tl.sources.model.modem import ModemCommand as ModemCommand
+from esp32tl.sources.model.modem import ModemPower as ModemPower
 from esp32tl.sources.model.modem import ModemRestart as ModemRestart
 from esp32tl.sources.real import Real as Real
 from esp32tl.sources.replay import Replay as Replay
@@ -254,6 +255,7 @@ __all__ = [
     "Modem",
     "ModemCommand",
     "ModemModel",
+    "ModemPower",
     "ModemRestart",
     "MqttClient",
     "Namespaces",

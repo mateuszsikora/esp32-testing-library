@@ -41,6 +41,16 @@ route. Both check the route's source by type, so a model of the test's on `uart.
 data-mode payloads are available as a snapshot through `modem_model().data_received`, the route's
 `ModemModel`; it was `model()` until `Uart.model(source)` took that name.
 
+`_power_changes` holds every `ModemPower` under the same lock, and `power_changes` returns it as
+a tuple. `_set_power(t, powered, cause)` is the one place power changes: `power_off`, `power_on`,
+`lose_power`, `supply(False)`, `driven` (PWRKEY, at `t + LATENCY_NS`) and `reset_driven` (RESET,
+`powered=True`) call it. It appends a `ModemRestart` when the modem was on, and a `ModemPower` when
+`powered` differs from `self.powered`, both only after the board's first instant (`t > 0`). So a
+RESET restart and `power_on` on a running modem, which pass `True` to a modem already on, append
+a restart and no power change, and a call on a modem that is off appends neither; `lose_power` and
+`power_off` on such a modem still clear its state as before. Why a second history rather than
+changing `restarts`: [the decision](../decisions/harness.md#the-modems-power-changes-are-a-history-beside-its-restarts).
+
 `_mode_changes` holds every `ModeChange` under the same lock, and `mode_changes` returns it as a
 tuple. `_command` appends a dial's entry, `("data", "dial")` or `("command", "no carrier")`, stamped
 `t`, the same stamp as the dial's `ModemCommand`; a hung modem returns before it. Every end of data
@@ -62,6 +72,8 @@ modem guide documents [PWRKEY's](modem-user.md#pwrkey-and-reporting) and
 No protocol or recording-format version changes: UART bytes and GPIO input use version 1.
 
 `ModemRestart` is frozen: `at: Duration`, `cause`: `"reset"`, `"pwrkey"`, `"supply"` or `"test"`.
+`ModemPower` is frozen: `at: Duration`, `powered: bool`, `cause`: `"pwrkey"`, `"supply"` or `"test"`,
+typed as `RestartCause`, whose `"reset"` it never holds.
 `ModeChange` is frozen: `at: Duration`, `mode`: `"command"` or `"data"` (`Mode`), `cause`: `"dial"`,
 `"escape"`, `"no carrier"`, `"drop"`, `"hang"`, `"registration"` or `"restart"` (`ModeCause`).
 `ModemCommand` is frozen: `at: Duration`, `text: str`, `response: bytes`, `fallback: bool`. The JSON
@@ -139,6 +151,8 @@ after the hold returns, so `quiet_until` has no bound to give for it. `hang` and
 a `Condition` whose `find` is `FirstFrom(lambda: model.mode_changes, len(model.mode_changes),
 wanted)`, as `board.next_boot` is built ([the decision](../decisions/harness.md#history-conditions-scan-from-where-their-last-poll-ended)).
 `mode_changes` is copied at each poll, as `boots` is; it holds at most two entries per dial.
+`Modem.next_power_change(powered)` is built the same way over `power_changes`, which alternates
+between off and on and so holds one entry per switch.
 
 ## Failure modes
 
@@ -156,6 +170,8 @@ wanted)`, as `board.next_boot` is built ([the decision](../decisions/harness.md#
   modem.network(): no PPP`, `modem.drop_call: terminate needs LCP open: it is not yet` (`SourceError`), `modem.drop_call: terminate is 1, not True or False`
   (`TypeError`).
 - `modem.next_mode_change: mode is 'Data', not 'command', 'data' or None` (`ValueError`).
+- `modem.next_power_change: powered is 1, not True, False or None` (`ValueError`): `powered` is
+  checked with `isinstance(powered, bool)`, so `1` and `0` are refused too.
 - `modem.hang: the modem is off`, `modem.hang: the modem is hung already` (`SourceError`), `modem.hang: pwrkey is 1, not True or False`
   (`TypeError`).
 - `uart.modem has its source already: one per test`: replay and model are mutually exclusive; a
@@ -177,6 +193,10 @@ pulse timing, RI ownership, taps and unbounded command history, and a real `Boar
 It checks `mode_changes` for a dial with either result, an escape with and without a network and
 one within the guard time, `drop_call`, `hang`, `lose_registration`, the test's power calls and a
 PWRKEY and a RESET restart, and `next_mode_change`'s boundary, filter, description and refusals.
+It checks `power_changes` for a PWRKEY recovery, the supply's loss and the board's, the test's
+power calls, the start before the board's first instant, a RESET restart and `power_on` on a
+running modem (no entry), the calls and pulses that change nothing, and `next_power_change`'s
+boundary, filter, description and refusals.
 `test_a_broker_deadline_at_the_escapes_instant_runs_before_it` opens PPP and an MQTT connection
 through the model's network, then puts a delayed PUBACK and a keepalive expiry each at the escape's
 instant: `arrive` runs the deadline, and `poll` returns the escape's `OK` alone.
@@ -189,8 +209,11 @@ firmware's PWRKEY pulse (and `tests/test_modem_model.py` keeps the board's suppl
 `lose_power()` apart), reads the operator's code and a right, a wrong and an unset clock through
 the firmware, compares two complete taps byte for byte, and checks missing-route and late-source
 errors. `tests/test_modem_recovery.py` runs `firmware/modem_recovery` through `esp_modem` and PPP, and
-recovers a hung modem with and without PWRKEY, also one that hangs while it dials, and redials after a dropped call on both paths. `tests/test_boards.py` checks timing validation. The validation firmware and tests have
-no network dependency.
+recovers a hung modem with and without PWRKEY, also one that hangs while it dials, and redials
+after a dropped call on both paths; it checks `power_changes` for both recoveries, an off and an on
+by PWRKEY or none by RESET, and for a lost supply that the recovery's PWRKEY pulse switches back on
+once the test restores it. `tests/test_boards.py` checks timing validation. The validation firmware
+and tests have no network dependency.
 
 ## See also
 
