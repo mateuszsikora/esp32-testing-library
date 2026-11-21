@@ -23,7 +23,8 @@ rules, `sd_fault`, `sd_clear` and `sd_op` (#260 the `observe` action), #131 `fla
 HCI with `--bt`, #245 `uptime`, where each boot's `esp_timer` counts zero on the socket's clock
 (5.24), #261 the `hint` of `reset`, the register ESP-IDF's `esp_reset_reason()` reads at the next
 boot (5.5), and #278 `flash_write` and `flash_write_ack`, a write of the flash in a turn with the
-board's supply off (5.25). `console_rx` and `stats.console_rx_lost` are the console on the chip's
+board's supply off (5.25), and #308 `sleep`, when each boot went into deep sleep and what it armed
+to wake it (5.26). `console_rx` and `stats.console_rx_lost` are the console on the chip's
 USB-Serial/JTAG controller, with `--console-port usb`, and since #233 on UART0 of the ESP32-P4 and
 the ESP32-S31, whose UARTs have no pins in esp32sim (5.23).
 
@@ -165,6 +166,7 @@ seen exactly the events up to the block point, however the emulator schedules it
 | runner → harness | `flash_dump_ack` *ext* | `t`, `error` | #131 |
 | runner → harness | `flash_write_ack` *ext* | `t`, `error` | #278 |
 | runner → harness | `uptime` *ext* | `t`, `earliest`, `latest` | #245 |
+| runner → harness | `sleep` *ext* | `t`, `earliest`, `latest`, `wakes` | #308 |
 | runner → harness | `stats` *ext* | `t`, `end`, `resets`, `turns`, `uart`, `unrouted_rx_bytes`, `inputs_on_output`, `inputs_not_applied`, `rx_bytes_not_paced`; `wifi` with `--wifi` or `--wifi-sta`; under `--realtime` also `rt_resyncs` (M5); with `--console-port usb`, or on the ESP32-P4 and the ESP32-S31, also `console_rx_lost` | M1 |
 | harness → runner | `uart_rx` | `t`, `pin`, `baud`, `data` | M1 |
 | harness → runner | `gpio_in` | `t`, `levels` | M3 |
@@ -219,6 +221,10 @@ to a peer that asked, and a runner built before them answers `flash_write` with 
 it refuses it as `no message type 'uptime' from the runner`; the harness and the runner come from
 one checkout.
 
+`sleep` (5.26) leaves the version at 2 for the same reason: the runner sends it on every run whose
+firmware goes into deep sleep, and a harness built before it refuses it as `no message type
+'sleep' from the runner`.
+
 `reset`'s `hint` (5.5) left the version at 2 for the same reason. A peer that does not know it
 ignores it (section 2); the harness refuses a `reset` without it, `reset: no hint`.
 
@@ -238,8 +244,8 @@ it ignores (section 2). The console's output keeps its message, `console` (5.7)
 **Events** are the runner messages that carry `seq`: `uart_tx`, `uart_cfg`, `gpio_out`, `reset`,
 `eth_tx`, `hci_tx` and `wifi_link`. They are what a peer may answer, so they set the block point (rule 1). `seq`
 is one counter over all seven, starting at 1 and growing by 1. `sync`, `console`, `warn`,
-`sd_card_ack`, `sd_op`, `flash_dump_ack`, `flash_write_ack`, `uptime` and `stats` carry no `seq`
-and ask for nothing.
+`sd_card_ack`, `sd_op`, `flash_dump_ack`, `flash_write_ack`, `uptime`, `sleep` and `stats` carry no
+`seq` and ask for nothing.
 
 ### 5.1 `hello`
 
@@ -1261,6 +1267,55 @@ power-on.
 `null` or absent unless nothing was written, says why, as the path and the error: the file could
 not be read, or it does not fit in the flash from `offset` on. The run goes on either way. It is not
 an event: it carries no `seq` and sets no block point.
+
+### 5.26 `sleep` *ext* (#308)
+
+```json
+{"type": "sleep", "t": 35000000, "earliest": 34000000, "latest": 35000000, "wakes": ["timer"]}
+{"type": "sleep", "t": 15600000, "earliest": 15000000, "latest": 15600000, "wakes": ["ext0", "timer"]}
+```
+
+The boot went into deep sleep, on the socket's clock no sooner than `earliest` and no later than
+`latest`, in nanoseconds, `earliest` rounded down and `latest` up as in `uptime` (5.24). `wakes` is
+what the firmware armed to wake it, by ESP-IDF's names for the sources a deep sleep wakes from, in
+this order: `ext0`, `ext1`, `timer`, `touch`, `ulp`; it is empty for a sleep that armed none of
+them. The message belongs to the boot that went to sleep: after the run's `n`-th `reset` (5.5), boot
+`n + 1`. Its wake, if it comes, is the next `reset`, with cause 5, `DEEPSLEEP_RESET`; for a timer
+armed for `d`, that `reset`'s `t` less `latest` is about `d`: no more than `d` plus what the RTC's
+slow clock runs late, and short of `d` by ESP-IDF's fixed `DEEP_SLEEP_TIME_OVERHEAD_US` (400 µs at
+160 MHz), which it takes off the interval it counts from its read of the RTC in
+`esp_deep_sleep_start()`, by the work that function does after the read, its slow clock's
+calibration among it (small on esp32sim), and by up to the 1 ms between the two boundaries. `t` is
+where the runner saw the sleep. It is not an event: it carries no `seq`, sets no block point and
+nothing answers it. The first example is `firmware/timer_wake`'s first sleep; the second a sleep
+that began and ended within one slice, sent at the reset of its wake.
+
+**When.** The runner reads the chip's RTC registers at every slice boundary while the board's supply
+is on, as it reads the uptime counter (5.24): at most one emulated millisecond apart while the chip
+runs (section 6.1). The first boundary of a boot that finds the chip in deep sleep sends `sleep`:
+`latest` is that boundary, `earliest` the boundary before it, which found the chip awake, or the
+reset that started the boot; the two are 1 ms apart at most, and the few bus cycles by which a slice
+can end past its millisecond at a CPU clock below 240 MHz (6.1), 13 ns on `firmware/timer_wake`. A
+sleep that the reset of its wake ends before the next boundary is sent at that reset, before the
+`reset`, with the reset as `latest`. A boot sleeps once, since its wake is a reset, so the runner
+sends at most one `sleep` a boot, and the harness takes a second one as the runner breaking the
+protocol (`the runner sent a second sleep in boot 3`). The runner sends the timer's due time in no
+field: the wake's `reset` comes at it, within one of esp32sim's rounds (6.1). A sleep with the RTC
+watchdog on is a sleep too, though the runner does not step through it in long steps (6.1);
+`--realtime` (12.1) changes nothing here. While the supply is off the chip does not sleep.
+
+**What the runner reads.** On the classic ESP32 the chip is in deep sleep when `SLEEP_EN` (bit 31 of
+RTC_CNTL_STATE0) and `DG_WRAP_PD_EN` (bit 31 of RTC_CNTL_DIG_PWC) are set, which esp32sim's
+`enter_deep_sleep` asks to enter one, and both cores wait with no interrupt enabled, as its
+`peripheral_event` leaves them (`esp32/src/sleep.rs`, `esp32/src/soc.rs`). Once esp32sim's wake has
+cleared `SLEEP_EN` and asked for the reset, which the runner takes after the slice, the chip still
+counts as asleep until it does. The wakes are WAKEUP_ENA, the field of RTC_CNTL_WAKEUP_STATE from
+bit 11, whose bits ESP-IDF v5.5 names in `components/esp_hw_support/port/esp32/include/soc/rtc.h`:
+`RTC_EXT0_TRIG_EN` (bit 0) `ext0`, `RTC_EXT1_TRIG_EN` (1) `ext1`, `RTC_TIMER_TRIG_EN` (3) `timer`,
+`RTC_TOUCH_TRIG_EN` (8) `touch` and `RTC_ULP_TRIG_EN` (9) `ulp`. Its other bits wake a light sleep
+only and are not sent. esp32sim wakes the chip on the timer and on EXT0 only (`timer_wake`,
+`ext0_wake`); a sleep armed for EXT1, touch or the ULP is sent with what it armed and never wakes on
+it. The other chips send no `sleep`: esp32sim models deep sleep on the classic chip only.
 
 ## 6. Rules
 

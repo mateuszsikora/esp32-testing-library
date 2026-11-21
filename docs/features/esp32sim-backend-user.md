@@ -101,6 +101,9 @@ measured with the watchdog off), and the watchdog counts through it, so a stage 
 the timer's alarm ends the sleep in that reset, which `wait_for_wake` fails as no wake from deep
 sleep ([waking from deep sleep](pytest-plugin-user.md#waking-from-deep-sleep)). Under a
 [real source](real-source-user.md) the run follows wall time, the sleep's included.
+`board.sleeps` says when each sleep began, to within the millisecond between two of the runner's
+slices, and what the firmware armed to wake it, from the runner's `sleep` messages
+([waking from deep sleep](pytest-plugin-user.md#waking-from-deep-sleep)).
 
 The console reaches the test over the link, in emulated-time order with the runner's turns
 (`--console both`). The runner's stdout gets it too, and with it the runner's own lines
@@ -371,7 +374,7 @@ What esp32sim does not model on these chips, issue
 |---|---|
 | An SD card (`sd_card`) | Skipped, at the call that asks for it: `esp32sim: sd_card on esp32s3: esp32sim does not model GP-SPI RX DMA on the ESP32-S3, which ESP-IDF's SD SPI driver needs (#229, G2)` |
 | A virtual station (`wifi.station(...)`) | Skipped: `esp32sim: wifi on esp32s3: esp32sim has no virtual station for a SoftAP on the ESP32-S3 (#229, G4)` |
-| Deep sleep | The firmware goes to sleep and never wakes: `board.wait_for_wake` raises when its time is up, and the console says nothing more |
+| Deep sleep | The firmware goes to sleep and never wakes: `board.wait_for_wake` raises when its time is up, and the console says nothing more; `board.sleeps` stays empty |
 | Bluetooth on the C6 | `bt` on an image built with ESP-IDF v5.3.6 fails at `board.power_on()`: esp32sim's C6 hooks want v5.5.x (`--bt …: C6 BLE requires esp_app_desc.idf_ver v5.5.x, got "v5.3.6"`) |
 
 ### The ESP32-P4 and the ESP32-S31

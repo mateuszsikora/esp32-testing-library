@@ -262,6 +262,15 @@ cannot fail with this backend; it is there for another caller:
   it, and `next_boot(uptime_zero=True)` matches at the first poll, in the same turn or a later one,
   at which the boot's last `uptime` has its zero, not `null` (`esp32tl/interfaces/board.py`);
   neither is overridden here.
+- `sleeps` is one `Sleep(boot, Duration(earliest), Duration(latest), frozenset(wakes))` per
+  `sleep` in `BoardLink.sleeps`, which keeps each by the number of the boot it came in, the boot
+  after the `reset`s read before it ([protocol 5.26](../protocol.md#526-sleep-ext-308)), in the
+  order the link read them; built anew at every read, through `_on()`. The runner sends at most one
+  a boot, before the `reset` of its wake; the link takes a second one in a boot as its `error`,
+  `the runner sent a second sleep in boot {n}`, and the run ends, so a `Sleep` already read never
+  changes. `next_sleep()` is `Board`'s, a `FirstFrom` over `sleeps`
+  from the length it has at the call, described as `the next deep sleep`; it is not overridden
+  here. Nothing about a sleep goes into the run's log: its wake does, as the next boot.
 
 `_on()`, which `now`, `utc`, `boots` and every wait go through, asks only that the runner has
 started, so the test can wait on a board that is off: the runner idles the guest and still takes
@@ -568,6 +577,7 @@ repository makes.
 | `Esp32Sim.boots`, `Esp32Sim.boot` | The chip's boots as `Boot`s, the first at 0 with cause 1 and one per `reset` the link has read, each with the `uptime_zero` of the link's last `uptime` for it; the last. `BoardOff` before the first `power_on` |
 | `Esp32Sim.uptime_zero(boot)`, `Esp32Sim.next_boot(cause=None, *, uptime_zero=False)` | `Board`'s: a held `Boot`'s `uptime_zero` read again from `boots`; the next boot, with `uptime_zero=True` only once its `uptime_zero` is known |
 | `Esp32Sim.wait(duration)`, `Esp32Sim.wait_until(condition, *, within)`, `Esp32Sim.wait_on_clock(condition, within, description)` | The test's waits, each a `Duration` of the board's time, logged as steps of the test |
+| `Esp32Sim.sleeps`, `Esp32Sim.next_sleep()` | The chip's deep sleeps as `Sleep`s, one per `sleep` the link has read, by the boot that went to sleep; `Board`'s condition for the next one; `BoardOff` before the first `power_on` |
 | `Esp32Sim.wait_for_wake(*, within)` | Runs the board to the chip's next boot, for at most `within`, and returns its `Boot`; `AssertionError` when that boot is not a wake from deep sleep, `NeverHappened` and `RunEnded` as `wait_until`'s, `BoardOff` before `power_on` and while the supply is off |
 | `Esp32Sim.now`, `Esp32Sim.utc` | The board's time since the first power-on, a `Duration`, through every reset and while the board is off; the world's time, a `datetime` in UTC |
 | `Esp32Sim.uart(role)` | The `Uart` of `uart.<role>` on the link, a `Gnss` for `gnss`; `BackendError` when the profile has no such route |

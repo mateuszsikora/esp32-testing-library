@@ -233,6 +233,20 @@ watchdog off), and the watchdog counts through it, so a stage that resets before
 alarm ends the sleep in that reset
 ([decision](../decisions/runner.md#a-deep-sleep-runs-in-long-steps-of-the-rtc-to-just-short-of-its-alarm)).
 
+The peer also learns when each sleep began and what the firmware armed to wake it, without asking:
+on the classic ESP32 the first slice boundary that finds the chip in deep sleep sends `sleep`, with
+that boundary and the one before it, a millisecond apart at most and a few nanoseconds more, as the
+earliest and the latest time the sleep can have begun, and the wake sources the firmware armed by
+ESP-IDF's names, `ext0`, `ext1`, `timer`, `touch` and `ulp`. A sleep that its wake ends within the
+same slice is sent at the wake's `reset`, just before it. A sleep with the RTC watchdog on is sent
+as well, and so is one under `--realtime`. The wake's `reset` gives the rest: for a timer wake, its
+time less the sleep's latest is the interval the firmware armed, to within about a millisecond and a
+half: ESP-IDF counts it from `esp_deep_sleep_start()` less a fixed 400 µs at 160 MHz, the sleep
+begins up to 1 ms before `latest`, and the RTC's slow clock runs a little late on esp32sim. esp32sim
+wakes the chip on the timer and on EXT0 only, so a sleep armed for EXT1, touch or the ULP alone
+never wakes; the `sleep` still says what was armed. On the other chips the runner sends no `sleep`.
+[The protocol](../protocol.md#526-sleep-ext-308) says what the runner reads.
+
 The peer also learns where each boot's `esp_timer` counts zero on the run's clock, without asking:
 the runner reads the counter `esp_timer_get_time()` reads at every slice boundary and sends
 `uptime`, with the earliest and the latest time the zero can have been. On the classic ESP32 the two
@@ -651,7 +665,8 @@ tracks each gap.
   through the CPU would reach the card; none is tested here. The esp32sim backend skips a test's
   `sd_card` on these chips ([esp32sim backend](esp32sim-backend-user.md#chips-other-than-the-classic-esp32)).
 - **Deep sleep.** On the S3, C3, C6, P4 and S31, `esp_deep_sleep_start()` puts the guest to sleep
-  and nothing wakes it: the run goes on to its end without another boot. On the P4 and the S31,
+  and nothing wakes it: the run goes on to its end without another boot, and the runner sends no
+  `sleep` (protocol 5.26). On the P4 and the S31,
   `firmware/reset_reasons` with a 100 ms timer wake had no other boot in the 3 s after its sleep,
   measured in a run without a peer at the esp32sim pin `357b0e5`.
 - **The console's input.** esp32sim starts every chip with its IO_MUX zeroed, which leaves U0RXD

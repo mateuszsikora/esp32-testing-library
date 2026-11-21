@@ -7,7 +7,14 @@ from conftest import CountingList
 
 import esp32tl
 from esp32tl import Condition, condition
-from esp32tl.interfaces.board import DEEPSLEEP_RESET, POWERON_RESET, Board, Boot, UptimeZero
+from esp32tl.interfaces.board import (
+    DEEPSLEEP_RESET,
+    POWERON_RESET,
+    Board,
+    Boot,
+    Sleep,
+    UptimeZero,
+)
 from esp32tl.interfaces.condition import FirstFrom, waiting
 from esp32tl.units import Duration
 
@@ -138,6 +145,24 @@ def test_next_boot_reads_only_the_boots_since_the_last_poll() -> None:
     boots.append(Boot(1002, Duration(1002), DEEPSLEEP_RESET))
     assert woke() is boots[-1] and woke() == Boot(1002, Duration(1002), DEEPSLEEP_RESET)
     assert boots.reads == 1000 + 1 + 1 + 1
+
+
+def test_next_sleep_is_the_first_sleep_after_it_and_reads_only_the_new_ones() -> None:
+    def sleep(boot: int) -> Sleep:
+        return Sleep(boot, Duration(boot), Duration(boot + 1), frozenset({"timer"}))
+
+    sleeps = CountingList[Sleep]([sleep(1)])
+    board = SimpleNamespace(sleeps=sleeps)
+    asleep = Board.next_sleep(board)  # type: ignore[arg-type]
+    assert repr(asleep) == "the next deep sleep"
+    assert asleep() is None and sleeps.reads == 0
+    sleeps.append(sleep(3))
+    sleeps.append(sleep(4))
+    # the first after the call, the same each time it is asked
+    found = asleep()
+    assert found == sleep(3) and asleep() is found
+    # the first new one read and found, then read again; the second never read
+    assert sleeps.reads == 1 + 1
 
 
 def test_next_boot_with_uptime_zero_waits_for_the_zero_of_the_first_boot_after_it() -> None:

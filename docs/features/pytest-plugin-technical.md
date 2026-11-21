@@ -777,7 +777,13 @@ beside messages or writes. Its description is `the next boot`, or
 `FirstFrom` that returns the match only while its `uptime_zero` is not `None`, and the description
 ends `, with its uptime zero` ([described conditions](#described-conditions)). A backend whose
 `boots` raises or skips, before `power_on` on esp32sim and always on serial, does so at the
-`next_boot()` call. Interface properties reuse each backend's existing UART/line/slot objects;
+`next_boot()` call. `sleeps` is abstract too, and `Sleep(boot, earliest, latest, wakes)`, a frozen
+record with two `Duration`s and a `frozenset[str]`, is in the same module. `next_sleep()` is
+concrete, on `sleeps` alone: a `Condition` whose `find` is a `FirstFrom` over `sleeps` from
+`len(self.sleeps)` at the call, taking every record, described as `the next deep sleep`;
+`tests/test_condition.py::test_next_sleep_is_the_first_sleep_after_it_and_reads_only_the_new_ones`
+checks its boundary and what a poll reads. A backend whose `sleeps` raises or skips does so at the
+`next_sleep()` call. Interface properties reuse each backend's existing UART/line/slot objects;
 `console` is a `cached_property` wrapping that backend's console buffers.
 Fixture functions return the properties, preserving object identity and the console cursor.
 The `broker` fixture delegates to `modem.network().broker`, which selects a model source.

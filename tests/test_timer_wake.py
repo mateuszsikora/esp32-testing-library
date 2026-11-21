@@ -1,7 +1,8 @@
 """firmware/timer_wake sleeps twice with a 2 s timer wake: each wake is a boot of its own, after a
 DEEPSLEEP_RESET, with the timer as its wake cause and the boot count in RTC memory going on. A run
 in which the chip never wakes fails here rather than halting at its end. `board.wait_for_wake`
-runs the board through each sleep to that boot. Needs `make firmware` (timer_wake, and
+runs the board through each sleep to that boot, and `board.sleeps` says when each sleep began and
+what it armed. Needs `make firmware` (timer_wake, and
 hello_world for a boot that is no wake)."""
 
 from itertools import pairwise
@@ -12,7 +13,7 @@ from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.interfaces import BoardOff, NeverHappened
 from esp32tl.interfaces.board import DEEPSLEEP_RESET, POWERON_RESET
 from esp32tl.interfaces.console import Console
-from esp32tl.units import ms, seconds
+from esp32tl.units import Duration, ms, seconds
 
 pytestmark = pytest.mark.app_path("../firmware/timer_wake")
 
@@ -132,3 +133,51 @@ def test_wait_for_wake_fails_on_a_boot_that_is_no_wake(board: Esp32Sim) -> None:
     )
     # The run's log says it too, as a step of the test.
     assert "a wake from deep sleep: boot 2 is SW_CPU_RESET, not a wake" in board.report(run=True)
+
+
+# The most two slice boundaries are apart while the chip runs: a millisecond, and the few bus cycles
+# by which `run` can return past the slice's end at a CPU clock below 240 MHz (protocol 6.1); 13 ns
+# on CI's ESP-IDF v5.3.6 image. 1 us is room for that.
+SLICE = ms(1) + Duration(1_000)
+# How much shorter than the interval it printed the wake can come after the sleep's `latest`:
+# ESP-IDF counts the interval from `esp_deep_sleep_start()`, less DEEP_SLEEP_TIME_OVERHEAD_US,
+# 400 us at 160 MHz (`components/esp_hw_support/sleep_modes.c`), and the sleep begins up to the
+# 1 ms between two slice boundaries before `latest`; the RTC's slow clock running late
+# (`tests/test_deep_sleep.py`) only makes the wake later. Measured with ESP-IDF v5.5.5: 0.46 and
+# 0.54 ms short.
+SHORT = ms(2)
+# From the line the firmware prints before it sleeps to the sleep's `latest`: the rest of
+# `esp_deep_sleep_start()`'s work, then up to the 1 ms to the next slice boundary. Measured with
+# ESP-IDF v5.5.5: 0.2 and 0.6 ms.
+TO_SLEEP = ms(2)
+
+
+def test_each_sleep_is_recorded_with_the_timer_it_armed_and_the_wake_comes_at_its_interval(
+    board: Esp32Sim, console: Console
+) -> None:
+    board.power_on()
+    first = board.next_sleep()
+    assert repr(first) == "the next deep sleep"
+    line = board.wait_until(console.line(r"^timer_wake: sleeping (\d+) ms$"), within=seconds(1))
+    interval = ms(int(line[1]))
+    asleep = board.wait_until(first, within=TO_SLEEP)
+    assert asleep == board.sleeps[0] and asleep.boot == 1
+    assert asleep.wakes == {"timer"}
+    # between two slice boundaries, the second after the line that came before it
+    assert asleep.earliest <= asleep.latest <= asleep.earliest + SLICE
+    assert line.at <= asleep.latest
+    # the condition looks at sleeps after its call only, and returns the same one again
+    assert first() == asleep
+    second = board.next_sleep()
+    assert second() is None
+    console.expect("timer_wake: done", timeout=2 * (SLEEP + BOOT_TIME))
+    assert second() == board.sleeps[1]
+
+    boots, sleeps = board.boots, board.sleeps
+    # the third boot returns from app_main: two sleeps, one in each of the first two boots
+    assert [s.boot for s in sleeps] == [1, 2]
+    for sleep in sleeps:
+        assert sleep.wakes == {"timer"}
+        wake = boots[sleep.boot]
+        assert wake.cause == DEEPSLEEP_RESET
+        assert interval - SHORT <= wake.at - sleep.latest <= interval + ms(1)

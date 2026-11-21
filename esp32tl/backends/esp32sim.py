@@ -89,6 +89,7 @@ from esp32tl.interfaces.board import (
     POWERON_RESET,
     Board,
     Boot,
+    Sleep,
     UptimeZero,
     idf_reset_reason,
 )
@@ -1106,6 +1107,16 @@ class Esp32Sim(Board):
                 idf_reset_reason(self.profile.chip, cause, hint),
             )
             for n, (at, cause, hint) in enumerate(starts, start=1)
+        )
+
+    @property
+    def sleeps(self) -> tuple[Sleep, ...]:
+        """The chip's deep sleeps, oldest first, from the link's `sleep` messages: when each
+        began, between the two slice boundaries around it, and what it armed to wake it."""
+        self._on()
+        return tuple(
+            Sleep(boot, Duration(s.earliest), Duration(s.latest), frozenset(s.wakes))
+            for boot, s in self.link.sleeps.items()
         )
 
     def _uptime_zero(self, boot: int) -> UptimeZero | None:

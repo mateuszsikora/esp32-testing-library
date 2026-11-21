@@ -159,6 +159,7 @@ dump in `runner/src/session/tests.rs` cover the code the others run.
 | Its RTC registers after `power_on_reset` | a new `ClassicRtc` | a new `RtcCntl`, keeping the board's analog inputs | the same | a new `LpSys` |
 | The reset-reason hint (`RESET_HINT`, [below](#the-reset-reason-hint)) | `0x3ff4_80b8`, kept by `reboot` | `0x6000_80c8`, kept | `0x6000_80c0`, zeroed by `reboot`: `chip_reset` writes it back | `0x600b_1018`, kept |
 | Deep sleep stepped through | yes | no: not modelled | no | no |
+| `deep_sleep()` | `WAKEUP_ENA`'s deep-sleep bits (`chip::esp32::rtc::WAKES`) while `in_deep_sleep`, or while the wake's reset is pending | `None`, the trait's default | the same | the same |
 | `flash()` without the trampoline | yes | yes | yes | no: `ble.original_flash` is private to esp32sim's C6 crate |
 | `uptime()` | TIMG0's LACTCONFIG and LACTLOAD through `Device::read` on `periph.timg[0]` (`chip::esp32::lact`): `Counting`, LACTLOAD's 64 bits and a tick of LACT_DIVIDER times `lact::apb_tick`, 3 or 6 bus cycles | `chip::systimer_uptime` on `periph.systimer`, 15 bus cycles a tick | the same, 10 a tick | the same, 10 a tick |
 
@@ -440,8 +441,8 @@ a chip whose UARTs have no pins ([Chips](#chips)), the same goes for UART0: `col
 `wifi_access_point`, `wifi_leave`, `wifi_drops` and `wifi_forget`, whose defaults are a chip
 without Wi-Fi: no frames, nothing taken, nothing attached, left at once, no drops, nothing to
 forget, and `flash`, for `--flash-out`, whose default is an empty slice and which reads `bus.flash`
-on the machine, and `uptime`, the counter `esp_timer` reads, whose default is a counter that never
-counts) and
+on the machine, `uptime`, the counter `esp_timer` reads, whose default is a counter that never
+counts, and `deep_sleep`, whose default is a chip that never sleeps) and
 `Link` (the socket: `send`, `flush`, `idle`, `closing`, `recv`), so that its tests drive it with a
 scripted guest and a fake peer. `impl Guest for esp32::Machine` sets `max_cycles` and calls
 `run(u64::MAX)`, calls `reboot()` for `chip_reset`, reads `bus.periph.uart_route(port)` and
@@ -480,6 +481,41 @@ it gives goes on `pending` as `Item::Uptime { cycle: now, zero }`, and `process_
 `protocol::uptime`, with no `seq`, its `earliest` through `protocol::ns` and its `latest` through
 `protocol::ns_up`, rounded up, and `null` for both when `zero` is `None`
 ([protocol 5.24](../protocol.md#524-uptime-ext-245)).
+
+#### When each boot goes into deep sleep
+
+`Session::boundary` calls `watch_sleep(now)` after `watch_uptime`, and `Session::drive` calls it
+after `collect` at a `Stop::SwReset`, before `reset_hint` and `chip_reset`; it does nothing while
+the supply is off. `SleepWatch` holds, for the boot that runs, `since`, the last boundary, the
+reset's cycle at first (`reset` sets it), and `sent`, whether the boot's `sleep` has gone out. Every
+call moves `since` to `now`; while `sent` is false it asks `Guest::deep_sleep`, and on `Some(wakes)`
+sets `sent` and puts `Item::Sleep { cycle: now, since, wakes }` on `pending`, which
+`process_pending` sends as `protocol::sleep`, with no `seq`, `earliest` through `protocol::ns` and
+`latest` through `protocol::ns_up` ([protocol 5.26](../protocol.md#526-sleep-ext-308)). At a
+`Stop::SwReset` the item comes before the `Item::Reset`, at the same cycle. `protocol::Wake` is a
+wake source by ESP-IDF's name, `Ext0`, `Ext1`, `Timer`, `Touch` or `Ulp`, whose `name()` is what the
+message says.
+
+For `esp32::Machine`, `in_deep_sleep` is what `sleeps_through` reads of the chip, `SLEEP_EN` and
+`DG_WRAP_PD_EN` set, every core waiting with `intenable` 0, without its two other clauses, no reset
+pending and the RTC watchdog off: a sleep with the watchdog on is a sleep too. `deep_sleep` is
+`Some` while `in_deep_sleep`, or while `rtc.sw_reset` is set with `rtc.reset_cause` 5,
+`DEEPSLEEP_RESET`, which esp32sim's `wake` sets after it has cleared `SLEEP_EN`; `reboot` clears
+`sw_reset`, so after `chip_reset` it is `None`. Its wakes are the bits of `rtc::WAKES` set in
+`WAKEUP_ENA`, the register RAM's `0x34`, which esp32sim's wake leaves in place: bit 11 `Ext0`, 12
+`Ext1`, 14 `Timer`, 19 `Touch` and 20 `Ulp`.
+
+A sleep that a reset other than its wake ends, as the RTC watchdog's `RTCWDT_SYS_RESET` (9), leaves
+`SLEEP_EN` and `DG_WRAP_PD_EN` set in the next boot: esp32sim's `reboot` keeps the RTC registers
+and only its `wake` clears `SLEEP_EN`, and ESP-IDF v5.5.5 sets `SLEEP_EN` and never clears it
+(`port/esp32/rtc_sleep.c`), and writes `DG_WRAP_PD_EN` only when it configures the next sleep. In
+that boot only the cores' clause keeps `in_deep_sleep` false, and with it `deep_sleep` and
+`sleeps_through`: after the reset both cores run, ESP-IDF's idle task waits with interrupts
+enabled, and its halt after a panic is a busy loop, so a false `sleep` needs a firmware that puts
+both cores in `waiti` with every interrupt disabled. The runner does not clear the bit at such a
+reset: that would change what the firmware reads, and whether the chip itself clears it there is
+not known; nor does it ignore the bit for the rest of the boot, which would lose that boot's next
+real sleep without a word.
 
 #### The reset-reason hint
 
@@ -1363,7 +1399,16 @@ against the real binary. The rest:
   it, like the one without the skip, comes in the first idle round, 512 CPU cycles, at or after
   the alarm's tick) and `on_the_emulator_only_a_deep_sleep_is_skipped` (an awake chip and one with
   the RTC watchdog on are not moved, and one without an alarm goes to the end it is given, still
-  asleep).
+  asleep). `sleep`: `each_deep_sleep_is_sent_once_between_the_boundary_before_and_the_one_that_saw_it`
+  (a `FakeGuest` that sleeps four times, armed for the timer, EXT0, both, and a sleep that begins
+  and wakes within one slice: nothing while it is awake, one `sleep` per sleep with the boundary
+  before it and the one that saw it, or the wake's reset, each before its `reset` and with no
+  `seq`); `a_deep_sleep_the_rtc_watchdog_counts_through_is_a_sleep_too` (one `sleep`, though every
+  millisecond's boundary sees it); on the real machine
+  `on_the_emulator_a_deep_sleep_says_what_it_armed_until_its_wake_s_reset` (the wakes as
+  `WAKEUP_ENA` arms them, the light-sleep bits left out, a sleep with the watchdog on, and a wake
+  that is `Some` until `chip_reset` and `None` after); and in `runner/src/protocol/tests.rs`
+  `sleep_names_the_wakes_in_esp_idf_s_words`.
   Wi-Fi runs against `WifiGuest`, a `FakeGuest` with a scripted relay and a link that takes a
   given number of frames between two slices:
   `the_station_frames_go_out_as_eth_tx_events_stamped_at_the_slice_boundary` (two frames stamped
