@@ -56,6 +56,17 @@ class ModemRestart:
     cause: RestartCause
 
 
+@dataclass(frozen=True)
+class ModemPower:
+    """The modem switched on or off at `at`, by `cause`: a PWRKEY pulse, its supply going or a
+    power call of the test's. A RESET restart, and `power_on` on a running modem, change no power:
+    `restarts` holds them."""
+
+    at: Duration
+    powered: bool
+    cause: RestartCause
+
+
 Mode = Literal["command", "data"]
 ModeCause = Literal["dial", "escape", "no carrier", "drop", "hang", "registration", "restart"]
 # What the network's `link_changes` records for each way of leaving data mode; a restart names
@@ -119,6 +130,7 @@ class Modem:
         self.hung = False
         self._pwrkey_works = True
         self._restarts: list[ModemRestart] = []
+        self._power_changes: list[ModemPower] = []
         self.registered = True
         self._coverage = True
         self._function = 1
@@ -160,7 +172,8 @@ class Modem:
 
     @property
     def mode_changes(self) -> tuple[ModeChange, ...]:
-        """Each dial the modem answered, and each return to command mode, oldest first."""
+        """Each dial the modem answered, and each return to command mode, in the order the model
+        made them."""
         with self._lock:
             return tuple(self._mode_changes)
 
@@ -175,6 +188,13 @@ class Modem:
         """Each time a run of the modem ended, with what ended it."""
         with self._lock:
             return tuple(self._restarts)
+
+    @property
+    def power_changes(self) -> tuple[ModemPower, ...]:
+        """Each time the modem switched on or off, with what switched it, in the order the model
+        made them."""
+        with self._lock:
+            return tuple(self._power_changes)
 
     def signal(self, *, dbm: float) -> None:
         """Set the measured signal strength in dBm for subsequent CSQ queries."""
@@ -312,6 +332,8 @@ class Modem:
         # What the test says before the board's first instant is how the modem starts.
         if self.powered and t > 0:
             self._restarts.append(ModemRestart(Duration(t), cause))
+        if powered != self.powered and t > 0:
+            self._power_changes.append(ModemPower(Duration(t), powered, cause))
         self.powered = powered
         self.hung = False
         self._pwrkey_works = True

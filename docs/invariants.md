@@ -1100,6 +1100,22 @@ that references to its number keep their meaning.
     `tests/test_modem_model.py::test_a_pwrkey_restart_ends_data_mode_at_the_restart_s_instant`,
     `tests/test_modem_model.py::test_a_reset_restart_and_a_loss_in_command_mode`,
     `tests/test_modem_model.py::test_the_next_mode_change_is_a_condition_from_this_call`
+- **294.** `modem.power_changes` holds every time the modem switched on or off after the board's
+    first instant, with its cause, at a PWRKEY pulse's release plus 1 ms, or the test's instant
+    for `lose_power`, the board's supply, `power_off` and `power_on`, in the order the model made
+    them: a PWRKEY entry is in it from the pulse's release, 1 ms before its `at`. A
+    call or pulse that leaves the power as it was adds none, so a RESET restart and `power_on` on
+    a running modem add a restart and no power change, and the entries alternate between off and
+    on. `next_power_change` finds the first entry after its call, to its state when given, and
+    returns the same one at every poll.
+    `tests/test_modem_model.py::test_a_pwrkey_recovery_is_an_off_and_an_on_each_at_its_release_and_a_millisecond`,
+    `tests/test_modem_model.py::test_a_reset_restart_and_power_on_of_a_running_modem_change_no_power`,
+    `tests/test_modem_model.py::test_the_supply_s_loss_is_an_off_and_the_next_start_is_pwrkey_s`,
+    `tests/test_modem_model.py::test_the_test_s_power_calls_change_power_once_and_the_start_is_no_entry`,
+    `tests/test_modem_model.py::test_a_pulse_that_switches_nothing_is_no_entry`,
+    `tests/test_modem_model.py::test_the_next_power_change_is_a_condition_from_this_call`,
+    `tests/test_modem_recovery.py::test_recovers_a_hung_modem`,
+    `tests/test_modem_recovery.py::test_a_lost_supply_is_an_off_and_the_recovery_s_pulse_switches_the_modem_on`
 
 ## Flash contents
 

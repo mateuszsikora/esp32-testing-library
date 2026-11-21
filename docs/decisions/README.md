@@ -371,6 +371,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The boot next_boot returns has its uptime zero on request, and a held boot's zero is read again](harness.md#the-boot-next_boot-returns-has-its-uptime-zero-on-request-and-a-held-boots-zero-is-read-again) | `harness.md` | decided (#286) |
 | [The SPP peer ends nothing itself after the device closes the channel](harness.md#the-spp-peer-ends-nothing-itself-after-the-device-closes-the-channel) | `harness.md` | decided (#309) |
 | [A deep sleep is a history of its own beside boots, without the timer's due time](harness.md#a-deep-sleep-is-a-history-of-its-own-beside-boots-without-the-timers-due-time) | `harness.md` | decided (#308) |
+| [The modem's power changes are a history beside its restarts](harness.md#the-modems-power-changes-are-a-history-beside-its-restarts) | `harness.md` | decided (#311) |
 
 ## The runner crate and esp32sim
 

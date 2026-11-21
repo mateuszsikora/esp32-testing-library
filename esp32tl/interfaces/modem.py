@@ -20,6 +20,7 @@ from esp32tl.sources.model.modem import (
     Mode,
     ModeChange,
     ModemCommand,
+    ModemPower,
     ModemRestart,
 )
 from esp32tl.sources.model.modem import Modem as ModemModel
@@ -173,8 +174,38 @@ class Modem(Uart):
         return self.modem_model().restarts
 
     @property
+    def power_changes(self) -> tuple[ModemPower, ...]:
+        """Each time the selected model switched on or off, with what switched it, in the order the
+        model made them."""
+        return self.modem_model().power_changes
+
+    def next_power_change(self, powered: bool | None = None) -> Condition[ModemPower | None]:
+        """A described condition for the first power change after this call, or the first to
+        `powered`: True for on, False for off. A change the other way does not satisfy it, and a
+        later one to `powered` still can. The boundary is the changes there are now,
+        `power_changes` at this call; the condition consumes nothing, and returns the same change
+        each time it is asked."""
+        if powered is not None and not isinstance(powered, bool):
+            raise ValueError(
+                f"modem.next_power_change: powered is {powered!r}, not True, False or None"
+            )
+        model = self.modem_model()
+        find = FirstFrom(
+            lambda: model.power_changes,
+            len(model.power_changes),
+            lambda change: powered is None or change.powered == powered,
+        )
+        description = (
+            "the modem's next power change"
+            if powered is None
+            else f"the modem's next power-{'on' if powered else 'off'}"
+        )
+        return Condition(find, description)
+
+    @property
     def mode_changes(self) -> tuple[ModeChange, ...]:
-        """Each dial the selected model answered, and each return to command mode, oldest first."""
+        """Each dial the selected model answered, and each return to command mode, in the order
+        the model made them."""
         return self.modem_model().mode_changes
 
     def next_mode_change(self, mode: Mode | None = None) -> Condition[ModeChange | None]:
