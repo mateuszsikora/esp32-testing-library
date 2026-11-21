@@ -143,7 +143,9 @@ supply, nor see the chip's resets: `board.power_off()` skips the test with
 `serial: the backend cannot switch the board's power`, and `board.boots`, `board.boot`,
 `board.next_boot()`, `board.uptime_zero(boot)` and `board.wait_for_wake()` with
 `serial: the backend does not see the chip's resets`, at the line that asks, as an unsupported
-source does ([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)). An
+source does ([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)), and
+`board.sleeps` and `board.next_sleep()` with `serial: the backend does not see the chip's deep
+sleeps` ([waking from deep sleep](pytest-plugin-user.md#waking-from-deep-sleep)). An
 argument of the wrong type to `board.next_boot()` or `board.uptime_zero()` raises its `TypeError`
 first, as on esp32sim.
 

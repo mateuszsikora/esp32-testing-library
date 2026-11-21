@@ -38,6 +38,7 @@ from esp32tl.link.protocol import (
     SdFault,
     SdOp,
     Sender,
+    Sleep,
     Stats,
     Stop,
     Sync,
@@ -90,6 +91,9 @@ EVERY_MESSAGE: list[tuple[Sender, Message]] = [
     ("runner", Uptime(49_000_000, 48_000_000, 49_000_000)),
     ("runner", Uptime(1_000_000, 0, 0)),
     ("runner", Uptime(2_000_000, None, None)),
+    ("runner", Sleep(3_000_000, 2_000_000, 3_000_000, ("timer",))),
+    ("runner", Sleep(3_000_000, 2_000_000, 2_600_001, ("ext0", "timer"))),
+    ("runner", Sleep(3_000_000, 2_000_000, 3_000_000, ())),
     ("runner", Warn(1_000_000_000, "frm_err", "baud", port=1, pin=5, baud=115200, nbytes=3)),
     ("runner", Warn(1_000_000_000, "a kind of a later version", "detail")),
     (
@@ -221,6 +225,26 @@ def test_a_runner_hello_of_another_version_decodes_on_its_version_alone() -> Non
             "runner",
             b'{"type":"uptime","t":0,"earliest":5,"latest":4}',
             "uptime: latest is 4, before earliest 5",
+        ),
+        (
+            "runner",
+            b'{"type":"sleep","t":0,"earliest":5,"latest":4,"wakes":[]}',
+            "sleep: latest is 4, before earliest 5",
+        ),
+        (
+            "runner",
+            b'{"type":"sleep","t":0,"earliest":0,"latest":0,"wakes":["gpio"]}',
+            "sleep: wakes holds 'gpio', not one of ext0, ext1, timer, touch, ulp",
+        ),
+        (
+            "runner",
+            b'{"type":"sleep","t":0,"earliest":0,"latest":0,"wakes":["timer","timer"]}',
+            "sleep: wakes holds ['timer', 'timer'], a wake twice",
+        ),
+        (
+            "runner",
+            b'{"type":"sleep","t":0,"earliest":null,"latest":0,"wakes":[]}',
+            "sleep: no earliest",
         ),
         (
             "runner",

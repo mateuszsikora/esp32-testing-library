@@ -87,6 +87,10 @@ impl Target for esp32::Machine {
 /// keeps it with the rest of RTC_CNTL (`esp32/src/soc.rs`, `reboot`).
 pub(crate) const RESET_HINT: u32 = 0x3ff4_80b8;
 
+/// DEEPSLEEP_RESET, the cause of a wake from deep sleep (`esp_rom/esp32/include/esp32/rom/rtc.h`),
+/// which esp32sim's wake sets (`esp32/src/sleep.rs`, `wake`).
+const DEEPSLEEP_RESET: u32 = 5;
+
 /// Where the classic chip's SRAM and RTC memories are on the data bus, besides the DRAM, which
 /// ends at `esp32::bus::DRAM_HIGH` (`esp32/src/bus.rs`, `SocBus::memory`).
 const CACHE_RAM: u32 = 0x4007_0000;
@@ -105,6 +109,20 @@ pub(crate) mod rtc {
     /// WAKEUP_STATE, whose WAKEUP_ENA, `[21:11]`, has RTC_TIMER_TRIG_EN as its bit 3.
     pub const WAKEUP_ENA: u32 = 0x34;
     pub const TIMER_TRIG_EN: u32 = 1 << (11 + 3);
+    /// WAKEUP_ENA's bits for the sources a deep sleep wakes from, as ESP-IDF v5.5 names them in
+    /// `components/esp_hw_support/port/esp32/include/soc/rtc.h:584-594`: RTC_EXT0_TRIG_EN,
+    /// RTC_EXT1_TRIG_EN, RTC_TIMER_TRIG_EN, RTC_TOUCH_TRIG_EN and RTC_ULP_TRIG_EN. Its others,
+    /// GPIO, SDIO, Wi-Fi, the UARTs and Bluetooth, wake a light sleep only.
+    pub const WAKES: [(u32, crate::protocol::Wake); 5] = {
+        use crate::protocol::Wake;
+        [
+            (1 << 11, Wake::Ext0),
+            (1 << (11 + 1), Wake::Ext1),
+            (TIMER_TRIG_EN, Wake::Timer),
+            (1 << (11 + 8), Wake::Touch),
+            (1 << (11 + 9), Wake::Ulp),
+        ]
+    };
     /// DIG_PWC: DG_WRAP_PD_EN, bit 31, the digital domain powered down, which makes the sleep a
     /// deep one (`esp32/src/sleep.rs`, `enter_deep_sleep`).
     pub const DIG_PWC: u32 = 0x84;
@@ -164,6 +182,16 @@ pub(crate) const WAKE_MARGIN_TICKS: u64 = 2;
 /// The longest step of `sleep_until`, in bus cycles, about 9 s: `Bus::tick` takes a `u32` of CPU
 /// cycles, and the CPU's clock is at most the bus's.
 pub(crate) const SLEEP_STEP: u64 = 1 << 31;
+
+/// Whether the classic chip is in deep sleep: what esp32sim's `enter_deep_sleep` asks of the RTC
+/// registers, SLEEP_EN set with the digital domain powered down, and what its `peripheral_event`
+/// does to the cores then (`esp32/src/soc.rs`).
+fn in_deep_sleep(machine: &esp32::Machine) -> bool {
+    let rtc = &machine.bus.periph.rtc.0;
+    rtc.ram.read(rtc::STATE0) & 1 << 31 != 0
+        && rtc.ram.read(rtc::DIG_PWC) & 1 << 31 != 0
+        && machine.cores.iter().all(|c| c.waiting && c.intenable == 0)
+}
 
 /// Work around esp32sim 357b0e5's zeroed IO_MUX reset state on U0RXD.
 /// ESP32 TRM table 6.10-1 specifies reset configuration 3: input and pull-up enabled.
@@ -310,16 +338,28 @@ impl Guest for esp32::Machine {
         Ok(())
     }
     fn sleeps_through(&self) -> bool {
-        // what esp32sim's `enter_deep_sleep` asks of the RTC registers, and what its
-        // `peripheral_event` does to the cores then (`esp32/src/soc.rs`); a reset not yet taken
-        // ends the sleep, and the RTC watchdog counts through it, so a stage due in a long step
-        // would fire at the step's end, up to 9 s late
+        // a reset not yet taken ends the sleep, and the RTC watchdog counts through it, so a
+        // stage due in a long step would fire at the step's end, up to 9 s late
         let rtc = &self.bus.periph.rtc.0;
-        rtc.ram.read(rtc::STATE0) & 1 << 31 != 0
-            && rtc.ram.read(rtc::DIG_PWC) & 1 << 31 != 0
-            && self.cores.iter().all(|c| c.waiting && c.intenable == 0)
-            && !rtc.sw_reset
-            && rtc.ram.read(rtc::WDTCONFIG0) & 1 << 31 == 0
+        in_deep_sleep(self) && !rtc.sw_reset && rtc.ram.read(rtc::WDTCONFIG0) & 1 << 31 == 0
+    }
+    fn deep_sleep(&self) -> Option<Vec<crate::protocol::Wake>> {
+        // esp32sim's wake clears SLEEP_EN and asks for the reset, DEEPSLEEP_RESET, which the run
+        // loop takes after the slice; it leaves WAKEUP_ENA as the guest armed it
+        // (`esp32/src/sleep.rs`, `wake`)
+        let rtc = &self.bus.periph.rtc.0;
+        let woken = rtc.sw_reset && rtc.reset_cause == DEEPSLEEP_RESET;
+        if !in_deep_sleep(self) && !woken {
+            return None;
+        }
+        let armed = rtc.ram.read(rtc::WAKEUP_ENA);
+        Some(
+            rtc::WAKES
+                .iter()
+                .filter(|&&(bit, _)| armed & bit != 0)
+                .map(|&(_, wake)| wake)
+                .collect(),
+        )
     }
     fn sleep_until(&mut self, cycle: u64) {
         use emu_core::Bus;

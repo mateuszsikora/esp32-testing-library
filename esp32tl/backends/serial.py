@@ -35,7 +35,7 @@ from esp32tl.boards.capabilities import CapabilityError, Request
 from esp32tl.flash import FlashSnapshot, Namespaces
 from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
 from esp32tl.interfaces.bluetooth import Bluetooth
-from esp32tl.interfaces.board import Board, Boot
+from esp32tl.interfaces.board import Board, Boot, Sleep
 from esp32tl.interfaces.condition import waiting
 from esp32tl.interfaces.console import ConsoleLines
 from esp32tl.interfaces.gnss import Gnss
@@ -297,6 +297,10 @@ class Serial(Board):
     @property
     def boots(self) -> tuple[Boot, ...]:
         self._skip("serial: the backend does not see the chip's resets")
+
+    @property
+    def sleeps(self) -> tuple[Sleep, ...]:
+        self._skip("serial: the backend does not see the chip's deep sleeps")
 
     def power_off(self) -> None:
         self._skip("serial: the backend cannot switch the board's power")

@@ -599,6 +599,39 @@ pub fn uptime(t: u64, zero: Option<(u64, u64)>) -> String {
     format!(r#"{{"type":"uptime","t":{t},"earliest":{earliest},"latest":{latest}}}"#)
 }
 
+/// A wake source a deep sleep armed, by ESP-IDF's name for it (5.26): `esp_sleep_enable_*_wakeup`'s
+/// `*`, the sources a deep sleep of the classic chip can wake from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Wake {
+    Ext0,
+    Ext1,
+    Timer,
+    Touch,
+    Ulp,
+}
+
+impl Wake {
+    pub fn name(self) -> &'static str {
+        match self {
+            Wake::Ext0 => "ext0",
+            Wake::Ext1 => "ext1",
+            Wake::Timer => "timer",
+            Wake::Touch => "touch",
+            Wake::Ulp => "ulp",
+        }
+    }
+}
+
+/// The boot went into deep sleep no sooner than `earliest` and no later than `latest`, with
+/// `wakes` armed to wake it (5.26). Not an event: nothing answers it.
+pub fn sleep(t: u64, earliest: u64, latest: u64, wakes: &[Wake]) -> String {
+    let wakes: Vec<String> = wakes.iter().map(|w| format!(r#""{}""#, w.name())).collect();
+    format!(
+        r#"{{"type":"sleep","t":{t},"earliest":{earliest},"latest":{latest},"wakes":[{}]}}"#,
+        wakes.join(",")
+    )
+}
+
 pub fn console(t: u64, data: &[u8]) -> String {
     format!(r#"{{"type":"console","t":{t},"data":"{}"}}"#, base64(data))
 }

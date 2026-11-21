@@ -32,7 +32,8 @@ message goes out in the harness's answer to the turn the link is held at, or to 
 before the run reaches it, before what the interfaces send. Every `reset` the
 runner sends is kept in `resets`, in order, and given to `on_reset`. Where each boot's uptime
 counter counted zero (`uptime`) is kept in `uptimes`, by boot number, the runner's last word on
-each boot.
+each boot, and when each boot went into deep sleep (`sleep`) in `sleeps`, by boot number, in
+order; a second `sleep` in one boot is an error.
 
 What the runner reports of the SD card's fault rules (`sd_op`) goes to the same interface, which
 alone may send `sd_fault` and `sd_clear`.
@@ -86,6 +87,7 @@ from esp32tl.link.protocol import (
     SdClear,
     SdFault,
     SdOp,
+    Sleep,
     Stats,
     Stop,
     Sync,
@@ -351,6 +353,8 @@ class BoardLink:
         self.resets: list[Reset] = []
         # Where each boot's uptime counter counted zero, by boot number, as the runner last said.
         self.uptimes: dict[int, Uptime] = {}
+        # When each boot went into deep sleep, by boot number, in order: one per boot at most.
+        self.sleeps: dict[int, Sleep] = {}
         # The board's own inputs for the next turn: its supply switched, its EN pulsed.
         self._board_inputs: list[Power | ChipReset] = []
         # What the run told and what the harness found, read once `run` has returned.
@@ -551,6 +555,12 @@ class BoardLink:
         elif isinstance(message, Uptime):
             # the boot running when the runner saw it: the one the last reset started
             self.uptimes[len(self.resets) + 1] = message
+        elif isinstance(message, Sleep):
+            # the boot that went to sleep: its wake's reset comes after it, so a boot sleeps once
+            boot = len(self.resets) + 1
+            if boot in self.sleeps:
+                raise LinkError(f"the runner sent a second sleep in boot {boot}")
+            self.sleeps[boot] = message
         else:
             assert isinstance(message, Stats), message
         return []

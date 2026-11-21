@@ -37,6 +37,9 @@ SD_COUNT_MAX = 2**63 - 1
 # What an `sd_fault` applies to and what it does (5.20).
 SD_OPS = ("read", "write", "erase")
 SD_ACTIONS = ("error", "delay", "observe")
+# What a deep sleep can have armed to wake it, by ESP-IDF's names, in the order `sleep` gives them
+# (5.26).
+WAKES = ("ext0", "ext1", "timer", "touch", "ulp")
 
 Sender = Literal["runner", "harness"]
 
@@ -186,6 +189,19 @@ class Uptime:
     t: int
     earliest: int | None
     latest: int | None
+
+
+@dataclass(frozen=True)
+class Sleep:
+    """The boot went into deep sleep no sooner than `earliest` and no later than `latest`, with
+    `wakes` armed to wake it, as the runner saw it at `t` (5.26). Not an event: nothing answers
+    it."""
+
+    TYPE: ClassVar[str] = "sleep"
+    t: int
+    earliest: int
+    latest: int
+    wakes: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -458,6 +474,7 @@ RunnerMessage = (
     | FlashDumpAck
     | FlashWriteAck
     | Uptime
+    | Sleep
     | Stats
 )
 Input = (
@@ -740,6 +757,19 @@ def _uptime(f: Fields) -> Uptime:
     return Uptime(f.integer("t"), earliest, latest)
 
 
+def _sleep(f: Fields) -> Sleep:
+    earliest, latest = f.integer("earliest"), f.integer("latest")
+    if latest < earliest:
+        raise ProtocolError(f"latest is {latest}, before earliest {earliest}")
+    wakes = f.array("wakes")
+    for wake in wakes:
+        if wake not in WAKES:
+            raise ProtocolError(f"wakes holds {wake!r}, not one of {', '.join(WAKES)}")
+    if len(set(wakes)) != len(wakes):
+        raise ProtocolError(f"wakes holds {wakes!r}, a wake twice")
+    return Sleep(f.integer("t"), earliest, latest, tuple(wakes))
+
+
 def _sd_op(f: Fields) -> SdOp:
     blocks = f.pair("blocks")
     if blocks is None:
@@ -847,6 +877,7 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
         "flash_dump_ack": lambda f: FlashDumpAck(f.integer("t"), f.opt_string("error")),
         "flash_write_ack": lambda f: FlashWriteAck(f.integer("t"), f.opt_string("error")),
         "uptime": _uptime,
+        "sleep": _sleep,
         "stats": _stats,
     },
     "harness": {

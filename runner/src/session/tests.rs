@@ -118,9 +118,9 @@ struct FakeGuest {
     /// with the cycle.
     hci: Option<hci::Shared>,
     hci_read: Vec<(u64, Option<Vec<u8>>)>,
-    /// From when to when the chip is in deep sleep, if it ever is, and whether the run loop may
-    /// step through it.
-    sleep: Option<(u64, u64)>,
+    /// From when to when the chip is in deep sleep, each time it is, with what it armed to wake
+    /// it, and whether the run loop may step through it. A reset ends the sleep it comes in.
+    sleep: Vec<(u64, u64, Vec<protocol::Wake>)>,
     steppable: bool,
     /// Where each `sleep_until` started and where it left the clock.
     skips: Vec<(u64, u64)>,
@@ -172,7 +172,7 @@ impl FakeGuest {
             flash_syncs: Vec::new(),
             hci: None,
             hci_read: Vec::new(),
-            sleep: None,
+            sleep: Vec::new(),
             steppable: true,
             skips: Vec::new(),
             usb: None,
@@ -213,9 +213,21 @@ impl FakeGuest {
     }
 
     /// In deep sleep from `from` to `to`, where its script should wake it with a reset.
-    fn asleep_between(mut self, from: u64, to: u64) -> Self {
-        self.sleep = Some((from, to));
+    fn asleep_between(self, from: u64, to: u64) -> Self {
+        self.asleep_with(from, to, &[protocol::Wake::Timer])
+    }
+
+    /// In deep sleep from `from` to `to`, too, with `wakes` armed.
+    fn asleep_with(mut self, from: u64, to: u64, wakes: &[protocol::Wake]) -> Self {
+        self.sleep.push((from, to, wakes.to_vec()));
         self
+    }
+
+    /// The sleep the chip is in now, if it is: from its start to its wake, which is in it.
+    fn asleep(&self) -> Option<&(u64, u64, Vec<protocol::Wake>)> {
+        self.sleep
+            .iter()
+            .find(|(from, to, _)| (*from..=*to).contains(&self.now))
     }
 
     /// Asleep, but with something in the RTC, as its watchdog, that keeps the sleep from being
@@ -328,6 +340,7 @@ impl Guest for FakeGuest {
         self.fifo = Default::default();
         self.drive = (0, 0);
         self.uptime = Uptime::Stopped;
+        self.sleep.retain(|&(from, _, _)| from > self.now);
         cause
     }
     fn reset_hint(&mut self) -> u32 {
@@ -343,6 +356,7 @@ impl Guest for FakeGuest {
         self.fifo = Default::default();
         self.drive = (0, 0);
         self.uptime = Uptime::Stopped;
+        self.sleep.retain(|&(from, _, _)| from > self.now);
         1
     }
     fn idle_until(&mut self, cycle: u64) {
@@ -417,18 +431,19 @@ impl Guest for FakeGuest {
         self.bt_inits.unwrap_or(0)
     }
     fn sleeps_through(&self) -> bool {
-        self.steppable
-            && self
-                .sleep
-                .is_some_and(|(from, to)| (from..to).contains(&self.now))
+        self.steppable && self.asleep().is_some_and(|&(_, to, _)| self.now < to)
     }
     fn sleep_until(&mut self, cycle: u64) {
         // as esp32sim's machine does: short of the wake, which its own rounds bring
-        if let Some((_, to)) = self.sleep.filter(|_| self.sleeps_through()) {
+        if self.sleeps_through() {
+            let (_, to, _) = *self.asleep().expect("asleep");
             let from = self.now;
             self.now = cycle.min(to - 1);
             self.skips.push((from, self.now));
         }
+    }
+    fn deep_sleep(&self) -> Option<Vec<protocol::Wake>> {
+        self.asleep().map(|(_, _, wakes)| wakes.clone())
     }
 }
 
@@ -2447,6 +2462,11 @@ fn on_the_emulator_no_pad_is_driven_after_a_chip_reset() {
 /// deep sleep with its RTC timer armed for that many slow ticks from power-on, as ESP-IDF arms it
 /// (esp32sim's `esp32/src/sleep.rs` tests); the first millisecond parks the cores.
 fn waiting_machine(alarm: Option<u64>) -> esp32::Machine {
+    waiting_machine_armed(alarm, rtc::TIMER_TRIG_EN)
+}
+
+/// `waiting_machine`, with `wakeup_ena` in WAKEUP_STATE in place of RTC_TIMER_TRIG_EN alone.
+fn waiting_machine_armed(alarm: Option<u64>, wakeup_ena: u32) -> esp32::Machine {
     use emu_core::Bus;
     use esp_soc::Soc;
     const WAIT: [u8; 6] = [0x00, 0x70, 0x00, 0x46, 0xfe, 0xff];
@@ -2458,7 +2478,7 @@ fn waiting_machine(alarm: Option<u64>) -> esp32::Machine {
         for (addr, value) in [
             (0x3ff4_8004, target as u32),         // RTC_CNTL_SLP_TIMER0_REG
             (0x3ff4_8008, (target >> 32) as u32), // RTC_CNTL_SLP_TIMER1_REG
-            (0x3ff4_8038, 1 << (11 + 3)),         // WAKEUP_ENA: RTC_TIMER_TRIG_EN
+            (0x3ff4_8038, wakeup_ena),            // WAKEUP_ENA
             (0x3ff4_8084, 1 << 31),               // DIG_PWC: DG_WRAP_PD_EN
             (0x3ff4_8018, 1 << 31),               // STATE0: SLEEP_EN
         ] {
@@ -2533,6 +2553,44 @@ fn on_the_emulator_only_a_deep_sleep_is_skipped() {
     forever.sleep_until(60 * SECOND);
     assert!(forever.bus.cycles >= 60 * SECOND && forever.bus.cycles < 60 * SECOND + 16);
     assert!(forever.sleeps_through());
+}
+
+/// On the emulator: `deep_sleep` names what the chip armed, the sleep its RTC watchdog counts
+/// through as well, and still does once the wake has asked for its reset, until the run loop takes
+/// it; an awake chip has none.
+#[test]
+fn on_the_emulator_a_deep_sleep_says_what_it_armed_until_its_wake_s_reset() {
+    use emu_core::Bus;
+    use protocol::Wake::{Ext0, Ext1, Timer, Touch, Ulp};
+    assert_eq!(waiting_machine(None).deep_sleep(), None);
+    // a target never written: asleep for ever, whatever is armed
+    let ext0 = 1 << 11;
+    for (armed, wakes) in [
+        (rtc::TIMER_TRIG_EN, vec![Timer]),
+        (ext0, vec![Ext0]),
+        (ext0 | rtc::TIMER_TRIG_EN, vec![Ext0, Timer]),
+        (0x7ff << 11, vec![Ext0, Ext1, Timer, Touch, Ulp]),
+        // GPIO, SDIO and the UARTs wake a light sleep only
+        (1 << (11 + 2) | 1 << (11 + 4) | 1 << (11 + 6), vec![]),
+    ] {
+        let m = waiting_machine_armed(Some(0), armed);
+        assert_eq!(m.deep_sleep(), Some(wakes), "WAKEUP_ENA {armed:#x}");
+    }
+
+    let mut watched = waiting_machine(Some(0));
+    watched.bus.write32(0x3ff4_80a4, 0x50d8_3aa1).unwrap(); // WDTWPROTECT: unlocked
+    watched.bus.write32(0x3ff4_808c, 1 << 31).unwrap(); // WDTCONFIG0: enabled
+    assert!(!watched.sleeps_through());
+    assert_eq!(watched.deep_sleep(), Some(vec![Timer]));
+
+    let mut woken = waiting_machine(Some(MS_CYCLES / rtc::SLOW_TICK + 10));
+    assert!(matches!(
+        Guest::run_until(&mut woken, SECOND),
+        Stop::SwReset
+    ));
+    assert_eq!(woken.deep_sleep(), Some(vec![Timer]));
+    Guest::chip_reset(&mut woken);
+    assert_eq!(woken.deep_sleep(), None);
 }
 
 /// A guest with a Wi-Fi station: it sends the scripted Ethernet frames at their cycles into the
@@ -3016,6 +3074,78 @@ fn a_deep_sleep_without_a_wake_goes_on_to_the_block_point() {
     );
     let syncs: Vec<u64> = r.peer.of("sync").iter().map(|m| num(m, "t")).collect();
     assert!(syncs.contains(&(5_000 * MS)), "{syncs:?}");
+}
+
+/// The `sleep` messages of a run, as `t`, `earliest`, `latest` and the names of the wakes.
+fn sleeps(peer: &FakePeer) -> Vec<(u64, u64, u64, Vec<String>)> {
+    peer.of("sleep")
+        .iter()
+        .map(|m| {
+            let wakes = match m.get("wakes") {
+                Some(Json::Arr(wakes)) => wakes
+                    .iter()
+                    .map(|w| w.as_str().expect("a wake's name").to_owned())
+                    .collect(),
+                other => panic!("wakes is {other:?}"),
+            };
+            (num(m, "t"), num(m, "earliest"), num(m, "latest"), wakes)
+        })
+        .collect()
+}
+
+#[test]
+fn each_deep_sleep_is_sent_once_between_the_boundary_before_and_the_one_that_saw_it() {
+    use protocol::Wake::{Ext0, Timer};
+    let us = |us: u64| cycles(us * 1000);
+    let guest = FakeGuest::new(vec![
+        (us(5_000), Act::Reset(5)),
+        (us(9_000), Act::Reset(5)),
+        (us(13_000), Act::Reset(5)),
+        (us(15_600), Act::Reset(5)),
+    ])
+    .asleep_with(us(2_500), us(5_000), &[Timer])
+    .asleep_with(us(7_500), us(9_000), &[Ext0])
+    .asleep_with(us(11_500), us(13_000), &[Ext0, Timer])
+    // asleep and awake again within one slice: the reset of its wake says it
+    .asleep_with(us(15_200), us(15_600), &[Timer]);
+    let r = run(0.02, guest, FakePeer::new(&[], idle(None, None)));
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let names = |wakes: &[&str]| wakes.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+    let ms = |ms: u64| ms * MS;
+    assert_eq!(
+        sleeps(&r.peer),
+        [
+            (ms(3), ms(2), ms(3), names(&["timer"])),
+            (ms(8), ms(7), ms(8), names(&["ext0"])),
+            (ms(12), ms(11), ms(12), names(&["ext0", "timer"])),
+            (15_600_000, ms(15), 15_600_000, names(&["timer"])),
+        ]
+    );
+    // each before the reset of its wake, and none an event
+    let order: Vec<&str> = r
+        .peer
+        .types()
+        .into_iter()
+        .filter(|t| matches!(*t, "sleep" | "reset"))
+        .collect();
+    assert_eq!(order, ["sleep", "reset"].repeat(4));
+    assert!(r.peer.of("sleep").iter().all(|m| m.get("seq").is_none()));
+}
+
+#[test]
+fn a_deep_sleep_the_rtc_watchdog_counts_through_is_a_sleep_too() {
+    let us = |us: u64| cycles(us * 1000);
+    let guest = FakeGuest::new(vec![(us(6_000), Act::Reset(5))])
+        .asleep_with(us(2_500), us(6_000), &[protocol::Wake::Timer])
+        .not_steppable();
+    let r = run(0.01, guest, FakePeer::new(&[], idle(None, None)));
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    assert!(r.guest.skips.is_empty(), "{:?}", r.guest.skips);
+    // the boundaries of every millisecond see it, and the first alone says so
+    assert_eq!(
+        sleeps(&r.peer),
+        [(3 * MS, 2 * MS, 3 * MS, vec!["timer".to_owned()])]
+    );
 }
 
 #[test]

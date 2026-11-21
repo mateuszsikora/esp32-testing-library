@@ -169,6 +169,20 @@ class Boot:
         return reset_reason(self.cause)
 
 
+@dataclass(frozen=True)
+class Sleep:
+    """One deep sleep of the chip: the number of the `boot` that went into it, as in
+    `board.boots`, and the board's time it began at, no sooner than `earliest` and no later than
+    `latest`. `wakes` is what the firmware armed to wake it, by ESP-IDF's names for the sources a
+    deep sleep wakes from: `"ext0"`, `"ext1"`, `"timer"`, `"touch"` and `"ulp"`. The wake is the
+    next boot, a `DEEPSLEEP_RESET`: for a timer armed for `d`, `next.at - latest` is about `d`."""
+
+    boot: int
+    earliest: Duration
+    latest: Duration
+    wakes: frozenset[str]
+
+
 def reset_reason(cause: int) -> str:
     """The ROM's name for reset `cause`, as `POWERON_RESET`; `reset cause {cause}` for one
     `RESET_REASONS` does not name."""
@@ -320,6 +334,20 @@ class Board(ABC):
                 f" is not one of this board's {len(boots)} boots"
             )
         return boots[boot.number - 1].uptime_zero
+
+    @property
+    @abstractmethod
+    def sleeps(self) -> tuple[Sleep, ...]:
+        """The chip's deep sleeps, oldest first: at most one per boot, since the wake is a
+        reset."""
+
+    def next_sleep(self) -> Condition[Sleep | None]:
+        """A described condition for the first deep sleep after this call. The boundary is the
+        sleeps there are now, `sleeps` at this call; the condition consumes nothing, and returns
+        the same sleep each time it is asked."""
+        return Condition(
+            FirstFrom(lambda: self.sleeps, len(self.sleeps), lambda _: True), "the next deep sleep"
+        )
 
     @property
     @abstractmethod

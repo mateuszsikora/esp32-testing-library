@@ -183,6 +183,7 @@ Every wait is on the board's clock, and every limit a test states is part of wha
 | A pin | `buzzer = board.lines.output("alarm.buzzer")`, then `board.wait_until(buzzer.is_on, within=seconds(2))` | `True` |
 | A message at the broker | `board.wait_until(broker.next_message("tracker/position"), within=seconds(60))` | The message, with `at` |
 | The wake from a deep sleep | `board.wait_for_wake(within=minutes(35))` | The wake's `Boot` |
+| The start of a deep sleep | `board.wait_until(board.next_sleep(), within=seconds(2))` | The `Sleep`, with `earliest`, `latest` and `wakes` |
 | The boot after a reset or a power cycle | `booted = board.next_boot(POWERON_RESET)` before `board.reset()`, then `board.wait_until(booted, within=seconds(1))` | The `Boot` |
 | Anything else | `board.wait_until(lambda: ..., within=...)`, any function of no arguments | What it returned, once true |
 | Anything else, in your words | `board.wait_until(condition(find, "a trip/end from the device"), within=...)`, with `from esp32tl import condition` | What `find` returned, once true |
@@ -195,7 +196,9 @@ Every wait is on the board's clock, and every limit a test states is part of wha
   once awake. A restart or a watchdog in its place fails the test, and so does a chip that never
   wakes ([waking from deep sleep](../features/pytest-plugin-user.md#waking-from-deep-sleep)). The
   [periodic wake](../../examples/periodic_wake/tests/test_periodic_wake.py) runs a day of
-  15-minute sleeps that way in seconds.
+  15-minute sleeps that way in seconds. To check the interval it armed, take the sleep from
+  `board.sleeps`, or wait on `board.next_sleep()`: `wake.at - sleep.latest` is the time it slept,
+  where the last line before the sleep comes some unknown time before it.
 - A `next_*` condition, of the network or `board.next_boot()`, sees only what happens after the
   call that makes it, so make it before the action that causes the event, as
   `test_reports_on_connect` in the position tracker does with

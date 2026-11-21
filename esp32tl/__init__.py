@@ -73,6 +73,7 @@ from esp32tl.interfaces.board import POWERON_RESET as POWERON_RESET
 from esp32tl.interfaces.board import RESET_REASONS as RESET_REASONS
 from esp32tl.interfaces.board import Board as Board
 from esp32tl.interfaces.board import Boot as Boot
+from esp32tl.interfaces.board import Sleep as Sleep
 from esp32tl.interfaces.board import UptimeZero as UptimeZero
 from esp32tl.interfaces.card_cache import CardCache as CardCache
 from esp32tl.interfaces.condition import Condition as Condition
@@ -283,6 +284,7 @@ __all__ = [
     "SdCard",
     "SdCardRoute",
     "SessionState",
+    "Sleep",
     "Source",
     "SourceError",
     "SppPeer",

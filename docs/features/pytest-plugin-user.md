@@ -416,7 +416,7 @@ A test imports from three modules, and from no other:
 
 | Module | What it holds |
 |---|---|
-| `esp32tl` | Every class, exception and constant a test names: the board (`Board`, `Boot`, `UptimeZero`, `POWERON_RESET`, `DEEPSLEEP_RESET`, `RESET_REASONS`, `Condition`, `condition`), its profile (`BoardProfile`, `UartRoute`, `LineRoute`, `SdCardRoute`), the interfaces and what they return (`Console`, `ConsoleLine`, `Uart`, `Gnss`, `Modem`, `Lines`, `OutputLine`, `LineEvent`, `SdCard`, `CardImage`, `Wifi`, `EmulatedMacs` and `emulated_macs`, `Bluetooth`, `Tap`, ...), the sources and models (`Replay`, `Real`, `Model`, `ReactiveModel`, `IdleFramedModel`, `Timed`, `GnssReceiver`, `ModemModel`, `ModemCommand`, `ModemRestart`, `ModeChange`, `Protocol`, `AT`, `PMTK`, `UBX`, `GNSS`), the build and the flash (`Build`, `FlashSnapshot`, `Namespaces`, `Typed`, `u8` to `i64`), the network and its services (`Internet`, `LinkChange`, `Broker`, `Message`, `MqttClient`, `ConnectionEnd`, `TEST_CLIENT`, `Publication`, `HttpServer`, `HttpRequest`, `NtpExchange`, `DnsQuestion`, `TcpConnection`, `CertificateAuthority`, ...), Bluetooth (`Air`, `SppPeer`, `BluetoothDevice`, `ChannelEvent`, `WrittenLine`, `Refusal`, `Pairing`, `BlePeripheral`, `BleCentral`, `BleDevice`, `GattService`, `GattCharacteristic`, `Advertisement`, `LeConnection`, `Disconnection`, `GattRead`, `GattWrite`, `Notification`, `Subscription`, `LePairing`, `Discovery`, `DiscoveredService`, `DiscoveredCharacteristic`, `LeEvent`, ...) and the exceptions (`NeverHappened`, `RunEnded`, `BoardOff`, `SourceError`, `BackendError`, `PeerError`, `AirError`, `BleError`, `ConnectionEnded`, `NotReachable`, ...). `esp32tl.__all__` lists them all |
+| `esp32tl` | Every class, exception and constant a test names: the board (`Board`, `Boot`, `UptimeZero`, `Sleep`, `POWERON_RESET`, `DEEPSLEEP_RESET`, `RESET_REASONS`, `Condition`, `condition`), its profile (`BoardProfile`, `UartRoute`, `LineRoute`, `SdCardRoute`), the interfaces and what they return (`Console`, `ConsoleLine`, `Uart`, `Gnss`, `Modem`, `Lines`, `OutputLine`, `LineEvent`, `SdCard`, `CardImage`, `Wifi`, `EmulatedMacs` and `emulated_macs`, `Bluetooth`, `Tap`, ...), the sources and models (`Replay`, `Real`, `Model`, `ReactiveModel`, `IdleFramedModel`, `Timed`, `GnssReceiver`, `ModemModel`, `ModemCommand`, `ModemRestart`, `ModeChange`, `Protocol`, `AT`, `PMTK`, `UBX`, `GNSS`), the build and the flash (`Build`, `FlashSnapshot`, `Namespaces`, `Typed`, `u8` to `i64`), the network and its services (`Internet`, `LinkChange`, `Broker`, `Message`, `MqttClient`, `ConnectionEnd`, `TEST_CLIENT`, `Publication`, `HttpServer`, `HttpRequest`, `NtpExchange`, `DnsQuestion`, `TcpConnection`, `CertificateAuthority`, ...), Bluetooth (`Air`, `SppPeer`, `BluetoothDevice`, `ChannelEvent`, `WrittenLine`, `Refusal`, `Pairing`, `BlePeripheral`, `BleCentral`, `BleDevice`, `GattService`, `GattCharacteristic`, `Advertisement`, `LeConnection`, `Disconnection`, `GattRead`, `GattWrite`, `Notification`, `Subscription`, `LePairing`, `Discovery`, `DiscoveredService`, `DiscoveredCharacteristic`, `LeEvent`, ...) and the exceptions (`NeverHappened`, `RunEnded`, `BoardOff`, `SourceError`, `BackendError`, `PeerError`, `AirError`, `BleError`, `ConnectionEnded`, `NotReachable`, ...). `esp32tl.__all__` lists them all |
 | `esp32tl.units` | The units: `Duration`, `Speed`, `Distance`, `Rate`, `Heading`, `Position`, their constructors (`ms`, `seconds`, `km_h`, `m`, ...), the compass points and `about` ([units](models-user.md#units)) |
 | `esp32tl.recording` | The recording format: reading and writing a recording, and its `Recording`, `Header`, `Event` and `ClockSwitch` ([the recording format](../recording-format.md)) |
 
@@ -480,8 +480,9 @@ For esp32sim:
   `__qualname__`, and otherwise by its qualified name:
   `the condition test_x.<locals>.<lambda> did not happen within 2 s: waited from 10 s to 12 s of the board's time`.
 - `board.wait_for_wake(within=duration)` lets the board run to the chip's next boot, which must be
-  a wake from deep sleep, and returns its `Boot`
-  ([waking from deep sleep](#waking-from-deep-sleep)).
+  a wake from deep sleep, and returns its `Boot`; `board.sleeps` are the chip's deep sleeps, when
+  each began and what it armed to wake it, and `board.next_sleep()` a described condition for the
+  next one ([waking from deep sleep](#waking-from-deep-sleep)).
 - `board.next_boot(cause=None, *, uptime_zero=False)` is a [described condition](#described-conditions)
   for the chip's next boot, of any cause or of `cause` only, with `uptime_zero=True` only once its
   `uptime_zero` is known, for `board.wait_until`; `board.uptime_zero(boot)` is a held `Boot`'s
@@ -786,7 +787,9 @@ def test_the_count_survives_a_power_cut(board: Board):
   ([the decision](../decisions/harness.md#the-next-boot-is-a-condition-the-test-makes-reset-and-power_on-return-nothing)).
   For a wake from deep sleep use `board.wait_for_wake`, which takes no turn of the link through
   the sleep and fails on a boot that is no wake; `board.next_boot(DEEPSLEEP_RESET)` would be asked
-  every 100 ms of the sleep and pass over other boots.
+  every 100 ms of the sleep and pass over other boots. The sleep before the wake is in
+  `board.sleeps` ([waking from deep sleep](#waking-from-deep-sleep)): `wake.at` less the sleep's
+  `latest` is the time the chip slept.
 - Once the backend has the run's end, `board.reset()`, `board.power_off()` and
   `board.power_on()` raise `RunEnded` without waiting, as a wait does, and change nothing. In the
   moment between the runner's exit and the backend learning of it, a call still goes into the
@@ -832,8 +835,8 @@ a sentence that was on the line when the chip reset or the power went. Every int
 profile is on the board's supply ([board profiles](board-profiles-user.md#the-profiles-esp32tl-ships)).
 
 On [serial](serial-backend-user.md#power-on-time-and-console), `board.reset()` pulses EN through
-the adapter, and `board.power_off()`, `board.boots`, `board.next_boot()` and
-`board.wait_for_wake()` skip the test.
+the adapter, and `board.power_off()`, `board.boots`, `board.next_boot()`,
+`board.wait_for_wake()`, `board.sleeps` and `board.next_sleep()` skip the test.
 
 `console` is the firmware's console, read and written on the board's clock: its UART0, or the
 chip's USB-Serial/JTAG controller on a board profile with `console = "usb-serial-jtag"`
@@ -1350,8 +1353,56 @@ def test_reports_after_its_sleep(board: Board):
   `BoardOff: the board is off; call board.power_on() first`, and after `power_off()`
   `BoardOff: the board is off: board.wait_for_wake() waits for a board that is on`.
 - ESP-IDF's `system/deep_sleep` arms EXT1 on two pins and two touch pads beside its timer, and on
-  esp32sim only the timer wakes it ([`deep_sleep`](validation-firmware-user.md#deep_sleep)).
-  TODO(owner): whether esp32sim wakes the chip on a GPIO or a touch pad at all is not checked.
+  esp32sim only the timer wakes it ([`deep_sleep`](validation-firmware-user.md#deep_sleep)):
+  esp32sim wakes a deep sleep on its RTC timer and on EXT0 only (`timer_wake` and `ext0_wake` in
+  its `esp32/src/sleep.rs`), not on EXT1, a touch pad or the ULP.
+
+When each sleep began, and what the firmware armed to wake it, is in `board.sleeps`, so a test can
+check the interval the firmware armed rather than infer the sleep from the last line it printed,
+which comes some time before it:
+
+```python
+from esp32tl import Board
+from esp32tl.units import ms, seconds
+
+
+def test_sleeps_for_the_two_seconds_it_armed(board: Board):
+    board.power_on()
+    sleep = board.wait_until(board.next_sleep(), within=seconds(1))
+    assert sleep.wakes == {"timer"}
+    wake = board.wait_for_wake(within=seconds(3))
+    assert seconds(2) - ms(2) <= wake.at - sleep.latest <= seconds(2) + ms(1)
+```
+
+- `board.sleeps` are the chip's deep sleeps, oldest first, a `tuple` of `Sleep`s (from `esp32tl`),
+  at most one per boot, since the wake is a reset. A `Sleep` is a frozen record: `boot`, the
+  `number` of the boot that went to sleep, as in `board.boots`; `earliest` and `latest`, the
+  `Duration`s between which the sleep began on the board's clock, at most 1 ms apart; and `wakes`,
+  a `frozenset` of what the firmware armed, by ESP-IDF's names: `"ext0"`, `"ext1"`, `"timer"`,
+  `"touch"` and `"ulp"`, empty for a sleep that armed none of them. The wake, when it comes, is
+  the next boot, `board.boots[sleep.boot]`, a `DEEPSLEEP_RESET`. For a timer wake, `wake.at -
+  sleep.latest` is the interval `d` the firmware armed, give or take what ESP-IDF and the
+  emulator add. ESP-IDF counts the interval from `esp_deep_sleep_start()`, not from
+  `esp_sleep_enable_timer_wakeup()`, which only keeps it, so what the firmware does between the two
+  changes nothing; it takes a fixed `DEEP_SLEEP_TIME_OVERHEAD_US` off it, `250 + 100 * 240 /
+  CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ` µs, 400 µs at the default 160 MHz
+  (`components/esp_hw_support/sleep_modes.c`, the same in ESP-IDF v5.3.6 and v5.5.5). The sleep
+  begins somewhat after that count starts, up to 1 ms before `latest`, and the chip's RTC runs some
+  200 to 250 ppm slow on esp32sim, which makes a sleep late by as much
+  ([`tests/test_deep_sleep.py`](../../tests/test_deep_sleep.py)). So `wake.at - sleep.latest` lies
+  between about `d - 0.4 ms - 1 ms` and `d` plus the RTC's lag, as the example above checks with a
+  margin. A sleep armed for
+  EXT1, touch or the ULP alone is recorded with what it armed and never wakes on esp32sim. A
+  sleep with the RTC watchdog on is a sleep too.
+- `board.next_sleep()` is a [described condition](#described-conditions), a
+  `Condition[Sleep | None]`, for the first sleep after the call. It consumes nothing, and returns
+  the same `Sleep` each time it is asked. A timeout names it: `NeverHappened: the next deep sleep
+  did not happen within 2 s: waited from …`.
+- Before the first `power_on()` both raise `BoardOff` as `board.boots` does. Only the classic
+  ESP32's sleeps are recorded on esp32sim: the other chips sleep, nothing wakes them, and
+  `board.sleeps` stays empty ([esp32sim
+  backend](esp32sim-backend-user.md#chips-other-than-the-classic-esp32)). Serial skips both: the
+  backend does not see the chip's deep sleeps.
 
 ### Named output conditions
 

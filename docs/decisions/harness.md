@@ -5416,3 +5416,42 @@ until a capture of a real device shows one doing so, and when; and a public hist
 channel's openings and closes (`SppPeer.channels`, one frozen record per opening with its open and
 close times and what closed it: the device's DISC, the link's end or `switch_off`), replacing the
 private `_openings` and `_closed`, until a test needs more than `is_open`/`is_closed` and the tap.
+
+## A deep sleep is a history of its own beside boots, without the timer's due time
+
+Status: decided (#308)
+
+A test saw the wake from a deep sleep, a `Boot` with `DEEPSLEEP_RESET`, but not the sleep: to check
+the interval a firmware armed it had to take the sleep's start from the last thing the firmware did
+before it, a console line or a line's last change, which comes some unknown time before
+`esp_deep_sleep_start()` enters the sleep, and assert the interval with a tolerance of a second or
+more. The runner now sends `sleep` at the first slice boundary that finds the classic chip asleep
+([protocol 5.26](../protocol.md#526-sleep-ext-308)), with the boundary before it, at most 1 ms
+apart, and the wake sources the firmware armed by ESP-IDF's names, read from `WAKEUP_ENA`; a sleep
+that its wake ends within the same slice is sent at the wake's reset. The harness keeps them as
+`board.sleeps`, a tuple of frozen `Sleep(boot, earliest, latest, wakes)` records, oldest first, and
+`board.next_sleep()` is the `next_*` condition for the next one ([A condition's shape says what it
+waits for](#a-conditions-shape-says-what-it-waits-for)). `wake.at - sleep.latest` is then the time
+the chip slept, to within the millisecond between two boundaries.
+
+The record has no due time of the RTC timer: the wake's `Boot.at` gives it, since the wake comes at
+the alarm within one of esp32sim's rounds ([A deep sleep runs in long steps of the RTC, to just
+short of its alarm](runner.md#a-deep-sleep-runs-in-long-steps-of-the-rtc-to-just-short-of-its-alarm)),
+and a test that asserts on the interval wants the time the chip slept, not what the register says.
+`wakes` says what was armed, also the sources esp32sim does not wake on, EXT1, touch and the ULP, so
+that a test can check what the firmware asked for; WAKEUP_ENA's light-sleep bits are left out. A
+sleep with the RTC watchdog on is a sleep too, though the runner does not step through it, and the
+detection does not depend on `--realtime`. After a reset other than the wake ends a sleep, as the
+RTC watchdog's, esp32sim leaves `SLEEP_EN` and `DG_WRAP_PD_EN` set, and only the cores' clause, both
+waiting with no interrupt enabled, keeps the next boot from counting as asleep; the runner leaves
+the bit as it is ([runner](../features/runner-technical.md#when-each-boot-goes-into-deep-sleep)).
+
+**Rejected:** a link from `Boot` to its sleep, `Boot.slept`, because `Boot` is the record of a
+reset, and a boot that never sleeps has nothing to put there: the history alone gives the same
+with `board.boots[sleep.boot]` for the wake, and needs no field outside `Boot`'s comparison, as
+`uptime_zero` is. Also rejected: sending the timer's due time (`SLP_TIMER0`/`SLP_TIMER1`), because
+the wake's reset already gives it, and a field that is the wake's time less a round would invite
+asserting on the register instead of on what happened. Also rejected: placing the entry by an MMIO
+observer on the `SLEEP_EN` write, for the reason `uptime` rejected one, that it turns off esp32sim's
+round batching and virtual quanta for the whole run, and shorter slices before a sleep, because the
+runner cannot tell a sleep is coming.

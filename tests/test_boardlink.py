@@ -34,6 +34,7 @@ from esp32tl.link.protocol import (
     Reset,
     RunnerHello,
     RunnerMessage,
+    Sleep,
     Stats,
     Stop,
     Sync,
@@ -219,6 +220,10 @@ def test_wait_acknowledges_the_last_event_before_the_sync() -> None:
             "the runner sent console at 9 ns after a message at 10 ns",
         ),
         ([HELLO], "the runner sent a second hello"),
+        (
+            [Sleep(10, 0, 10, ("timer",)), Sleep(20, 10, 20, ())],
+            "the runner sent a second sleep in boot 1",
+        ),
     ],
 )
 def test_a_runner_that_breaks_the_protocol_is_stopped_at_its_next_turn(
@@ -1090,6 +1095,17 @@ def test_each_boot_s_uptime_zero_is_the_runner_s_last_word_on_the_boot_it_came_i
     # the runner no longer knows where boot 3's counter counted zero
     feed(link, Uptime(400, None, None), Sync(400))
     assert link.uptimes[3] == Uptime(400, None, None)
+
+
+def test_each_sleep_is_kept_under_the_boot_that_went_into_it() -> None:
+    link = started()
+    feed(link, Sleep(3_000, 2_000, 3_000, ("timer",)), Reset(1, 9_000, 5, 0), Sync(9_000))
+    # boot 2 never slept; boot 3 did
+    feed(link, Reset(2, 12_000, 12, 0), Sleep(15_000, 14_000, 15_000, ("ext0",)), Sync(15_000))
+    assert link.sleeps == {
+        1: Sleep(3_000, 2_000, 3_000, ("timer",)),
+        3: Sleep(15_000, 14_000, 15_000, ("ext0",)),
+    }
 
 
 class Controller(Interface):

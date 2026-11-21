@@ -555,3 +555,24 @@ fn flash_write_and_its_ack() {
         r#"{"type":"flash_write_ack","t":7,"error":"a \"b\": too long"}"#
     );
 }
+
+#[test]
+fn sleep_names_the_wakes_in_esp_idf_s_words() {
+    assert_eq!(
+        sleep(5, 1, 5, &[Wake::Timer]),
+        r#"{"type":"sleep","t":5,"earliest":1,"latest":5,"wakes":["timer"]}"#
+    );
+    assert_eq!(
+        sleep(
+            5,
+            1,
+            5,
+            &[Wake::Ext0, Wake::Ext1, Wake::Timer, Wake::Touch, Wake::Ulp]
+        ),
+        r#"{"type":"sleep","t":5,"earliest":1,"latest":5,"wakes":["ext0","ext1","timer","touch","ulp"]}"#
+    );
+    assert_eq!(
+        sleep(5, 1, 5, &[]),
+        r#"{"type":"sleep","t":5,"earliest":1,"latest":5,"wakes":[]}"#
+    );
+}

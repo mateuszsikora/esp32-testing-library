@@ -196,6 +196,13 @@ pub trait Guest {
     /// in long steps, and stops short of the RTC timer's alarm, so that esp32sim's own rounds wake
     /// the chip at its tick. Does nothing otherwise.
     fn sleep_until(&mut self, _cycle: u64) {}
+    /// What the chip armed to wake it, in ESP-IDF's words, while it is in a deep sleep, or has
+    /// woken from one and the reset of its wake is still to be taken; `None` otherwise
+    /// (protocol 5.26). Unlike `sleeps_through`, a sleep the RTC's watchdog counts through is a
+    /// sleep too.
+    fn deep_sleep(&self) -> Option<Vec<protocol::Wake>> {
+        None
+    }
     // The uptime counter: the default is a chip without one the runner can read.
 
     /// The counter `esp_timer_get_time()` reads, as the chip has it now (protocol 5.24).
@@ -226,6 +233,26 @@ pub enum Uptime {
     /// Counting, and it read zero before power-on, which no time on the socket names: it was
     /// loaded with more than the run has lasted.
     BeforePowerOn,
+}
+
+/// Whether the boot that is running has gone into deep sleep, as far as the slice boundaries have
+/// shown it (protocol 5.26).
+#[derive(Clone, Copy, Debug)]
+struct SleepWatch {
+    /// The last boundary, the reset's cycle at first: a sleep the next boundary sees began after
+    /// it.
+    since: u64,
+    /// Whether the boot's `sleep` has been sent: a boot sleeps once, and its wake is a reset.
+    sent: bool,
+}
+
+impl SleepWatch {
+    fn new(cycle: u64) -> Self {
+        Self {
+            since: cycle,
+            sent: false,
+        }
+    }
 }
 
 /// Where the uptime counter of the boot that is running started, as far as the slice boundaries
@@ -379,6 +406,13 @@ enum Item {
         cycle: u64,
         zero: Option<(u64, u64)>,
     },
+    /// The boot went into deep sleep after the slice boundary at `since` and by `cycle`, the
+    /// boundary that saw it asleep or the reset of its wake, with these wakes armed.
+    Sleep {
+        cycle: u64,
+        since: u64,
+        wakes: Vec<protocol::Wake>,
+    },
 }
 
 impl Item {
@@ -393,7 +427,8 @@ impl Item {
             | Item::Hci { cycle, .. }
             | Item::StreamConsole { cycle, .. }
             | Item::SdCard { cycle, .. }
-            | Item::Uptime { cycle, .. } => *cycle,
+            | Item::Uptime { cycle, .. }
+            | Item::Sleep { cycle, .. } => *cycle,
         }
     }
 }
@@ -502,6 +537,8 @@ pub struct Session<'a, G: Guest, L: Link> {
     off: bool,
     /// Where the uptime counter of this boot started (`uptime`).
     uptime: UptimeWatch,
+    /// Whether this boot has gone into deep sleep (`sleep`).
+    sleep: SleepWatch,
     /// Every `sd_fault` id the peer has given, queued rules' included: an id is used once.
     sd_ids: BTreeSet<u64>,
     /// Under `--realtime`, once pacing has started: this wall instant is this emulated time, in
@@ -539,6 +576,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             station_state: None,
             off: false,
             uptime: UptimeWatch::new(0),
+            sleep: SleepWatch::new(0),
             sd_ids: BTreeSet::new(),
             anchor: None,
             resyncs: 0,
@@ -617,8 +655,10 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
             match stop {
                 Stop::Halted => {}
                 Stop::SwReset => {
-                    // what the guest did before the reset goes out before it
+                    // what the guest did before the reset goes out before it, a sleep that began
+                    // in this slice and that the reset wakes from among it
                     self.collect();
+                    self.watch_sleep(self.guest.cycles());
                     self.count_wifi_drops();
                     let hint = self.guest.reset_hint();
                     let cause = self.guest.chip_reset();
@@ -687,6 +727,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         let mut routes = self.routes();
         self.pending.push_back(Item::Routes { cycle: now, routes });
         self.watch_uptime(now);
+        self.watch_sleep(now);
         loop {
             loop {
                 self.process_pending(false)?;
@@ -869,6 +910,7 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         self.pending.push_back(Item::Reset { cycle, cause, hint });
         // the reset stops the counter: the new boot's starts from it at the earliest
         self.uptime = UptimeWatch::new(cycle);
+        self.sleep = SleepWatch::new(cycle);
         let routes = self.routes();
         self.pending.push_back(Item::Routes { cycle, routes });
         if self.watch != 0 {
@@ -990,6 +1032,29 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         }
         self.uptime.sent = zero.map_or(Sent::Unknown, |(e, l)| Sent::Zero(e, l));
         self.pending.push_back(Item::Uptime { cycle: now, zero });
+    }
+
+    /// At the slice boundary at `now`, or at a reset the guest asked for at `now`: `sleep` when
+    /// the chip is in deep sleep, or has just woken from one, and this boot has sent none. The
+    /// sleep began after the last boundary, which saw the chip awake. While the supply is off the
+    /// chip does not sleep; the next boot's `reset` starts again.
+    fn watch_sleep(&mut self, now: u64) {
+        if self.off {
+            return;
+        }
+        let since = std::mem::replace(&mut self.sleep.since, now);
+        if self.sleep.sent {
+            return;
+        }
+        let Some(wakes) = self.guest.deep_sleep() else {
+            return;
+        };
+        self.sleep.sent = true;
+        self.pending.push_back(Item::Sleep {
+            cycle: now,
+            since,
+            wakes,
+        });
     }
 
     fn watched(&self, pin: u8) -> bool {
@@ -1153,6 +1218,17 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     // rounded outwards, so that the two still hold the zero
                     let zero = zero.map(|(earliest, latest)| (ns(earliest), ns_up(latest)));
                     self.send(&protocol::uptime(t, zero))?;
+                }
+                Item::Sleep {
+                    cycle,
+                    since,
+                    wakes,
+                } => {
+                    // not an event: nothing answers it
+                    self.close_open()?;
+                    // rounded outwards, so that the two still hold the entry
+                    let line = protocol::sleep(t, ns(since), ns_up(cycle), &wakes);
+                    self.send(&line)?;
                 }
             }
         }
