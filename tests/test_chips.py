@@ -18,7 +18,7 @@ from esp32tl.interfaces.board import POWERON_RESET
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.gnss import Gnss
 from esp32tl.interfaces.lines import Lines
-from esp32tl.interfaces.wifi import Wifi
+from esp32tl.interfaces.wifi import Wifi, emulated_macs
 from esp32tl.units import Duration, ms, seconds
 
 FIRMWARE = Path(__file__).parent.parent / "firmware"
@@ -154,6 +154,9 @@ def on_chip(chip: str, profile: str, banner: str) -> type:
         def test_http_request_joins_and_fetches_from_the_tests_server(
             self, board: Esp32Sim, wifi: Wifi, console: Console
         ) -> None:
+            # The chip's station MAC is known before power-on, and is the one the firmware
+            # asks the access point's DHCP server for a lease with.
+            station = emulated_macs(board.profile.chip).station
             network = wifi.access_point("myssid", password="mypassword")
             network.http.serve("/", "hello from the test\n")
             printed = console.line(r"^hello from the test$")
@@ -162,6 +165,8 @@ def on_chip(chip: str, profile: str, banner: str) -> type:
             assert request.header("Host") == "example.com:80"
             board.wait_until(printed, within=seconds(5))
             assert network.dns.asked == ["example.com"]
+            [lease] = network.dhcp.leases
+            assert lease.mac == station
             assert board.link.warnings == [] and board.link.error is None
 
         if chip != "esp32c6":  # esp32sim's C6 hooks want an image of ESP-IDF v5.5.x (#229, G5)

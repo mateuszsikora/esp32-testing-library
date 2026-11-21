@@ -3,10 +3,12 @@ joining the device's own SoftAP. Both carry Ethernet to the harness network on t
 """
 
 import threading
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from types import MappingProxyType
 
+from esp32tl.boards import CHIPS
 from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import SourceError
 from esp32tl.link.boardlink import Direction, Interface, Output
@@ -18,16 +20,50 @@ from esp32tl.report import RunLog
 
 NAME = "wifi"
 
-# The emulated device's own MACs on esp32sim, a classic ESP32 (a profile whose chip is `esp32`):
-# its Wi-Fi station's is the base MAC the runner gives the machine (`MAC` in
-# `runner/src/chip/esp32.rs`, the one esp32sim's CLI gives the classic chip), and its SoftAP's the
-# base plus one, as ESP-IDF derives it. The other chips have MACs of their own, and no virtual
-# station. A firmware that names its SoftAP after its MAC names it after these in a run on
-# esp32sim. They are not a physical board's, whose MACs come from its eFuses, nor the virtual
-# peers' on the air: the virtual station's (`esp32tl.net.station.DEFAULT_MAC` unless
-# `wifi.station` gets `mac=`) or the virtual access point's BSSID.
-ESP32SIM_STATION_MAC = "24:6f:28:00:11:22"
-ESP32SIM_SOFTAP_MAC = "24:6f:28:00:11:23"
+
+@dataclass(frozen=True)
+class EmulatedMacs:
+    """The emulated device's own two Wi-Fi MACs on esp32sim, lowercase and colon-separated: its
+    station interface's and its SoftAP interface's."""
+
+    station: str
+    softap: str
+
+
+# The emulated device's own MACs on esp32sim, by chip (a profile's `chip`), the same in every run.
+# The station's is the base MAC the runner gives the machine (`MAC` in `runner/src/chip/<chip>.rs`,
+# the one esp32sim's CLI gives the chip). The SoftAP's is derived from it as ESP-IDF's
+# `esp_read_mac(…, ESP_MAC_WIFI_SOFTAP)` derives it with the chip's default
+# `CONFIG_<CHIP>_UNIVERSAL_MAC_ADDRESSES` (`components/esp_hw_support/port/<chip>/Kconfig.mac`
+# and `mac_addr.c`, the same in v5.3.6, v5.5.4 and v6.1): with four universal MACs (the classic
+# ESP32, the S3, C3 and C6) the base with one added to its last octet; with two (the S31) the base
+# made locally administered, `esp_derive_local_mac`. The ESP32-P4 has no Wi-Fi: `None`. They are
+# not a physical board's, whose MACs come from its eFuses, nor the virtual peers' on the air: the
+# virtual station's (`esp32tl.net.station.DEFAULT_MAC` unless `wifi.station` gets `mac=`) or the
+# virtual access point's BSSID.
+EMULATED_MACS: Mapping[str, EmulatedMacs | None] = MappingProxyType(
+    {
+        "esp32": EmulatedMacs("24:6f:28:00:11:22", "24:6f:28:00:11:23"),
+        "esp32s3": EmulatedMacs("44:1b:f6:75:dc:e0", "44:1b:f6:75:dc:e1"),
+        "esp32c3": EmulatedMacs("60:55:f9:00:11:22", "60:55:f9:00:11:23"),
+        "esp32c6": EmulatedMacs("dc:1e:d5:6e:8c:dc", "dc:1e:d5:6e:8c:dd"),
+        "esp32p4": None,
+        "esp32s31": EmulatedMacs("10:20:30:40:50:60", "12:20:30:40:50:60"),
+    }
+)
+
+
+def emulated_macs(chip: str) -> EmulatedMacs:
+    """The emulated device's Wi-Fi MACs on esp32sim for `chip`, a profile's `chip`
+    (`board.profile.chip` in a test): the same in every run, known before power-on. A physical
+    board's MACs are its eFuses', which esp32tl does not read. Raises `ValueError` for a chip
+    esp32tl does not run, and for the ESP32-P4, which has no Wi-Fi."""
+    if chip not in CHIPS:
+        raise ValueError(f"emulated_macs: {chip!r} is not one of {', '.join(CHIPS)}")
+    macs = EMULATED_MACS.get(chip)
+    if macs is None:
+        raise ValueError(f"emulated_macs: the {CHIPS[chip].title} has no Wi-Fi")
+    return macs
 
 
 @dataclass(frozen=True)
@@ -92,21 +128,25 @@ class Wifi(Interface):
     adds networks around that AP. Either role is configured before power-on and returns the
     network behind it. Without a configured role there is no virtual peer on the air.
     `now` is the board's clock, `world` the world's time at power-on, which the network's NTP
-    tells. `asked` is called with the request before a virtual peer is made, and
-    refuses it by raising, as for a UART's source. `bridging` goes to the network, which calls it
-    before a bridge to a real service is made (`Internet.bridge`)."""
+    tells. `chip` is the emulated board's chip, whose `EMULATED_MACS` the virtual station may not
+    take as its own (a `KeyError` for a chip it does not name); `None` on a physical board, whose
+    MACs esp32tl does not know. `asked` is called with the request before a virtual peer is made,
+    and refuses it by raising, as for a UART's source. `bridging` goes to the network, which calls
+    it before a bridge to a real service is made (`Internet.bridge`)."""
 
     def __init__(
         self,
         *,
         now: Callable[[], int],
         world: Callable[[], datetime] = lambda: DEFAULT_UTC,
+        chip: str | None = None,
         asked: Callable[[Request], None] = lambda request: None,
         log: RunLog | None = None,
         bridging: Callable[[str], None] = lambda call: None,
     ) -> None:
         super().__init__(NAME, None)
         self._now = now
+        self._own = None if chip is None else EMULATED_MACS[chip]
         self._bridging = bridging
         self._world = world
         self.asked = asked
@@ -183,9 +223,11 @@ class Wifi(Interface):
         mac = mac.lower()
         if int(mac[:2], 16) & 1:
             raise ValueError("wifi.station: mac must be unicast")
-        if mac in (ESP32SIM_STATION_MAC, ESP32SIM_SOFTAP_MAC):
+        own = self._own
+        if own is not None and mac in (own.station, own.softap):
             raise ValueError(
-                "wifi.station: mac must differ from the device's station and access point MACs"
+                f"wifi.station: mac must differ from the device's station and SoftAP MACs,"
+                f" {own.station} and {own.softap}"
             )
         self.asked(Request(NAME, source="model", role="station"))
         with self._lock:

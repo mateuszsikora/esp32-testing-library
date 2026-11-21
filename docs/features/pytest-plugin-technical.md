@@ -999,6 +999,12 @@ require power-on first; an empty write sends no bytes. Text is UTF-8 and `sendli
 ### Virtual station configuration
 
 `interfaces.wifi.StationConfig` stores SSID, password and MAC and renders `--wifi-sta`.
+`Wifi(chip=...)` looks the chip up in `EMULATED_MACS` once, at construction, and raises
+`KeyError` for a chip the table does not name. `station()` compares its lowercased `mac` with that
+entry's `station` and `softap`, after the format and unicast checks and before the capability
+request, so on a chip whose gap skips `wifi.station` the `ValueError` comes before the skip. The
+esp32sim backend gives `chip=profile.chip`; the serial backend gives none, and a `Wifi` without a
+chip, or on a chip whose entry is `None`, refuses no MAC for being the device's.
 `Wifi.configuration` returns either configuration type, so backend network discovery, reset
 notifications and report collection include both roles. `station()` asks for the same
 `Request("wifi", source="model")` capability as `access_point()` before installing its network;
