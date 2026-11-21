@@ -1200,7 +1200,7 @@ fn a_counter_seen_counting_is_placed_between_the_boundary_before_and_the_one_tha
         (cycles(2 * MS + MS / 2), lact(0)),
         (at(4) + 5, Act::Reset(12)),
         (cycles(6 * MS + MS / 3), lact(load)),
-        // stopped and started again in one boot: no zero, then a new start
+        // stopped and started again in one boot: the zero sent holds until the new start
         (cycles(7 * MS + MS / 2), Act::Uptime(Uptime::Stopped)),
         (cycles(8 * MS + MS / 2), lact(0)),
         // loaded anew while it counts, as `esp_timer_impl_set` does after a light sleep: placed
@@ -1220,7 +1220,6 @@ fn a_counter_seen_counting_is_placed_between_the_boundary_before_and_the_one_tha
             (ns(at(3)), Some((ns(at(2)), ns(at(3))))),
             // from the reset at the earliest, which stopped it, less what the load counts
             (ns(at(7)), Some((ns(at(6) - loaded), ns(at(7) - loaded)))),
-            (ns(at(8)), None),
             (ns(at(9)), Some((ns(at(8)), ns(at(9))))),
             (ns(at(12)), Some((ns(at(10) - loaded), ns(at(12) - loaded)))),
         ]
@@ -1287,6 +1286,60 @@ fn a_counter_read_at_its_zero_is_sent_again_only_when_its_zero_moves() {
     );
     // 25 cycles past a whole millisecond is no whole nanosecond
     assert_eq!(ns_up(reloaded.1), ns(reloaded.1) + 1);
+}
+
+#[test]
+fn a_counter_that_stops_keeps_the_zero_sent() {
+    // a counter that stops, as the classic chip's LACT does in deep sleep: the zero sent dates
+    // every stamp taken before the stop; a SYSTIMER's reads, compared with it after each stop
+    let zero = |earliest: u64, latest: u64| Uptime::Zero { earliest, latest };
+    let first = (cycles(MS), cycles(MS) + 14);
+    let moved = (cycles(5 * MS) + 3, cycles(5 * MS) + 17);
+    let guest = FakeGuest::new(vec![
+        (cycles(MS) + 7, Act::Uptime(zero(first.0, first.1))),
+        (cycles(2 * MS + MS / 2), Act::Uptime(Uptime::Stopped)),
+        // counting again from the same zero: what was sent before the stop holds
+        (cycles(3 * MS + MS / 2), Act::Uptime(zero(first.0, first.1))),
+        (cycles(4 * MS + MS / 2), Act::Uptime(Uptime::Stopped)),
+        // counting again from another: sent
+        (cycles(5 * MS + MS / 2), Act::Uptime(zero(moved.0, moved.1))),
+        (cycles(6 * MS + MS / 2), Act::Uptime(Uptime::Stopped)),
+        (cycles(7 * MS + MS / 2), Act::Reset(5)),
+    ]);
+    let r = run(0.009, guest, FakePeer::new(&[], idle(None, None)));
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    assert_eq!(
+        uptimes(&r.peer),
+        [
+            (ns(cycles(2 * MS)), Some((ns(first.0), ns_up(first.1)))),
+            (ns(cycles(6 * MS)), Some((ns(moved.0), ns_up(moved.1)))),
+        ]
+    );
+    assert_eq!(r.peer.of("reset").len(), 1);
+}
+
+#[test]
+fn a_lact_stopped_by_a_deep_sleep_leaves_the_boot_its_zero_until_the_wake() {
+    // esp32sim's `enter_deep_sleep` replaces the timer groups, which clears LACT_EN, before the
+    // wake's reset: the boot that slept gets no `null`, the wake's boot a zero of its own
+    let at = |ms: u64| cycles(ms * MS);
+    let guest = FakeGuest::new(vec![
+        (cycles(MS + MS / 2), lact(0)),
+        (cycles(2 * MS + MS / 2), Act::Uptime(Uptime::Stopped)),
+        (cycles(4 * MS + MS / 2), Act::Reset(5)),
+        (cycles(5 * MS + MS / 2), lact(0)),
+    ]);
+    let r = run(0.007, guest, FakePeer::new(&[], idle(None, None)));
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let reset = num(r.peer.of("reset")[0], "t");
+    assert_eq!(
+        uptimes(&r.peer),
+        [
+            (ns(at(2)), Some((ns(at(1)), ns(at(2))))),
+            (ns(at(6)), Some((ns(at(5)), ns(at(6))))),
+        ]
+    );
+    assert!(ns(at(2)) < reset && reset < ns(at(6)));
 }
 
 #[test]

@@ -66,6 +66,29 @@ def test_wait_for_wake_runs_the_board_through_its_sleep_to_the_wake(
     assert boot(console) == (3, DEEPSLEEP_RESET, TIMER)
 
 
+def test_a_boot_that_sleeps_keeps_its_uptime_zero_through_the_wake(
+    board: Esp32Sim, console: Console
+) -> None:
+    board.power_on()
+    assert boot(console) == (1, POWERON_RESET, UNDEFINED)
+    console.expect_exact("timer_wake: sleeping 2000 ms", timeout=1)
+    first = board.boot
+    zero = board.uptime_zero(first)
+    # the classic chip's LACT, started by the application some tens of milliseconds into the boot
+    assert zero is not None
+    assert first.at < zero.earliest <= zero.latest <= zero.earliest + ms(1)
+    wake = board.wait_for_wake(within=SLEEP + BOOT_TIME)
+    # The sleep stopped the counter before the wake's reset: the zero still dates every stamp the
+    # boot took, in a record read now and through the lookup.
+    assert board.boots[0].uptime_zero == zero == board.uptime_zero(first)
+    assert boot(console) == (2, DEEPSLEEP_RESET, TIMER)
+    console.expect_exact("timer_wake: sleeping 2000 ms", timeout=1)
+    woken = board.uptime_zero(wake)
+    assert woken is not None
+    assert wake.at < woken.earliest <= woken.latest <= woken.earliest + ms(1)
+    assert [b.uptime_zero for b in board.boots] == [zero, woken]
+
+
 def test_wait_for_wake_raises_never_happened_for_a_board_that_does_not_sleep(
     board: Esp32Sim, console: Console
 ) -> None:

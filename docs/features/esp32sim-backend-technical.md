@@ -251,12 +251,14 @@ cannot fail with this backend; it is there for another caller:
   `uptime_zero` from `BoardLink.uptimes`, which keeps the last `uptime` of each boot by number
   (the boot after the `reset`s read before it, [protocol 5.24](../protocol.md#524-uptime-ext-245)):
   `UptimeZero(Duration(earliest), Duration(latest))`, or `None` for a boot that has none yet and
-  for one whose last `uptime` has `null` for both. A `Boot` already read keeps what it had. The
-  `reset` comes before the boot's first `uptime`, on the classic ESP32 some tens of milliseconds
-  before, so the `Boot` that a wait on `next_boot()` or `wait_for_wake()` returns, read after the
-  turn that brought the `reset`, has the zero only if that turn ran past it: `wait_for_wake()`'s
-  ends `WAKE_LATENCY_NS` after the reset, before it; a turn of `wait_until` runs up to 100 ms and
-  often past it, and one cut short by `within` or by `wait` may not. `Board.uptime_zero(boot)` reads `boots` again for
+  for one whose last `uptime` has `null` for both, which the runner sends only for a load that
+  counts from before power-on: a counter that stops, as in deep sleep, sends nothing, so the boot
+  that slept keeps its zero. A `Boot` already read keeps what it had. The `reset` comes before the
+  boot's first `uptime`, on the classic ESP32 some tens of milliseconds before, so the `Boot` that
+  a wait on `next_boot()` or `wait_for_wake()` returns, read after the turn that brought the
+  `reset`, has the zero only if that turn ran past it: `wait_for_wake()`'s ends `WAKE_LATENCY_NS`
+  after the reset, before it; a turn of `wait_until` runs up to 100 ms and often past it, and one
+  cut short by `within` or by `wait` may not. `Board.uptime_zero(boot)` reads `boots` again for
   it, and `next_boot(uptime_zero=True)` matches at the first poll, in the same turn or a later one,
   at which the boot's last `uptime` has its zero, not `null` (`esp32tl/interfaces/board.py`);
   neither is overridden here.

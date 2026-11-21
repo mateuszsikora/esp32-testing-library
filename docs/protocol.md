@@ -1153,12 +1153,14 @@ Where the boot's uptime counter, the hardware counter ESP-IDF's `esp_timer_get_t
 counted zero, on the socket's clock: no sooner than `earliest` and no later than `latest`, in
 nanoseconds. Unlike the other times (section 3), `earliest` is rounded down and `latest` up, so that
 the two hold the zero. Both are `null`, never one alone, when the runner no longer knows where the
-counter counts from: the zero it sent for the boot no longer holds, and it has no other to send. A
+counter counts from: it counts from a zero that may lie before power-on, so the zero it sent for the
+boot no longer holds and it has no other to send. A counter that stops, as the classic chip's does
+in deep sleep, leaves the zero sent: it still dates every stamp the firmware took before the stop. A
 stamp of `u` the firmware took from the counter was taken between `earliest + u` and `latest + u`.
 The message belongs to the boot that runs when it comes: after the run's `n`-th `reset` (5.5), boot
 `n + 1`. `t` is the slice boundary the runner saw it at. It is not an event: it carries no `seq`,
 sets no block point and nothing answers it. The first example is the classic chip's, the second the
-ESP32-S3's at power-on, the third a counter that stopped.
+ESP32-S3's at power-on, the third a load that counts from before power-on.
 
 The runner reads the counter's registers at every slice boundary while the board's supply is on, at
 most one emulated millisecond apart while the chip runs (section 6.1), as it reads the UART routes
@@ -1204,9 +1206,14 @@ the chip itself the application's reset puts the zero at its early init, as on t
 again when the boot's counter starts anew or is loaded anew: on the classic chip, when a boundary
 sees it counting after one saw it stopped, and a boundary after one saw a new load; on the others,
 when a boundary reads a zero outside the one it sent. It sends `null` for both when a boundary finds
-that the zero it sent no longer holds and has none to put in its place: the counter stopped, or it
-counts from a zero that may lie before power-on, which has no time on the socket, as a load of more
-than the run has lasted gives. It sends `null` once, until it has a zero again. A firmware that
+that the zero it sent no longer holds and has none to put in its place: the counter counts from a
+zero that may lie before power-on, which has no time on the socket, as a load of more than the run
+has lasted gives. It sends `null` once, until it has a zero again. A boundary that sees the counter
+stopped sends nothing: a stop does not move the zero, so the one sent holds for the stamps taken
+before it, and a start after it is compared with that zero, on the other chips as at any boundary:
+the same zero sends nothing, another sends `uptime`. On the classic chip esp32sim's
+`enter_deep_sleep` replaces both timer groups, which clears LACT_EN, so the boot that sleeps keeps
+the zero it had and the wake's `reset` starts the next boot. A firmware that
 never starts the counter gets no `uptime`: on the classic chip, one that does not use ESP-IDF's
 `esp_timer`. While the board's supply is off the chip has no counter; the next boot's `reset` starts
 again (5.17).

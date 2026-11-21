@@ -1110,7 +1110,8 @@ class Esp32Sim(Board):
 
     def _uptime_zero(self, boot: int) -> UptimeZero | None:
         """Where boot number `boot`'s uptime counter counted zero, as the runner last said: `None`
-        before it said anything, and once it has said it no longer knows."""
+        before it said anything, and once it has said the counter counts from a zero that may lie
+        before power-on. A stop says nothing, so a boot that slept keeps its zero."""
         uptime = self.link.uptimes.get(boot)
         if uptime is None or uptime.earliest is None or uptime.latest is None:
             return None

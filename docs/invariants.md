@@ -1904,14 +1904,19 @@ that references to its number keep their meaning.
      `earliest ≤ boot.at ≤ latest`, within one SYSTIMER tick. The runner sends `uptime` once for
      each start or new load of the counter, between the slice boundaries around it, with
      `earliest` rounded down and `latest` up, and not for a new rate with the same load; once a
-     zero it sent no longer holds and it has none in its place (the counter stopped, or it counts
-     from a zero that may lie before power-on), it sends `null` for both, once, and `uptime_zero`
-     is `None`. Never as an event.
+     zero it sent no longer holds and it has none in its place (the counter counts from a zero
+     that may lie before power-on), it sends `null` for both, once, and `uptime_zero` is `None`.
+     A counter that stops sends nothing and keeps the zero sent, which a zero read after it is
+     compared with: a boot that went to deep sleep keeps the `uptime_zero` it had before the
+     sleep, and the wake's boot gets its own. Never as an event.
      `tests/test_power.py::test_each_boot_s_uptime_zero_puts_the_firmware_s_uptime_on_the_board_s_clock`,
      `tests/test_chips.py::TestOnESP32S3::test_hello_world_boots_and_restarts_through_the_rom` (and the C3's and C6's),
      `runner/src/session/tests.rs::a_counter_seen_counting_is_placed_between_the_boundary_before_and_the_one_that_saw_it`,
      `runner/src/session/tests.rs::a_counter_read_at_its_zero_is_sent_again_only_when_its_zero_moves`,
      `runner/src/session/tests.rs::a_load_that_counts_from_before_power_on_has_no_zero_on_the_classic_chip`,
+     `runner/src/session/tests.rs::a_counter_that_stops_keeps_the_zero_sent`,
+     `runner/src/session/tests.rs::a_lact_stopped_by_a_deep_sleep_leaves_the_boot_its_zero_until_the_wake`,
+     `tests/test_timer_wake.py::test_a_boot_that_sleeps_keeps_its_uptime_zero_through_the_wake`,
      `runner/src/chip/tests.rs::the_classic_lact_reads_as_counting_from_its_load_once_enabled_and_a_reset_stops_it`,
      `runner/src/chip/tests.rs::the_s3_systimer_reads_zero_at_its_reset_and_where_it_is_loaded`,
      `tests/test_boardlink.py::test_each_boot_s_uptime_zero_is_the_runner_s_last_word_on_the_boot_it_came_in`

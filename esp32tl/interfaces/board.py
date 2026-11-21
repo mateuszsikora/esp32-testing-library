@@ -151,11 +151,12 @@ class Boot:
     started, and the reset `cause` the ROM reports for it, which `reason` names. `uptime_zero`
     is where its uptime counter counted zero as the backend knew it when this record was read:
     `None` before the backend has seen the counter count, and it stays so in a record read then,
-    which is frozen. `board.uptime_zero(boot)` reads it now, and
-    `board.next_boot(uptime_zero=True)` returns the boot only once it is known. `idf_reason` is
-    what ESP-IDF's `esp_reset_reason()` reports for the boot, as `ESP_RST_PANIC`
-    (`idf_reset_reason`); `None` where the backend cannot tell. Neither takes part in comparing
-    two boots."""
+    which is frozen; `None` too for a counter that counts from a zero that may lie before
+    power-on. A counter that stops, as in deep sleep, keeps the zero it had.
+    `board.uptime_zero(boot)` reads it now, and `board.next_boot(uptime_zero=True)` returns the
+    boot only once it is known. `idf_reason` is what ESP-IDF's `esp_reset_reason()` reports for
+    the boot, as `ESP_RST_PANIC` (`idf_reset_reason`); `None` where the backend cannot tell.
+    Neither takes part in comparing two boots."""
 
     number: int
     at: Duration

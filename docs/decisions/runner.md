@@ -1184,6 +1184,14 @@ tens of thousands of boundaries per boot, for a bound that a millisecond already
 the zero from what the firmware sends, the earliest arrival less the uptime it stamps: it is late
 by the stamp's delay, which is what this was to remove.
 
+A counter that stops leaves the zero sent (#307): a stop does not move it, and every stamp the
+firmware took while the counter counted is still dated by it. On the classic ESP32 esp32sim's
+`enter_deep_sleep` replaces both timer groups, so the boot that sleeps sees its LACT stop before the
+wake's `reset`; with `null` there, the boot that slept lost its zero. `null` stays for a load that
+counts from before power-on, whose zero is not known. **Rejected:** keeping `null` for a stop and
+having the harness ignore it for a boot that has a zero: it puts the meaning of a stop in the
+harness, which cannot tell a stop's `null` from a before-power-on load's.
+
 **Postponed:** the classic chip's zero to within a tick, which needs esp32sim to expose the LACT's
 count, a read-only accessor on `ClassicTimer`. Asked of upstream only once a test needs better than
 a millisecond.

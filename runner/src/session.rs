@@ -928,8 +928,10 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
     /// At the slice boundary at `now`, where the uptime counter of this boot counted zero, when
     /// the boundary shows something new of it: `uptime` when the counter is first seen counting,
     /// again when it starts anew, is loaded anew or reads a zero outside the one sent, and with
-    /// no zero when it stops or reads a zero before power-on after a zero was sent. While the
-    /// supply is off the chip has no counter.
+    /// no zero when it reads a zero before power-on after a zero was sent. A counter that stops
+    /// sends nothing: the zero sent still dates every stamp taken before the stop, a zero read
+    /// after it is compared with that one, and a start after it that counts from before power-on
+    /// still sends `null` once. While the supply is off the chip has no counter.
     fn watch_uptime(&mut self, now: u64) {
         if self.off {
             return;
@@ -978,7 +980,9 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 }
                 Some((earliest, latest))
             }
-            Uptime::Stopped | Uptime::BeforePowerOn => None,
+            // a stop does not move the zero: what was sent holds for the stamps taken before it
+            Uptime::Stopped => return,
+            Uptime::BeforePowerOn => None,
         };
         // no zero: one sent before no longer holds; nothing sent, or `null` sent, says so already
         if zero.is_none() && !matches!(self.uptime.sent, Sent::Zero(..)) {

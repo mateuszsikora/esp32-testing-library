@@ -471,8 +471,11 @@ boundary that did not read it counting places its start from `since`; with anoth
 last boundary read it keeps `(since, load)` in `reload` and gives nothing; with the same `load` it
 places a `reload` of that load from its boundary, and gives nothing otherwise, whatever `tick` is.
 Placing gives `(from − load × tick, now − load × tick)`, or `None` when `load × tick` is more than
-`from`. `Zero` gives its two cycles unless they overlap a `Sent::Zero`; `Stopped` and
-`BeforePowerOn` give `None`, and drop `reload`. `None` goes out only to replace a `Sent::Zero`. What
+`from`. `Zero` gives its two cycles unless they overlap a `Sent::Zero`; `BeforePowerOn` gives
+`None`; `Stopped` gives nothing and leaves `sent` as it was, so that a `Zero` read after it is
+compared with the zero sent before the stop, and a start after it that counts from before power-on
+still sends `null` once; a `Counting` start that places a zero sends it, as after any stop. Both
+drop `load` and `reload`. `None` goes out only to replace a `Sent::Zero`. What
 it gives goes on `pending` as `Item::Uptime { cycle: now, zero }`, and `process_pending` sends it as
 `protocol::uptime`, with no `seq`, its `earliest` through `protocol::ns` and its `latest` through
 `protocol::ns_up`, rounded up, and `null` for both when `zero` is `None`
