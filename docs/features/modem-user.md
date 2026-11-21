@@ -55,8 +55,10 @@ board power-on instead starts it off, for firmware that boots it with PWRKEY.
 | `operator(name="ESP32TL", numeric="26000", short=None, act=7)` | What `AT+COPS?` names; `short=None` is `name` |
 | `hang(pwrkey=True)` | The modem stops answering ([below](#a-hung-modem-and-reset)); `pwrkey=False`: PWRKEY does nothing either |
 | `powered`, `registered`, `data_mode`, `hung` | Current model state; reading does not select a model |
-| `restarts` | Each time a run of the modem ended, as `ModemRestart(at, cause)`, oldest first ([below](#a-hung-modem-and-reset)) |
-| `mode_changes` | Each dial and each return to command mode, as `ModeChange(at, mode, cause)`, oldest first ([below](#mode-changes-and-dials)) |
+| `restarts` | Each time a run of the modem ended, as `ModemRestart(at, cause)`, in the order the model made them ([below](#a-hung-modem-and-reset)) |
+| `power_changes` | Each time the modem switched on or off, as `ModemPower(at, powered, cause)`, in the order the model made them ([below](#power-changes)) |
+| `next_power_change(powered=None)` | A [described condition](pytest-plugin-user.md#described-conditions) for the next of them, or the next to `powered`: `True` on, `False` off |
+| `mode_changes` | Each dial and each return to command mode, as `ModeChange(at, mode, cause)`, in the order the model made them ([below](#mode-changes-and-dials)) |
 | `next_mode_change(mode=None)` | A [described condition](pytest-plugin-user.md#described-conditions) for the next of them, or the next into `mode`, `"command"` or `"data"` |
 | `commands` | Every complete AT command while powered, as `ModemCommand(at, text, response, fallback)`; `at` is a `Duration` |
 
@@ -207,11 +209,13 @@ No source says what PWRKEY does to a hung modem, or what state a modem is in dur
 These are the model's assumptions: PWRKEY works unless the test says otherwise, and a modem goes on
 as it was until the pulse's release.
 
-`restarts` holds one `ModemRestart(at, cause)` for each time a run of the modem ended, at the instant it
-did. `cause` is `"reset"` (a RESET pulse), `"pwrkey"` (an off pulse), `"supply"` (`lose_power()` or
-the board's supply going) or `"test"` (`modem.power_off()`, or `modem.power_on()` on a running
-modem). Starting a modem that is off is no restart, and nor is a call before the board's first
-instant, which says how the modem starts. A PWRKEY recovery, off then on, is one entry.
+`restarts` holds one `ModemRestart(at, cause)` for each time a run of the modem ended, at the
+instant it did, in the order the model made them ([below](#pwrkey-and-reporting)). `cause` is
+`"reset"` (a RESET pulse), `"pwrkey"` (an off pulse), `"supply"` (`lose_power()` or the board's
+supply going) or `"test"` (`modem.power_off()`, or `modem.power_on()` on a running modem). Starting
+a modem that is off is no restart, and nor is a call before the board's first instant, which says
+how the modem starts. A PWRKEY recovery, off then on, is one entry; the modem's [power
+changes](#power-changes) hold both halves.
 
 ## A dropped data call
 
@@ -279,8 +283,8 @@ dials = [c for c in modem.mode_changes if c.cause in ("dial", "no carrier")]
 ```
 
 `mode_changes` holds one `ModeChange(at, mode, cause)` for each dial the modem answered and each
-return to command mode, oldest first. `at` is a `Duration` on the board's clock, `mode` is
-`"command"` or `"data"`, and `cause` says why:
+return to command mode, in the order the model made them ([below](#pwrkey-and-reporting)). `at`
+is a `Duration` on the board's clock, `mode` is `"command"` or `"data"`, and `cause` says why:
 
 | `cause` | `mode` | What happened | `at` |
 |---|---|---|---|
@@ -319,6 +323,62 @@ raises `ValueError: modem.next_mode_change: mode is 'Data', not 'command', 'data
 model selected, as for the properties, `SourceError: uart.modem has no modem model: select it
 before board.power_on()`.
 
+## Power changes
+
+```python
+from esp32tl.units import seconds
+
+on = modem.next_power_change(True)
+modem.lose_power()
+modem.restore_power()
+started = board.wait_until(on, within=seconds(30))
+assert started.cause == "pwrkey"  # the firmware's pulse switched it on
+```
+
+`power_changes` holds one `ModemPower(at, powered, cause)` for each time the modem switched on or
+off, in the order the model made them ([below](#pwrkey-and-reporting)). `at` is a `Duration` on
+the board's clock, `powered` is `True` for on and `False` for off, and `cause` is the `cause` of
+[`restarts`](#a-hung-modem-and-reset):
+
+| `cause` | `powered` | What happened | `at` |
+|---|---|---|---|
+| `"pwrkey"` | `True` or `False` | A PWRKEY pulse that switched it: at least the profile's `on_ms` long to switch it on, `off_ms` to switch it off, with the supply and the board's supply on ([below](#pwrkey-and-reporting)) | The pulse's release plus 1 ms |
+| `"supply"` | `False` | `lose_power()`, or the board's supply going (`board.power_off()`), with the modem on | The test's instant |
+| `"test"` | `True` or `False` | `power_on()` with the modem off and the board's supply on, `power_off()` with it on | The test's instant |
+
+A PWRKEY entry is in the history 1 ms before its `at`, as are the entries the pulse makes in
+`restarts` and `mode_changes` ([below](#pwrkey-and-reporting)): a wait for it can return with
+`board.now` before `at`.
+
+A test checks that the firmware switched the modem on, and when, from this history: rebuilding it
+from `lines.events()` of PWRKEY would mean applying the profile's thresholds, the supply and the
+1 ms latency as the model does, and `powered` has no time.
+
+- A call that changes nothing adds none: `power_off()` or `lose_power()` on a modem that is off,
+  `power_on()` on one that is on, a pulse too short for the modem's state, a pulse while the supply
+  is off, or with `hang(pwrkey=False)`.
+- A RESET pulse adds none: it restarts a running modem with its power on, and RESET on a modem that
+  is off does nothing. `restarts` records the restart, cause `"reset"`. `power_on()` on a running
+  modem restarts it too, as `"test"` in `restarts`, and adds none here.
+- `restore_power()` and the board's supply coming back add none: the modem waits for its PWRKEY
+  pulse, which is the entry, or for `power_on()`.
+- A call before the board's first instant says how the modem starts and adds none, as for
+  `restarts`: `modem.power_off()` before `board.power_on()` starts it off, and the firmware's first
+  PWRKEY pulse is then the first entry, an on by `"pwrkey"`.
+
+So the two histories differ for a PWRKEY recovery, one entry in `restarts` and an off and an on
+here, and for a RESET recovery, one entry in `restarts` and none here.
+
+`next_power_change(powered=None)` is a [described condition](pytest-plugin-user.md#described-conditions)
+for the first entry after the call, or the first to `powered`: an entry the other way does not
+satisfy it, and a later one to `powered` still can. Arm it before what switches the modem. The
+boundary is `power_changes` at the call; the condition consumes nothing and returns the same entry
+each time it is asked. Its description, which a timed-out wait names, is `the modem's next power
+change`, `the modem's next power-on` or `the modem's next power-off`. A `powered` that is none of
+`True`, `False` and `None` raises `ValueError: modem.next_power_change: powered is 1, not True,
+False or None`; with no model selected, as for the properties, `SourceError: uart.modem has no
+modem model: select it before board.power_on()`.
+
 ## PWRKEY and reporting
 
 A completed active pulse toggles power if it lasts at least the profile's threshold for the
@@ -337,6 +397,13 @@ earlier. Pulses of 99.9 ms and 2999.9 ms are therefore accepted without extendin
 delay. Short pulses do nothing; disabling the output ends a pulse. RI follows 1 ms after the
 ending edge; a test's direct power call changes it at the test's instant. A power change before a
 pending RI response takes effect replaces that response.
+
+The model decides a PWRKEY or RESET pulse's effect at its release, and stamps it 1 ms later, as
+RI's change. Its entries in `power_changes`, `restarts` and `mode_changes` (an end of data mode by
+`"restart"`) are in those histories from the release, 1 ms before their `at`. A wait for one can
+return with `board.now` before its `at`, and a power call of the test's in that millisecond makes an
+entry stamped before it. So each history is in the order the model made its entries; only there
+does that order differ from the order of their `at`.
 
 The modem is on the board's supply. `board.power_off()` switches it off as `lose_power()` does: RI
 drops, and PPP with its TCP sessions ends, and no PWRKEY pulse starts it while the board is off.

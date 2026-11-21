@@ -26,6 +26,7 @@ from esp32tl.sources.model.modem import (
     ModeCause,
     ModeChange,
     Modem,
+    ModemPower,
     ModemRestart,
 )
 from esp32tl.units import NS_PER_S, Duration, hours, minutes, ms, seconds
@@ -1496,4 +1497,135 @@ def test_mode_changes_need_the_modem_model(tmp_path: Path) -> None:
     modem, _, _ = route(tmp_path, [0])
     with pytest.raises(SourceError, match="has no modem model"):
         modem.next_mode_change()
+    assert modem.source is None
+
+
+def clocked() -> tuple[Modem, list[int]]:
+    now = [0]
+    model = Modem(
+        lambda: now[0],
+        pwrkey=LILYGO.lines["modem"]["pwrkey"],
+        reset=LILYGO.lines["modem"]["reset"],
+    )
+    return model, now
+
+
+def test_a_pwrkey_recovery_is_an_off_and_an_on_each_at_its_release_and_a_millisecond() -> None:
+    model, _ = clocked()
+    pulse(model.driven, seconds(2), ms(3000))
+    pulse(model.driven, seconds(10), ms(100))
+    assert model.power_changes == (
+        ModemPower(seconds(5) + ms(1), False, "pwrkey"),
+        ModemPower(seconds(10) + ms(101), True, "pwrkey"),
+    )
+    # restarts keeps its one entry for the run that ended
+    assert model.restarts == (ModemRestart(seconds(5) + ms(1), "pwrkey"),)
+
+
+def test_a_reset_restart_and_power_on_of_a_running_modem_change_no_power() -> None:
+    model, now = clocked()
+    pulse(model.reset_driven, seconds(1), ms(2600))
+    now[0] = seconds(5).ns
+    model.power_on()
+    assert [r.cause for r in model.restarts] == ["reset", "test"]
+    assert not model.power_changes
+
+
+def test_the_supply_s_loss_is_an_off_and_the_next_start_is_pwrkey_s() -> None:
+    model, now = clocked()
+    now[0] = seconds(1).ns
+    model.lose_power()
+    # off already: losing the supply again, or the board's, changes nothing
+    model.lose_power()
+    model.supply(False)
+    model.supply(True)
+    now[0] = seconds(2).ns
+    model.restore_power()
+    pulse(model.driven, seconds(3), ms(100))
+    now[0] = seconds(6).ns
+    model.supply(False)
+    assert model.power_changes == (
+        ModemPower(seconds(1), False, "supply"),
+        ModemPower(seconds(3) + ms(101), True, "pwrkey"),
+        ModemPower(seconds(6), False, "supply"),
+    )
+
+
+def test_the_test_s_power_calls_change_power_once_and_the_start_is_no_entry() -> None:
+    model, now = clocked()
+    # Before the board's first instant, this says how the modem starts.
+    model.power_off()
+    assert not model.power_changes
+    now[0] = seconds(1).ns
+    model.power_off()  # off already
+    model.power_on()
+    model.power_on()  # on already: a restart, but no change of power
+    now[0] = seconds(2).ns
+    model.power_off()
+    model.power_off()
+    assert model.power_changes == (
+        ModemPower(seconds(1), True, "test"),
+        ModemPower(seconds(2), False, "test"),
+    )
+
+
+def test_a_pulse_that_switches_nothing_is_no_entry() -> None:
+    model, now = clocked()
+    # too short to switch a running modem off, and a hung modem that ignores PWRKEY
+    pulse(model.driven, seconds(1), ms(100))
+    model.hang(pwrkey=False)
+    pulse(model.driven, seconds(2), ms(3000))
+    now[0] = seconds(6).ns
+    model.power_off()
+    # RESET on a modem that is off, and PWRKEY with no supply
+    pulse(model.reset_driven, seconds(7), ms(2600))
+    now[0] = seconds(10).ns
+    model.lose_power()
+    pulse(model.driven, seconds(11), ms(100))
+    assert model.power_changes == (ModemPower(seconds(6), False, "test"),)
+
+
+def test_the_next_power_change_is_a_condition_from_this_call(tmp_path: Path) -> None:
+    now = [seconds(1).ns]
+    modem, _, _ = route(tmp_path, now)
+    modem.signal(dbm=-73)
+    model = modem.modem_model()
+    model.power_off()
+    any_change = modem.next_power_change()
+    on = modem.next_power_change(True)
+    off = modem.next_power_change(powered=False)
+    assert repr(any_change) == "the modem's next power change"
+    assert repr(on) == "the modem's next power-on"
+    assert repr(off) == "the modem's next power-off"
+    assert any_change() is None and on() is None and off() is None
+    with pytest.raises(TypeError, match="call the condition"):
+        bool(any_change)
+    pulse(model.driven, seconds(2), ms(100))
+    started = ModemPower(seconds(2) + ms(101), True, "pwrkey")
+    assert any_change() == started and on() == started and off() is None
+    now[0] = seconds(4).ns
+    modem.lose_power()
+    lost = ModemPower(seconds(4), False, "supply")
+    assert off() == lost and any_change() == started
+    assert modem.next_power_change()() is None
+    assert modem.power_changes == model.power_changes
+    assert model.power_changes == (ModemPower(seconds(1), False, "test"), started, lost)
+
+
+@pytest.mark.parametrize("powered", [1, 0, "on", "True"])
+def test_next_power_change_refuses_what_is_no_bool(tmp_path: Path, powered: object) -> None:
+    modem, _, _ = route(tmp_path, [0])
+    modem.signal(dbm=-73)
+    with pytest.raises(
+        ValueError, match=r"^modem.next_power_change: powered is .*, not True, False or None$"
+    ):
+        modem.next_power_change(powered)  # type: ignore[arg-type]
+
+
+def test_power_changes_need_the_modem_model(tmp_path: Path) -> None:
+    modem, _, _ = route(tmp_path, [0])
+    with pytest.raises(SourceError, match="has no modem model"):
+        modem.next_power_change()
+    with pytest.raises(SourceError, match="has no modem model"):
+        _ = modem.power_changes
     assert modem.source is None

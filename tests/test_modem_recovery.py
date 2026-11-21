@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from esp32tl import LinkChange
+from esp32tl import LinkChange, ModemPower
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.lines import LineEvent, Lines
@@ -84,6 +84,43 @@ def test_recovers_a_hung_modem(
     assert ms(99) <= key[3][1] - key[2][1] <= ms(101)
     assert key[0][1] < enable[0][1] < reset[0][1] < key[2][1] <= recovered.at
     assert modem.restarts[0].at == (key[1][1] if pwrkey else reset[1][1]) + ms(1)
+    # PWRKEY switched the modem off and on, each at its pulse's release and a millisecond; RESET
+    # restarted it with its power on, which is no change of power.
+    assert modem.power_changes == (
+        (
+            ModemPower(key[1][1] + ms(1), False, "pwrkey"),
+            ModemPower(key[3][1] + ms(1), True, "pwrkey"),
+        )
+        if pwrkey
+        else ()
+    )
+
+
+def test_a_lost_supply_is_an_off_and_the_recovery_s_pulse_switches_the_modem_on(
+    board: Esp32Sim, modem: Modem, lines: Lines, console: Console
+) -> None:
+    modem.network()
+    board.power_on()
+    board.wait_until(console.line("modem_recovery: connected"), within=seconds(60))
+    assert not modem.power_changes
+    on = modem.next_power_change(True)
+
+    lost_at = board.now
+    modem.lose_power()
+    assert list(modem.power_changes) == [ModemPower(lost_at, False, "supply")]
+    # RI is low: the firmware sends no off pulse, and RESET finds the modem off
+    hung = board.wait_until(console.line(r"modem_recovery: hung RI=(\d)"), within=seconds(60))
+    assert hung[1] == "0"
+    modem.restore_power()
+    started = board.wait_until(on, within=seconds(30))
+    board.wait_until(console.line("modem_recovery: recovered RI=1"), within=seconds(1))
+
+    [(_, pressed), (_, released)] = firmware_pulses(lines, "modem.pwrkey", lost_at)
+    assert ms(99) <= released - pressed <= ms(101)
+    assert started == ModemPower(released + ms(1), True, "pwrkey")
+    assert list(modem.power_changes) == [ModemPower(lost_at, False, "supply"), started]
+    assert [(r.at, r.cause) for r in modem.restarts] == [(lost_at, "supply")]
+    board.wait_until(console.line("modem_recovery: connected"), within=seconds(60))
 
 
 def test_two_successive_next_presses_of_pwrkey_are_the_recovery_s_two_presses(

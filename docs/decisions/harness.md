@@ -2477,6 +2477,9 @@ firmware's delay, not the document's minimum, and a tick-based delay can end nea
 recording a restart at each start, because a modem's first start is no restart and a loss of supply
 would have no entry until PWRKEY started it again.
 
+*Extended in #311 by [The modem's power changes are a history beside its
+restarts](#the-modems-power-changes-are-a-history-beside-its-restarts).*
+
 ## The modem data peer and realistic escape timing wait for network integration
 
 Status: superseded (#30)
@@ -5455,3 +5458,31 @@ asserting on the register instead of on what happened. Also rejected: placing th
 observer on the `SLEEP_EN` write, for the reason `uptime` rejected one, that it turns off esp32sim's
 round batching and virtual quanta for the whole run, and shorter slices before a sleep, because the
 runner cannot tell a sleep is coming.
+
+## The modem's power changes are a history beside its restarts
+
+Status: decided (#311)
+
+`modem.power_changes` records each time the modem switched on or off as a `ModemPower(at, powered,
+cause)`, beside `restarts`, so that a test sees when the modem came on: after a wake, after a lost
+supply, after a recovery. Without it a test rebuilt the instant from `lines.events()` of PWRKEY,
+the profile's thresholds, both supplies and the 1 ms latency, which is the model over again, or
+polled `powered`, which has no time. An entry is a change of `powered`: a call or a pulse that
+leaves the power as it was adds none, and so the entries alternate between off and on. The causes
+are those of `restarts`, and the start the test sets before the board's first instant is no entry,
+as there.
+
+A RESET restart adds none, nor does `power_on()` on a running modem, which also restarts it:
+the power stays on, and `restarts` records the restart. A test that waits for the modem to come on
+waits for its power, and a RESET pulse that a recovery sends to a modem already on is not that.
+
+**Rejected:** changing `restarts` to record the starts too, as #128 rejected. A run that ended and a
+change of power are different facts: a RESET recovery is a restart with no change of power, a
+PWRKEY recovery is one restart and two changes, and a lost supply is a restart whose start comes
+later, by PWRKEY, or never. One history holding both would need a kind beside its cause, and every
+test that reads `restarts` today would have to filter it.
+
+**Rejected:** recording a RESET restart, and `power_on()` on a running modem, as an off and an on
+at the same instant. The power did not change, two entries at one instant would break the
+alternation a test can rely on, and `next_power_change(False)` would be satisfied by a reset the
+test did not mean.
