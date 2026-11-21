@@ -105,15 +105,25 @@ interface that puts the firmware's controller on the board's link is
    and sets its sink to `_received`; the DLC's close event forgets it and its holder, as when the
    link drops. Bumble 0.0.236's DLC answers the device's DISC with UA and stays open, so `_opened`
    wraps the DLC's `on_disc_frame` to also drop it from the multiplexer's `dlcs` and abort it, which
-   closes it; a new Bumble may close it itself, and the wrapper is then to go. `_received(data)`
-   appends `ChannelEvent(Duration(now), "out", data)` to `events`, gives `_driving.receive(now, data)` to `_queue`, and
-   flushes. `poll(now)`, the party's, does the same with `_driving.poll(now)`. Both run inside the
-   loop and hand a `PeerError` to `Air.fail`. `_driving`, a property, is `source`, or for a
-   `Model` (`esp32tl/sources/model/__init__.py`)
+   closes it; a new Bumble may close it itself, and the wrapper is then to go. The wrapper calls
+   Bumble's own `on_disc_frame` first, so the UA goes out at the DISC's instant, and adds nothing
+   else: the multiplexer (DLCI 0), its L2CAP channel and the ACL link stay, and Bumble's
+   multiplexer answers the device's DISC on DLCI 0, its L2CAP the Disconnection Request, and its
+   host the link's end, each when the device's host sends it. Nothing in `SppPeer` sends a DISC,
+   closes the multiplexer or calls `Connection.disconnect`. A link of the peer's ends otherwise
+   only when it leaves (`switch_off` at once, `out_of_range` at the supervision timeout) or when
+   an authentication fails (`Controller._authentication_failed`'s `LMP_detach`), and a test ends
+   one through `peer.device.connections`
+   ([user doc](bluetooth-peer-user.md#when-the-channel-closes),
+   [decision](../decisions/harness.md#the-spp-peer-ends-nothing-itself-after-the-device-closes-the-channel)).
+   `_received(data)` appends `ChannelEvent(Duration(now), "out", data)` to `events`, gives
+   `_driving.receive(now, data)` to `_queue`, and flushes. `poll(now)`, the party's, does the same
+   with `_driving.poll(now)`. Both run inside the loop and hand a `PeerError` to `Air.fail`.
+   `_driving`, a property, is `source`, or for a `Model` (`esp32tl/sources/model/__init__.py`)
    `in_nanoseconds(source, f"{name}: source", _Misreturned)`, made again whenever `source` is
-   another object: it converts each time at the edge, `Duration(now)` in and `.ns` out, and
-   refuses what is not a `Duration` with `_Misreturned`, a `PeerError` that `_call` raises as it
-   is rather than as something the source raised. `source` stays what the test gave.
+   another object: it converts each time at the edge, `Duration(now)` in and `.ns` out, and refuses
+   what is not a `Duration` with `_Misreturned`, a `PeerError` that `_call` raises as it is rather
+   than as something the source raised. `source` stays what the test gave.
 7. **The answers.** `_queue` calls the source's method through `_call`, which turns an exception
    into a `PeerError` naming the peer and the method, reads what it returns, checks each output,
    a `(t, bytes)` pair with `t` an `int` not before `now`, drops one with empty bytes, and inserts
@@ -716,12 +726,14 @@ in `error_code` on a failed `Connection_Complete`, and `HCI_Error` with
   a device with Secure Simple Pairing pairing with the peer's PIN; an inquiry of two peers in
   address order, completing after 10.24 s; the channel to one device at a time, also to two that ask
   at one instant, only on an authenticated link, encrypted or not, unless `secure=False`, closed by
-  the device's DISC or by the link, and opened again; a peer with something due the instant it
-  joins; unprompted bytes lost before the channel opens and answers lost after it closes; sources
-  that raise, answer into the past, return what is not a pair or an empty answer, or give a wrong
-  `quiet_until`; two runs with the same `events`; Secure Simple Pairing between two
-  controllers that support it, with the stand-ins' keyboards, which both type Bumble's default 0; encryption refused on a link not authenticated, and turned off on
-  both sides; the air quiet until the device writes; the peer's refusals of its arguments and of an
+  the device's DISC or by the link, and opened again; after the device's DISC, the peer's UA at
+  its instant and nothing else, its multiplexer, L2CAP channel and link still up 60 s later; a
+  peer with something due the instant it joins; unprompted bytes lost before the channel opens and
+  answers lost after it closes; sources that raise, answer into the past, return what is not a pair
+  or an empty answer, or give a wrong `quiet_until`; two runs with the same `events`; Secure Simple
+  Pairing between two controllers that support it, with the stand-ins' keyboards, which both type
+  Bumble's default 0; encryption refused on a link not authenticated, and turned off on both sides;
+  the air quiet until the device writes; the peer's refusals of its arguments and of an
   address taken. A peer that leaves, either way: the link falling at exactly the supervision timeout
   with no detach; a page ending at exactly the page timeout, also to an address nobody has; an
   inquiry not finding it until it returns; the key kept across a return, and `forget_keys`; a return

@@ -5394,3 +5394,25 @@ field only. Also rejected: `next_boot(uptime_zero=True)` returning `None` or a b
 when the zero never comes, because the wait has no point at which to give up but its `within`.
 Also rejected: an `uptime_zero` option on `wait_for_wake`, because the lookup covers its boot, and
 waiting for the zero there would take polls in a wait that takes none through the sleep.
+
+## The SPP peer ends nothing itself after the device closes the channel
+
+Status: decided (#309)
+
+At the device's DISC for the channel, `SppPeer` answers UA and the channel is closed; it sends no
+DISC of its own, does not close its RFCOMM multiplexer or the L2CAP channel under it, and does not
+end the ACL link. The device's host does each of these, or the test does, through
+`peer.device.connections`. Measured on `examples/obd_reader` with ESP-IDF v5.3.6, Bluedroid then
+closes the multiplexer 20 ms after the DLC's UA and the L2CAP channel 20 ms after that, and ends
+the link 4.02 s later, at its `L2CAP_LINK_INACTIVITY_TOUT`
+([user doc](../features/bluetooth-peer-user.md#when-the-channel-closes)). Devices differ in what
+they do after a close, and no specification or vendor document says what a typical SPP adapter
+does, so the peer does the least a device can, and a test that needs another device states it.
+`ChannelEvent.direction` keeps the names of a tap's recording, `"out"` and `"in"`, said from the
+firmware's side: renaming them would make the peer's events and the tap's disagree.
+
+**Postponed:** an option for the peer to end its multiplexer or its link by itself after a close,
+until a capture of a real device shows one doing so, and when; and a public history of the
+channel's openings and closes (`SppPeer.channels`, one frozen record per opening with its open and
+close times and what closed it: the device's DISC, the link's end or `switch_off`), replacing the
+private `_openings` and `_closed`, until a test needs more than `is_open`/`is_closed` and the tap.

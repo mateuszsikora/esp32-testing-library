@@ -454,6 +454,80 @@ All of this has been exercised on an `Air` with a Bumble device in the ESP32's p
 the `bt` fixture's controller with a Bumble host in Bluedroid's: no firmware has seen a peer leave
 yet. What ESP-IDF does with these events is not known.
 
+## When the channel closes
+
+The peer answers at once and starts nothing itself. At the device's RFCOMM DISC for the channel it
+answers UA and the channel is closed: `channel_open` is false, `is_closed` holds, and a line the
+close cut off is a `WrittenLine` with `complete=False`. It never sends DISC itself, never closes its
+RFCOMM multiplexer or the L2CAP channel under it, and, while it stays on the air
+([above](#a-peer-that-leaves)), never ends the ACL link: it answers each of these when the device's
+host asks, and that is all. A real SPP adapter may end the link itself sooner; this one never does
+([decision](../decisions/harness.md#the-spp-peer-ends-nothing-itself-after-the-device-closes-the-channel)).
+
+Measured on `examples/obd_reader`, built with ESP-IDF v5.3.6, from the run's HCI tap
+(`board.bluetooth.tap(path)`): the reader ends a session it has nothing to read on with
+`esp_spp_disconnect`, then pauses 5 s before its next search. Times are from the console line it
+prints just before the call; the guest's controller gives every answer 100 µs after the packet it
+answers.
+
+| After | The firmware's host sends | The peer answers |
+|---|---|---|
+| 0.2 ms | RFCOMM DISC on the channel's DLCI | UA: the channel is closed. `ESP_SPP_CLOSE_EVT` reaches the firmware at about 20 ms |
+| 20 ms | RFCOMM DISC on DLCI 0, the multiplexer | UA |
+| 40 ms | L2CAP Disconnection Request, RFCOMM's channel | Disconnection Response |
+| 4.06 s | `HCI_Disconnect`, reason `0x13` | `Disconnection_Complete`, the link's end |
+
+Bluedroid closes the multiplexer without waiting, 20 ms after the UA, because its own DISC closed
+the last DLC; had the other side's, it would wait `RFC_MCB_RELEASE_INACT_TIMER`, 2 s, which never
+happens here, as the peer sends no DISC (`stack/rfcomm/rfc_utils.c:328-336`,
+`stack/rfcomm/include/rfc_int.h:238`, under `components/bt/host/bluedroid/` of ESP-IDF v5.3.6).
+With no L2CAP channel left on the link, the firmware's host ends it after
+`L2CAP_LINK_INACTIVITY_TOUT`, 4 s (`common/include/common/bt_target.h:1551`): the 4.02 s from the
+L2CAP close to `HCI_Disconnect`.
+
+So a firmware that waits for the link's end after its own close, as
+`ESP_BT_GAP_ACL_DISCONN_CMPL_STAT_EVT`, waits about 4 s on the emulator: its own host's inactivity
+timer, not the peer. A firmware that opens the channel again within those 4 s gets the link it had.
+In the same example with an adapter that stopped answering, after which the reader searches at
+once, its search started 50 ms after the line it prints before `esp_spp_disconnect`, `obd_reader:
+the adapter stopped answering`, and SDP 91 ms after it, on the old link: no page and no pairing.
+
+To end the link from the peer's side, as an adapter that drops its connection does, a test
+disconnects the peer's connections on the air, as `hang_up` in
+`examples/obd_reader/tests/test_obd_reader.py` does:
+
+```python
+async def hang_up(peer: SppPeer) -> None:
+    for connection in list(peer.device.connections.values()):
+        await connection.disconnect()
+
+
+hung_up = board.bluetooth.air.start(hang_up(peer))
+board.wait_until(hung_up.done, within=ms(100))  # The peer's end of each link is gone.
+board.wait_until(board.console.line("obd_reader: disconnected"), within=ms(100))
+```
+
+Wait for the task `air.start` returns, not for `peer.is_closed`: after the device's own close the
+channel is closed already while the link is still up, so `is_closed` says nothing about the link.
+On the air the hang-up completes at the instant it starts, and `peer.device.connections` is then
+empty. What the firmware makes of it comes later, at its own events: wait for one of those, here
+the console line it prints at `ESP_SPP_CLOSE_EVT`.
+
+Measured on the same example: the firmware's host gets `Disconnection_Complete`, reason `0x13`, 0.1
+ms after, and `ESP_SPP_CLOSE_EVT` reaches the firmware 10.6 ms after; no RFCOMM or L2CAP frame goes
+before it, since the link's end closes them all. After the device's own close, a test that does not
+want to wait for the firmware's 4 s hangs up the same way, and waits for the firmware's own sign of
+the link's end, such as `ESP_BT_GAP_ACL_DISCONN_CMPL_STAT_EVT`, if it has one.
+
+These times hold for that build and esp32tl's pinned Bumble; to measure them again, as after a
+bump of either, tap a run of `examples/obd_reader` with an adapter it has nothing to read on, such
+as `Elm327(version="OK")`, with `board.bluetooth.tap(path)`, and read the packets after
+`obd_reader: not an ELM327 adapter: OK` in the tap's `events` or the btsnoop file.
+
+The peer keeps no history of its openings and closes: a test sees the close's time only to within
+one turn of `board.wait_until(peer.is_closed, ...)`, and who closed the channel and when the link
+went only in the tap.
+
 ## The model that answers
 
 `source` is what drives the SPP channel from the peer's end, written as for the far end of a UART
@@ -478,8 +552,10 @@ of the same time go out in the order they were given; empty bytes are dropped. W
 sends while no device holds the channel is lost, as it would be on the air: `peer.lost` counts its
 bytes. A source that raises, or returns what the peer cannot send, fails the air (below).
 
-`peer.events` holds what crossed the channel, in order, as `ChannelEvent(at, direction, data)` named tuples: `out` of the
-device, `in` to it, as a tap's recording names them.
+`peer.events` holds what crossed the channel, in order, as `ChannelEvent(at, direction, data)`
+named tuples. `direction` is said from the firmware's side, as a tap's recording names it
+([recording format](../recording-format.md)): `"out"`, written by the firmware to the peer;
+`"in"`, sent by the peer to the firmware.
 
 `ChannelEvent`, `WrittenLine`, `Refusal`, `Pairing` and `UnknownCommand` are imported from
 `esp32tl`. All their timestamps are `Duration`s: `event.at`, `line.at`, `refusal.at`, `pairing.t`,

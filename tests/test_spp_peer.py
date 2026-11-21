@@ -824,6 +824,33 @@ def test_what_the_source_sends_after_the_channel_closes_is_lost(air: Air, closes
     assert peer.events == [(Duration(0), "out", b"hello\r")]
 
 
+def test_after_the_device_closes_the_channel_the_peer_ends_nothing_itself(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    closed: list[int] = []
+
+    async def close_and_wait() -> rfcomm.DLC:
+        dlc = await esp32.session()
+        dlc.on(dlc.EVENT_CLOSE, lambda: closed.append(air._loop.now))
+        closed.append(air._loop.now)
+        await dlc.disconnect()
+        # Longer than a host's timers after a close (Bluedroid's 2 s and 4 s) and than the
+        # supervision timeout: the peer has none of its own to fire.
+        await asyncio.sleep(60)
+        return dlc
+
+    dlc = air.run(close_and_wait(), within=seconds(70))
+    # Answered at once: the UA came at the DISC's instant.
+    [disc, ua] = closed
+    assert ua == disc and peer.is_closed()
+    # The multiplexer, its L2CAP channel and the link are as the device left them: open.
+    multiplexer = dlc.multiplexer
+    assert multiplexer.state == rfcomm.Multiplexer.State.CONNECTED
+    assert multiplexer.l2cap_channel.state == multiplexer.l2cap_channel.State.OPEN
+    assert esp32.fell == []
+    assert [str(c.peer_address) for c in peer.device.connections.values()] == [DEVICE + "/P"]
+
+
 def test_a_device_that_gives_no_pin_fails_the_authentication(air: Air) -> None:
     peer = SppPeer(air, name="peer", pin="1234", source=Echo())
     esp32 = Initiator(air, pin=None)
