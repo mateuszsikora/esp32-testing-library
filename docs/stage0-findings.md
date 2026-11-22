@@ -269,6 +269,56 @@ production images.
    the pin since #180, on which the same image pairs, opens SPP and streams at about 299 kbit/s
    ([validation firmware](features/validation-firmware-technical.md#bt_spp_initiator_psram)).
 
+## RTC watchdog during classic ESP32 deep sleep
+
+On 2026-11-22, a LOLIN32 board (ESP32-D0WDQ6 rev. 1.0, 40 MHz crystal,
+4 MB flash) and the peerless runner (esp32sim `357b0e5`, classic rev. 3.0 ROM) ran the same
+ESP-IDF v5.5.5 binaries for each watchdog action. Boot 1 armed a 10 s timer and RWDT stage 0
+for 150,000 RTC slow-clock ticks, with `WDT_PAUSE_IN_SLP` cleared. Boot 2 armed only a 1 s
+timer. Each line samples both registers on entry to `app_main`, before configuring the next sleep.
+
+With `RESET_SYSTEM`, the board reached its 10 s timer wake. The simulator took cause 9 at
+1.035 s. This run gives no physical cause-9 register sample. With `RESET_RTC`, the watchdog
+did end the board's sleep in about 1 s (cause 16). Both bits then read zero on the board and
+one in the simulator. The watchdog-free control consistently gave cause 5, timer wake 4,
+`SLEEP_EN=0` and `DG_WRAP_PD_EN=1` on both targets.
+
+**Board UART0 (host seconds since EN reset), `RESET_SYSTEM`**
+
+```text
+0.298 PROBE boot=1 reset=1 wake=0 STATE0=0x20300000 SLEEP_EN=0 DIG_PWC=0x00020000 DG_WRAP_PD_EN=0
+10.503 PROBE boot=2 reset=5 wake=4 STATE0=0x20300000 SLEEP_EN=0 DIG_PWC=0xc0020000 DG_WRAP_PD_EN=1
+11.782 PROBE boot=3 reset=5 wake=4 STATE0=0x20300000 SLEEP_EN=0 DIG_PWC=0xc0020000 DG_WRAP_PD_EN=1
+```
+
+**esp32sim, `RESET_SYSTEM`**
+
+```text
+PROBE boot=1 reset=1 wake=0 STATE0=0x00000000 SLEEP_EN=0 DIG_PWC=0x00020000 DG_WRAP_PD_EN=0
+esp32tl-runner: chip reset at 1.034831 s, cause 0x9
+PROBE boot=2 reset=9 wake=0 STATE0=0x80000000 SLEEP_EN=1 DIG_PWC=0xc0020000 DG_WRAP_PD_EN=1
+esp32tl-runner: chip reset at 2.069350 s, cause 0x5
+PROBE boot=3 reset=5 wake=4 STATE0=0x00000000 SLEEP_EN=0 DIG_PWC=0xc0020000 DG_WRAP_PD_EN=1
+```
+
+**Board UART0 (host seconds since EN reset), `RESET_RTC`**
+
+```text
+0.298 PROBE boot=1 reset=1 wake=0 STATE0=0x20300000 SLEEP_EN=0 DIG_PWC=0x00020000 DG_WRAP_PD_EN=0
+1.472 PROBE boot=2 reset=16 wake=0 STATE0=0x20300000 SLEEP_EN=0 DIG_PWC=0x00020000 DG_WRAP_PD_EN=0
+2.750 PROBE boot=3 reset=5 wake=4 STATE0=0x20300000 SLEEP_EN=0 DIG_PWC=0xc0020000 DG_WRAP_PD_EN=1
+```
+
+**esp32sim, `RESET_RTC`**
+
+```text
+PROBE boot=1 reset=1 wake=0 STATE0=0x00000000 SLEEP_EN=0 DIG_PWC=0x00020000 DG_WRAP_PD_EN=0
+esp32tl-runner: chip reset at 1.034831 s, cause 0x10
+PROBE boot=2 reset=16 wake=0 STATE0=0x80000000 SLEEP_EN=1 DIG_PWC=0xc0020000 DG_WRAP_PD_EN=1
+esp32tl-runner: chip reset at 2.069211 s, cause 0x5
+PROBE boot=3 reset=5 wake=4 STATE0=0x00000000 SLEEP_EN=0 DIG_PWC=0xc0020000 DG_WRAP_PD_EN=1
+```
+
 ## Reproducing
 
 Build in the ESP-IDF v5.3.6 container from the table above. For an example, copy it out of
@@ -332,3 +382,39 @@ The production images, which are not in this repository, ran with `--flash-mb 4 
 `--flash-at` at `0x1000` (bootloader), `0x8000` (partition table), `0x10000` (otadata) and `0x20000`
 (the application in `ota_0`), plus `--flash-at 0x9000=<nvs image>` for the runs that named a
 Bluetooth peer, the NVS image made with IDF's `nvs_partition_gen.py`.
+
+### Sleep reset probe (#317)
+
+With ESP-IDF v5.5.5 active, build the default `RESET_SYSTEM` case and flash a classic ESP32.
+Set `PORT` to its serial port. Reset with EN and read UART0 at 115200 baud through boot 3.
+
+```sh
+P=tools/sleep_reset_probe
+B=$P/build
+idf.py -C "$P" -B "$B" build
+idf.py -C "$P" -B "$B" -p "$PORT" -b 115200 flash monitor
+```
+
+For the second case, use a separate configuration and build directory, then repeat the flash and
+simulation with `B=$P/build-rtc`.
+
+```sh
+B=$P/build-rtc
+mkdir -p "$B"
+echo CONFIG_PROBE_RESET_RTC=y > "$B/sdkconfig.defaults.rtc"
+idf.py -C "$P" -B "$B" -D SDKCONFIG="$PWD/$B/sdkconfig" \
+  -D "SDKCONFIG_DEFAULTS=$PWD/$P/sdkconfig.defaults;$PWD/$B/sdkconfig.defaults.rtc" build
+idf.py -C "$P" -B "$B" -p "$PORT" -b 115200 flash monitor
+```
+
+Run each build from the repository root with its own `B`, using the same three binaries as the
+board and the classic ROM from `make rom-elf`.
+
+```sh
+(cd runner && cargo build --release --locked)
+runner/target/release/esp32tl-runner --chip esp32 \
+  --rom .cache/esp-rom-elfs/20260528/esp32_rev300_rom.elf \
+  --flash-at 0x1000=$B/bootloader/bootloader.bin \
+  --flash-at 0x8000=$B/partition_table/partition-table.bin \
+  --flash-at 0x10000=$B/sleep_reset_probe.bin --max-seconds 15
+```

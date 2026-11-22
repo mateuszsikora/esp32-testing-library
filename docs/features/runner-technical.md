@@ -505,7 +505,7 @@ pending and the RTC watchdog off: a sleep with the watchdog on is a sleep too. `
 `WAKEUP_ENA`, the register RAM's `0x34`, which esp32sim's wake leaves in place: bit 11 `Ext0`, 12
 `Ext1`, 14 `Timer`, 19 `Touch` and 20 `Ulp`.
 
-A sleep that a reset other than its wake ends, as the RTC watchdog's `RTCWDT_SYS_RESET` (9), leaves
+In esp32sim a sleep that the RTC watchdog ends with `RTCWDT_SYS_RESET` (9) leaves
 `SLEEP_EN` and `DG_WRAP_PD_EN` set in the next boot: esp32sim's `reboot` keeps the RTC registers
 and only its `wake` clears `SLEEP_EN`, and ESP-IDF v5.5.5 sets `SLEEP_EN` and never clears it
 (`port/esp32/rtc_sleep.c`), and writes `DG_WRAP_PD_EN` only when it configures the next sleep. In
@@ -513,9 +513,13 @@ that boot only the cores' clause keeps `in_deep_sleep` false, and with it `deep_
 `sleeps_through`: after the reset both cores run, ESP-IDF's idle task waits with interrupts
 enabled, and its halt after a panic is a busy loop, so a false `sleep` needs a firmware that puts
 both cores in `waiti` with every interrupt disabled. The runner does not clear the bit at such a
-reset: that would change what the firmware reads, and whether the chip itself clears it there is
-not known; nor does it ignore the bit for the rest of the boot, which would lose that boot's next
-real sleep without a word.
+reset: that would change what the firmware reads, and ignoring it for the rest of the boot would hide that boot's next sleep.
+
+On a classic ESP32-D0WDQ6 rev. 1.0, the same stage-0 system-reset probe slept until its 10 s
+timer wake (cause 5), so there was no physical cause-9 boot to sample. With the RTC-reset stage
+action, the chip rebooted in about 1 s (cause 16) and both bits read zero at `app_main`. esp32sim
+retained both bits on cause 16. After the watchdog-free timer control both targets read
+`SLEEP_EN=0` and `DG_WRAP_PD_EN=1`. See the [boot logs](../stage0-findings.md#rtc-watchdog-during-classic-esp32-deep-sleep).
 
 #### The reset-reason hint
 

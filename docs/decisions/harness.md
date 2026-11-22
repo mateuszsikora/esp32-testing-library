@@ -5448,6 +5448,10 @@ detection does not depend on `--realtime`. After a reset other than the wake end
 RTC watchdog's, esp32sim leaves `SLEEP_EN` and `DG_WRAP_PD_EN` set, and only the cores' clause, both
 waiting with no interrupt enabled, keeps the next boot from counting as asleep; the runner leaves
 the bit as it is ([runner](../features/runner-technical.md#when-each-boot-goes-into-deep-sleep)).
+The [#317 hardware probe](../stage0-findings.md#rtc-watchdog-during-classic-esp32-deep-sleep)
+qualifies that result. The classic ESP32 rev. 1.0 reached the timer wake with the watchdog set to
+reset the digital system. Resetting the RTC domain too produced cause 16 and both bits read zero
+in the new boot. The emulator produced causes 9 and 16 respectively and retained both bits in each.
 
 **Rejected:** a link from `Boot` to its sleep, `Boot.slept`, because `Boot` is the record of a
 reset, and a boot that never sleeps has nothing to put there: the history alone gives the same

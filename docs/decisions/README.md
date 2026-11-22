@@ -444,3 +444,4 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The P4 reports its uptime as the other SYSTIMER chips do, the S31 none yet](runner.md#the-p4-reports-its-uptime-as-the-other-systimer-chips-do-the-s31-none-yet) | `runner.md` | decided (#233) |
 | [The runner puts the reset-reason hint back where esp32sim forgets it](runner.md#the-runner-puts-the-reset-reason-hint-back-where-esp32sim-forgets-it) | `runner.md` | decided (#261) |
 | [The peer writes the flash in its turn, with the supply off](runner.md#the-peer-writes-the-flash-in-its-turn-with-the-supply-off) | `runner.md` | decided (#278) |
+| [The classic RTC watchdog probe leaves reset modelling to esp32sim](runner.md#the-classic-rtc-watchdog-probe-leaves-reset-modelling-to-esp32sim) | `runner.md` | decided (#317) |
