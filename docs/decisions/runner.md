@@ -1341,3 +1341,15 @@ outside; the runner refuses it as a protocol error rather than leave the check t
 
 The harness's side, the merge and the refusal while the board is on, is
 [board.nvs merges by values, before power-on and between boots](harness.md#boardnvs-merges-by-values-before-power-on-and-between-boots).
+
+## The classic RTC watchdog probe leaves reset modelling to esp32sim
+
+Status: decided (#317)
+
+The [hardware measurement](../stage0-findings.md#rtc-watchdog-during-classic-esp32-deep-sleep)
+found two different effects. The system-reset stage action produced cause 9 only in esp32sim.
+Patching a register after that reset would still expose a boot the board never took. The
+RTC-reset action produced cause 16 on both targets, with both sleep bits clear on the board
+and set in esp32sim. RTC-domain reset semantics belong in the chip model, where firmware
+and the runner can observe the same state. Keep the runner's existing check of both cores
+while waiting for a model fix.

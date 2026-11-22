@@ -1,0 +1,5 @@
+config PROBE_RESET_RTC
+    bool "Reset the RTC domain as well as the digital system"
+    default n
+    help
+        Select the RTC watchdog's RESET_RTC stage action instead of RESET_SYSTEM.
