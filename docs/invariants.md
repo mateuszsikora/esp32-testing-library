@@ -1622,7 +1622,15 @@ that references to its number keep their meaning.
     (`modem.drop_call()`) ends the connection as `keepalive` at 1.5 times its keepalive after the
     device's last packet, Will sent; a DISCONNECT ends it at once, no Will.
     `broker.next_end(client_id=None)` waits for the next end, of one client ID when given, and
-    polling consumes nothing.
+    polling consumes nothing. A connection that ends by keepalive ends 1.5 times its keepalive
+    after its last received packet. A poll observes packets delivered before it, including
+    during a write callback. A DISCONNECT delivered before transport closure suppresses the Will.
+    Once the transport closes, a persistent subscriber queues matching QoS 1 publications,
+    including those routed before the broker finishes handling the close.
+    `tests/test_net_mqtt_sessions.py::test_publications_survive_transport_closure_during_delivery`,
+    `tests/test_net_mqtt_packets.py::test_disconnect_received_before_transport_close_suppresses_will`,
+    `tests/test_net_mqtt_packets.py::test_poll_checks_keepalive_after_an_already_received_ping`,
+    `tests/test_net_mqtt_packets.py::test_split_ping_and_partial_next_packet_at_keepalive_expiry`,
     `tests/test_net_mqtt_ends.py::test_each_way_a_connection_ends_has_its_own_cause`,
     `tests/test_net_mqtt_ends.py::test_the_end_is_recorded_before_the_will_is_published`,
     `tests/test_net_mqtt_ends.py::test_the_tls_layer_closing_under_a_session_ends_it_as_closed`,

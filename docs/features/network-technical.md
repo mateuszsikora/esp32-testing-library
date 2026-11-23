@@ -421,7 +421,9 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   CleanSession=1 `_State` holds its queue for its one connection. `_wait` logs
   `mqtt: <id> has no free packet identifier: waiting for a PUBACK, <n> queued` when a connection
   starts to wait, and `_Session.waiting` keeps it from logging again until `_drain` empties the
-  queue. PUBACK discards the ID, pops `state.sent` and stamps that `Delivery`'s `acknowledged_at`; a connection already closed
+  queue. If the transport closes during CONNACK on resume, the queued messages wait for the
+  next connection. Only packet ID exhaustion triggers the wait diagnostic in `_drain`.
+  PUBACK discards the ID, pops `state.sent` and stamps that `Delivery`'s `acknowledged_at`; a connection already closed
   ignores its data, PUBACK included, in `on_data`. `_end` clears `state.connection` and removes a
   `clean` state from `_states`. `session` copies a `_State`'s collections into a frozen
   `SessionState`, whose `Delivery` records stay the broker's;
@@ -748,6 +750,20 @@ Terminate-Request or a `Station` losing its lease, call `_link_ended`, which cal
 reaches a broker on the internet from a device that lost its power or its coverage. The broker
 ends them at keepalive expiry, `mqtt: <id> keepalive expired`, and publishes the Will then, 1.5
 times the keepalive after the client's last packet.
+
+`_Session.on_data` in `esp32tl/net/mqtt.py` passes each chunk to the broker, which queues it with its
+arrival time. A synchronous write callback can supply more bytes on any connection. The broker
+processes incoming chunks, transport close notifications and timer polls in arrival order.
+A DISCONNECT delivered before transport closure suppresses the Will. A poll checks the deadline
+set by packets delivered before that poll. Closing the transport stops outgoing writes immediately.
+From that point, `Broker._offer` uses the offline routing rules even while the close
+notification is queued. A matching QoS 1 publication waits in the persistent session and
+follows any unacknowledged retransmissions when the subscriber reconnects.
+A packet takes the timestamp of the chunk containing its final byte. After the handler has
+produced its records, the session appends a `ReceivedPacket` to
+`Broker.received_packets`, including for a rejected CONNECT or a graceful DISCONNECT. A handler
+error or incomplete frame adds nothing. An open session with keepalive enabled sets its deadline
+from that same timestamp.
 
 `Network.lose_link(orphan=True)` calls `forget_device`, which marks every device flow `orphaned`:
 the stack on the device that held it is gone, by the power, by the coverage or because lwIP drops a

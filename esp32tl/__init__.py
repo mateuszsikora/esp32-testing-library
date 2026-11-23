@@ -137,7 +137,9 @@ from esp32tl.net.mqtt import Delivery as Delivery
 from esp32tl.net.mqtt import Mark as Mark
 from esp32tl.net.mqtt import Message as Message
 from esp32tl.net.mqtt import MqttClient as MqttClient
+from esp32tl.net.mqtt import PacketKind as PacketKind
 from esp32tl.net.mqtt import Publication as Publication
+from esp32tl.net.mqtt import ReceivedPacket as ReceivedPacket
 from esp32tl.net.mqtt import RequestedFilter as RequestedFilter
 from esp32tl.net.mqtt import SessionState as SessionState
 from esp32tl.net.mqtt import SubscribeRequest as SubscribeRequest
@@ -269,6 +271,7 @@ __all__ = [
     "OtaData",
     "OtaEntry",
     "OutputLine",
+    "PacketKind",
     "Pairing",
     "Partition",
     "PeerError",
@@ -278,6 +281,7 @@ __all__ = [
     "Publication",
     "ReactiveModel",
     "Real",
+    "ReceivedPacket",
     "Refusal",
     "Replay",
     "ReplayError",

@@ -30,16 +30,6 @@ def connected(board: Esp32Sim, broker: Broker) -> None:
     board.wait_until(broker.is_subscribed(COMMANDS), within=seconds(60))
 
 
-def last_packet(modem: Modem, connection: int) -> Duration:
-    """When the device's last bytes on the broker's connection `connection` reached it."""
-    events = modem.network().transcript()["events"]
-    assert isinstance(events, list)
-    stream = f"1883/{connection}"
-    return Duration(
-        max(e["t_ns"] for e in events if e.get("stream") == stream and e["direction"] == "out")
-    )
-
-
 @pytest.mark.parametrize("loss", ["power_off", "lose_registration"])
 def test_a_lost_link_publishes_the_will_at_the_keepalive_not_at_the_loss(
     board: Esp32Sim, modem: Modem, broker: Broker, loss: str
@@ -55,7 +45,9 @@ def test_a_lost_link_publishes_the_will_at_the_keepalive_not_at_the_loss(
     assert broker.find_message(STATUS) is None
     will = board.wait_until(broker.next_message(STATUS, "offline"), within=seconds(100))
     # The keepalive is 60 s: the broker gives up 90 s after the device's last packet.
-    assert will.at == last_packet(modem, 1) + seconds(90)
+    connection_id = broker.clients[-1].connection_id
+    last = next(p for p in reversed(broker.received_packets) if p.connection_id == connection_id)
+    assert will.at == last.at + seconds(90)
     assert will.at - lost > seconds(80)
     assert broker.retained[STATUS].text == "offline"
     assert board.link.warnings == []

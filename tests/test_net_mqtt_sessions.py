@@ -112,6 +112,44 @@ def test_offline_qos1_is_queued_in_order_and_qos0_is_dropped(broker: Broker) -> 
     assert [d.packet_id for d in state.unacknowledged] == [1, 2]
 
 
+def test_publications_survive_transport_closure_during_delivery(broker: Broker) -> None:
+    def close_on_publish(packet: bytes) -> None:
+        if packet[0] >> 4 == 3:
+            subscriber.on_close()
+
+    subscriber = broker.accept(("peer", 100), close_on_publish, lambda: None)
+    subscriber.on_data(KEEP + SUBSCRIBE_QOS1)
+    publisher = Wire(broker, CLEAN[:-1] + b"p")
+    publisher.send(b"\x32\x06\0\x01a\0\x011" + b"\x32\x06\0\x01a\0\x022")
+
+    state = broker.session("c")
+    assert state is not None and not state.connected
+    assert [m.payload for m in state.queued] == [b"2"]
+    assert Wire(broker, KEEP).take() == [
+        SESSION_PRESENT,
+        b"\x3a\x06\0\x01a\0\x011",  # retry packet 1 with DUP
+        b"\x32\x06\0\x01a\0\x022",  # first send of packet 2
+    ]
+
+
+def test_close_during_resume_keeps_queue_without_logging_packet_id_exhaustion() -> None:
+    lines: list[str] = []
+    broker = Broker(lambda: 0, lines.append)
+    offline(broker)
+    broker.publish("a/1", "queued", qos=1)
+
+    def close_on_connack(packet: bytes) -> None:
+        assert packet == SESSION_PRESENT
+        subscriber.on_close()
+
+    subscriber = broker.accept(("peer", 100), close_on_connack, lambda: None)
+    subscriber.on_data(KEEP)
+    state = broker.session("c")
+    assert state is not None and not state.connected and not state.unacknowledged
+    assert [m.payload for m in state.queued] == [b"queued"]
+    assert not any("has no free packet identifier" in line for line in lines)
+
+
 def test_the_queue_has_no_limit(broker: Broker) -> None:
     offline(broker)
     for n in range(2000):

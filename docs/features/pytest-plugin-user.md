@@ -1935,6 +1935,8 @@ condition before the action that may produce its event. The
 [network guide](network-user.md#history-next-events-and-current-state) defines the boundaries.
 `modem.network()` gives the underlying network for DNS, NTP and TLS service configuration.
 On serial, both `broker` and `modem.network()` skip because a modem model is unsupported.
+The package exports `ReceivedPacket` and `PacketKind` for the records in
+[`broker.received_packets`](network-user.md#received-control-packets).
 See [the network guide](network-user.md) for complete examples and condition semantics.
 
 ### A virtual station joins the device's SoftAP
