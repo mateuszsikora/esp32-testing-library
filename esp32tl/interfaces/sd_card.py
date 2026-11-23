@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import threading
 from collections import deque
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory, mkdtemp
@@ -26,6 +26,7 @@ from typing import Literal
 from esp32tl.boards import SdCardRoute
 from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import RunEnded, SourceError
+from esp32tl.interfaces.history import History
 from esp32tl.interfaces.uart import same_file
 from esp32tl.link.boardlink import Interface, LinkError, counted
 from esp32tl.link.protocol import (
@@ -353,9 +354,8 @@ class CardFault:
         self._hits: list[FaultedOperation] = []
 
     @property
-    def hits(self) -> tuple[FaultedOperation, ...]:
-        with self._slot._lock:
-            return tuple(self._hits)
+    def hits(self) -> Sequence[FaultedOperation]:
+        return History(self._hits, lock=self._slot._lock)
 
     @property
     def active(self) -> bool:
@@ -581,18 +581,16 @@ class SdCard(Interface):
         return [_card_change(change.t, change.image) for change in unacknowledged]
 
     @property
-    def refused(self) -> list[CardChange]:
+    def refused(self) -> Sequence[CardChange]:
         """The changes the runner refused, at the instants it did, each with the image the test
         asked for: a refusal fails the link, so there is one at most."""
-        with self._lock:
-            return list(self._refused)
+        return History(self._refused, lock=self._lock)
 
     @property
-    def changes(self) -> list[CardChange]:
+    def changes(self) -> Sequence[CardChange]:
         """What the slot held after each change the test made with the board on, as the runner
         acknowledged it, in order: a change the run has not reached yet is not there."""
-        with self._lock:
-            return list(self._changes)
+        return History(self._changes, lock=self._lock)
 
     # Fault rules: the test's side.
 
@@ -661,11 +659,10 @@ class SdCard(Interface):
             return tuple(self._faults.values())
 
     @property
-    def faulted(self) -> tuple[FaultedOperation, ...]:
+    def faulted(self) -> Sequence[FaultedOperation]:
         """The operations the rules met, in the order of the board's time: one per rule an
         operation met, in the order the test gave them."""
-        with self._lock:
-            return tuple(self._faulted)
+        return History(self._faulted, lock=self._lock)
 
     def _give(
         self,

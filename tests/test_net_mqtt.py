@@ -225,9 +225,10 @@ def test_history_and_next_events_use_append_order_without_consuming() -> None:
     connected = broker.next_connection()
     assert waiting() is None and connected() is None
     session = broker.accept(("10.64.0.2", 4000), lambda data: None, lambda: None)
+    messages = broker.messages
     # CONNECT and the immediate publication arrive together, before another test poll.
     session.on_data(CONNECT + b"\x30\x08\0\x03a/bnew")
-    first_message, first_client = broker.messages[0], broker.clients[0]
+    first_message, first_client = messages[0], broker.clients[0]
     for _ in range(2):
         assert waiting() is first_message
         assert connected() is first_client
@@ -751,7 +752,7 @@ N = 10_000
 
 def test_a_next_message_poll_reads_only_the_messages_since_the_last_one() -> None:
     broker = Broker(lambda: 0)
-    broker.messages = history = CountingList[Message]()
+    broker._messages = history = CountingList[Message]()
     alarm = broker.next_message("dev/+/alarm", will=False)
     for n in range(N):
         broker.publish(f"dev/{n}/telemetry", "21.5")
@@ -770,7 +771,7 @@ def test_a_next_message_poll_reads_only_the_messages_since_the_last_one() -> Non
 
 def test_a_next_delivery_poll_reads_only_the_deliveries_since_the_last_one() -> None:
     broker = Broker(lambda: 0)
-    broker.deliveries = history = CountingList[Delivery]()
+    broker._deliveries = history = CountingList[Delivery]()
     broker.accept(("10.64.0.2", 4000), lambda data: None, lambda: None).on_data(CONNECT + SUBSCRIBE)
     alarm = broker.next_delivery("a/alarm", "fire")
     for n in range(N):
@@ -785,7 +786,7 @@ def test_a_next_delivery_poll_reads_only_the_deliveries_since_the_last_one() -> 
 
 def test_a_next_subscribe_poll_reads_only_the_requests_since_the_last_one() -> None:
     broker = Broker(lambda: 0)
-    broker.subscribe_requests = history = CountingList[SubscribeRequest]()
+    broker._subscribe_requests = history = CountingList[SubscribeRequest]()
     session = broker.accept(("10.64.0.2", 4000), lambda data: None, lambda: None)
     session.on_data(CONNECT)
     to_b = broker.next_subscribe("b")

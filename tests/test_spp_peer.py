@@ -3967,7 +3967,9 @@ def test_next_write_keeps_append_boundary_and_does_not_consume(air: Air) -> None
     peer = SppPeer(air, name="peer", pin="1234", source=Echo(delay=0))
     esp32 = Initiator(air)
     dlc = air.run(esp32.session(), within=seconds(10))
+    events = peer.events
     air.call(lambda: dlc.write(b"old"))
+    assert events[0].data == b"old"
     first = peer.next_write()
     same = peer.next_write()
     filtered = peer.next_write(b"target")
@@ -4158,7 +4160,7 @@ def test_a_next_write_poll_reads_only_the_events_since_the_last_one(air: Air) ->
     peer = SppPeer(air, name="peer", pin="1234", source=Echo(delay=0))
     dlc = air.run(Initiator(air).session(), within=seconds(10))
     air.call(lambda: dlc.write(b"before"))
-    peer.events = history = CountingList[ChannelEvent](peer.events)
+    peer._events = history = CountingList[ChannelEvent](peer.events)
     alarm = peer.next_write(b"ALARM")
     # What the device writes, as the peer records it, without the air for each of N writes.
     for _ in range(N):
@@ -4181,7 +4183,7 @@ def test_a_next_written_line_poll_reads_only_the_lines_since_the_last_one(air: A
     alarm = peer.next_written_line(b"ALARM")
     for _ in range(N):
         # What the device writes, as the peer records it, without the air for each of N writes.
-        peer.events.append(ChannelEvent(seconds(0), "out", b"temp 21.5\r"))
+        peer._events.append(ChannelEvent(seconds(0), "out", b"temp 21.5\r"))
         assert alarm() is None
     assert len(lines) == N and lines.reads == N
     air.call(lambda: dlc.write(b"ALA"))

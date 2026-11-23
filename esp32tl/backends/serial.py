@@ -16,7 +16,7 @@ import tempfile
 import threading
 import time
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -295,11 +295,11 @@ class Serial(Board):
         return self._start is not None
 
     @property
-    def boots(self) -> tuple[Boot, ...]:
+    def boots(self) -> Sequence[Boot]:
         self._skip("serial: the backend does not see the chip's resets")
 
     @property
-    def sleeps(self) -> tuple[Sleep, ...]:
+    def sleeps(self) -> Sequence[Sleep]:
         self._skip("serial: the backend does not see the chip's deep sleeps")
 
     def power_off(self) -> None:

@@ -3,9 +3,10 @@
 import heapq
 import re
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+from esp32tl.interfaces.history import History
 from esp32tl.recording import Recording
 
 Output = tuple[int, bytes]
@@ -210,10 +211,14 @@ class Matching:
         self._indices: Counter[bytes] = Counter()
         self.unseen: Counter[bytes] = Counter()
         # All occurrences, with completion time and raw frame bytes, outside the rolling log.
-        self.unseen_events: list[Output] = []
+        self._unseen_events: list[Output] = []
         self.sent = 0
         self._pending: list[tuple[int, int, bytes]] = []
         self._order = 0
+
+    @property
+    def unseen_events(self) -> Sequence[Output]:
+        return History(self._unseen_events)
 
     @property
     def unseen_count(self) -> int:
@@ -227,7 +232,7 @@ class Matching:
             choices = self.answers.get(key)
             if choices is None:
                 self.unseen[key] += 1
-                self.unseen_events.append((t, request))
+                self._unseen_events.append((t, request))
                 reply = self.protocol.unknown_reply
                 response = reply(request) if callable(reply) else reply
                 outputs = [(self._latency, response)] if response else []

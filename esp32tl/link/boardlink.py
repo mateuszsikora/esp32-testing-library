@@ -354,6 +354,7 @@ class BoardLink:
         # Where each boot's uptime counter counted zero, by boot number, as the runner last said.
         self.uptimes: dict[int, Uptime] = {}
         # When each boot went into deep sleep, by boot number, in order: one per boot at most.
+        self.sleep_boots: list[int] = []
         self.sleeps: dict[int, Sleep] = {}
         # The board's own inputs for the next turn: its supply switched, its EN pulsed.
         self._board_inputs: list[Power | ChipReset] = []
@@ -561,6 +562,7 @@ class BoardLink:
             if boot in self.sleeps:
                 raise LinkError(f"the runner sent a second sleep in boot {boot}")
             self.sleeps[boot] = message
+            self.sleep_boots.append(boot)
         else:
             assert isinstance(message, Stats), message
         return []

@@ -36,6 +36,7 @@ from esp32tl.bluetooth.air import Air
 from esp32tl.bluetooth.controller import RSSI, SIX_DIGITS, Controller
 from esp32tl.bluetooth.peer import PeerError, Radio, _address, _User
 from esp32tl.interfaces.condition import Condition, FirstFrom
+from esp32tl.interfaces.history import History
 from esp32tl.units import Duration, ms
 
 T = TypeVar("T")
@@ -332,15 +333,31 @@ class BleDevice(Radio):
         self._on = True
         self._in_range = True
         self._controller: Controller | None = None
-        self.events: list[LeEvent] = []
-        self.connections: list[LeConnection] = []
-        self.disconnections: list[Disconnection] = []
-        self.pairings: list[LePairing] = []
+        self._events: list[LeEvent] = []
+        self._connections: list[LeConnection] = []
+        self._disconnections: list[Disconnection] = []
+        self._pairings: list[LePairing] = []
         self._connection: Connection | None = None
         self.device = air.call(lambda: self._make(public))
         self.rssi = rssi
         air.le_devices.append(self)
         air.at_once(self._power_on(), description=f"{name}'s power-on")
+
+    @property
+    def events(self) -> Sequence[LeEvent]:
+        return History(self._events)
+
+    @property
+    def connections(self) -> Sequence[LeConnection]:
+        return History(self._connections)
+
+    @property
+    def disconnections(self) -> Sequence[Disconnection]:
+        return History(self._disconnections)
+
+    @property
+    def pairings(self) -> Sequence[LePairing]:
+        return History(self._pairings)
 
     @property
     def address(self) -> str:
@@ -375,7 +392,7 @@ class BleDevice(Radio):
 
     def _note(self, text: str) -> None:
         now = self.air._loop.now
-        self.events.append(LeEvent(Duration(now), text))
+        self._events.append(LeEvent(Duration(now), text))
         self.air.note(f"bluetooth: {self.name}: {text}")
 
     @property
@@ -390,13 +407,13 @@ class BleDevice(Radio):
             return
         self._connection = connection
         peer = _named(connection.peer_address)
-        self.connections.append(LeConnection(self._now, peer, role))
+        self._connections.append(LeConnection(self._now, peer, role))
         self._note(f"connected {'to' if role == 'central' else 'from'} {peer}, as {role}")
 
         def disconnected(reason: int) -> None:
             if self._connection is connection:
                 self._connection = None
-            self.disconnections.append(Disconnection(self._now, peer, reason))
+            self._disconnections.append(Disconnection(self._now, peer, reason))
             self._note(f"disconnected from {peer}: {_reason(reason)}")
             self._disconnected(connection)
 
@@ -451,7 +468,7 @@ class BleDevice(Radio):
         await self.device.refresh_resolving_list()
 
     def _paired(self, peer: str, succeeded: bool, bonded: bool, reason: int | None) -> None:
-        self.pairings.append(LePairing(self._now, peer, succeeded, bonded, reason))
+        self._pairings.append(LePairing(self._now, peer, succeeded, bonded, reason))
         if succeeded:
             self._note(f"paired with {peer}{', bonded' if bonded else ''}")
         else:
@@ -658,9 +675,9 @@ class BlePeripheral(BleDevice):
         self._advertising_data, self._scan_response = _advertising(
             name_bytes, self.service_uuids, manufacturer_data
         )
-        self.writes: list[GattWrite] = []
-        self.subscriptions: list[Subscription] = []
-        self.notifications: list[Notification] = []
+        self._writes: list[GattWrite] = []
+        self._subscriptions: list[Subscription] = []
+        self._notifications: list[Notification] = []
         self._values: dict[str, bytes] = {}
         self._characteristics: dict[str, gatt.Characteristic[Any]] = {}
         self._subscribed: dict[str, tuple[bool, bool]] = {}
@@ -674,6 +691,18 @@ class BlePeripheral(BleDevice):
             passkey=passkey,
             bonding=bonding,
         )
+
+    @property
+    def writes(self) -> Sequence[GattWrite]:
+        return History(self._writes)
+
+    @property
+    def subscriptions(self) -> Sequence[Subscription]:
+        return History(self._subscriptions)
+
+    @property
+    def notifications(self) -> Sequence[Notification]:
+        return History(self._notifications)
 
     def _build(self, device: Device) -> None:
         for service in self.services:
@@ -781,12 +810,12 @@ class BlePeripheral(BleDevice):
         if not writable:
             raise att.ATT_Error(att.ATT_WRITE_NOT_PERMITTED_ERROR)
         self._values[key] = data
-        self.writes.append(GattWrite(self._now, key, data))
+        self._writes.append(GattWrite(self._now, key, data))
         self._note(f"{self.peer} wrote {key}: {data.hex()}")
 
     def _subscription(self, key: str, notify: bool, indicate: bool) -> None:
         self._subscribed[key] = (notify, indicate)
-        self.subscriptions.append(Subscription(self._now, key, notify, indicate))
+        self._subscriptions.append(Subscription(self._now, key, notify, indicate))
         kinds = [k for k, on in (("notifications", notify), ("indications", indicate)) if on]
         self._note(f"{self.peer} subscribed to {key}: {' and '.join(kinds) or 'nothing'}")
 
@@ -860,7 +889,7 @@ class BlePeripheral(BleDevice):
             else:
                 await self.device.notify_subscriber(connection, characteristic, value)
             sent = Notification(self._now, key, value, indication)
-            self.notifications.append(sent)
+            self._notifications.append(sent)
             self._note(f"{what} of {key} to {_named(connection.peer_address)}: {value.hex()}")
             return sent
 
@@ -894,8 +923,8 @@ class BleCentral(BleDevice):
         passkey: int | None = None,
         bonding: bool = True,
     ) -> None:
-        self.advertisements: list[Advertisement] = []
-        self.notifications: list[Notification] = []
+        self._advertisements: list[Advertisement] = []
+        self._notifications: list[Notification] = []
         self.discovery: Discovery | None = None
         self._seen: set[str] = set()
         # The advertising event of each address that waits for its scan response.
@@ -911,6 +940,14 @@ class BleCentral(BleDevice):
             passkey=passkey,
             bonding=bonding,
         )
+
+    @property
+    def notifications(self) -> Sequence[Notification]:
+        return History(self._notifications)
+
+    @property
+    def advertisements(self) -> Sequence[Advertisement]:
+        return History(self._advertisements)
 
     def _build(self, device: Device) -> None:
         assert isinstance(device, _LeDevice)
@@ -969,7 +1006,7 @@ class BleCentral(BleDevice):
             data,
             scan_response,
         )
-        self.advertisements.append(advertisement)
+        self._advertisements.append(advertisement)
         if address not in self._seen:
             self._seen.add(address)
             name = "" if advertisement.name is None else f" {advertisement.name!r}"
@@ -1066,7 +1103,7 @@ class BleCentral(BleDevice):
         def received(key: str, indication: bool) -> Callable[[bytes], None]:
             def on(value: bytes) -> None:
                 data = bytes(value)
-                self.notifications.append(Notification(self._now, key, data, indication))
+                self._notifications.append(Notification(self._now, key, data, indication))
                 kind = "indication" if indication else "notification"
                 self._note(f"{kind} of {key} from {_named(connection.peer_address)}: {data.hex()}")
 

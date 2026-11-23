@@ -1290,6 +1290,9 @@ where the runner saw the sleep. It is not an event: it carries no `seq`, sets no
 nothing answers it. The first example is `firmware/timer_wake`'s first sleep; the second a sleep
 that began and ended within one slice, sent at the reset of its wake.
 
+The harness keeps the sleeping boot numbers in arrival order so that it can index
+`board.sleeps` directly.
+
 **When.** The runner reads the chip's RTC registers at every slice boundary while the board's supply
 is on, as it reads the uptime counter (5.24): at most one emulated millisecond apart while the chip
 runs (section 6.1). The first boundary of a boot that finds the chip in deep sleep sends `sleep`:

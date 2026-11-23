@@ -6,13 +6,14 @@ are kept for inspection and produce no response. See docs/features/modem-technic
 
 import re
 import threading
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal
 
 from esp32tl.boards import LineRoute
 from esp32tl.interfaces import SourceError
+from esp32tl.interfaces.history import History
 from esp32tl.interfaces.uart import Source
 from esp32tl.link.boardlink import Output
 from esp32tl.net import Internet, LinkCause
@@ -165,36 +166,31 @@ class Modem:
             power(self._now(), self.powered)
 
     @property
-    def commands(self) -> list[ModemCommand]:
-        """Every completed AT command and reply, as a snapshot."""
-        with self._lock:
-            return list(self._commands)
+    def commands(self) -> Sequence[ModemCommand]:
+        """Every completed AT command and reply."""
+        return History(self._commands, lock=self._lock)
 
     @property
-    def mode_changes(self) -> tuple[ModeChange, ...]:
+    def mode_changes(self) -> Sequence[ModeChange]:
         """Each dial the modem answered, and each return to command mode, in the order the model
         made them."""
-        with self._lock:
-            return tuple(self._mode_changes)
+        return History(self._mode_changes, lock=self._lock)
 
     @property
-    def data_received(self) -> list[tuple[Duration, bytes]]:
-        """Data-mode payloads received so far, as a snapshot."""
-        with self._lock:
-            return list(self._data_received)
+    def data_received(self) -> Sequence[tuple[Duration, bytes]]:
+        """Data-mode payloads received so far."""
+        return History(self._data_received, lock=self._lock)
 
     @property
-    def restarts(self) -> tuple[ModemRestart, ...]:
+    def restarts(self) -> Sequence[ModemRestart]:
         """Each time a run of the modem ended, with what ended it."""
-        with self._lock:
-            return tuple(self._restarts)
+        return History(self._restarts, lock=self._lock)
 
     @property
-    def power_changes(self) -> tuple[ModemPower, ...]:
+    def power_changes(self) -> Sequence[ModemPower]:
         """Each time the modem switched on or off, with what switched it, in the order the model
         made them."""
-        with self._lock:
-            return tuple(self._power_changes)
+        return History(self._power_changes, lock=self._lock)
 
     def signal(self, *, dbm: float) -> None:
         """Set the measured signal strength in dBm for subsequent CSQ queries."""

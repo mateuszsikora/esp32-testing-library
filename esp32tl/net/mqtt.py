@@ -5,12 +5,13 @@ the board's time, for the test to look at; the test can publish too.
 
 import struct
 from collections import deque
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from enum import IntEnum
 from typing import Literal, TypeVar
 
 from esp32tl.interfaces.condition import Condition, FirstFrom
+from esp32tl.interfaces.history import History
 from esp32tl.units import Duration
 
 TEST_CLIENT = "(test)"
@@ -268,13 +269,13 @@ def _wants_message(
     return lambda message: on_topic(message) and (will is None or message.will is will)
 
 
-def _first(history: list[Record], topic: str, wanted: bytes | None) -> Record | None:
+def _first(history: Sequence[Record], topic: str, wanted: bytes | None) -> Record | None:
     """The first record of `history` on this topic filter, with this payload if one is wanted."""
     return next(filter(_wants(topic, wanted), history), None)
 
 
 def _messages(
-    history: list[Message], topic: str, wanted: bytes | None, start: int, will: bool | None
+    history: Sequence[Message], topic: str, wanted: bytes | None, start: int, will: bool | None
 ) -> Iterator[Message]:
     """The messages from `start` that `_wants_message` keeps, read by index, without a copy."""
     keep = _wants_message(topic, wanted, will)
@@ -339,12 +340,12 @@ class Broker:
     ) -> None:
         self._now = now
         self._log = log
-        self.messages: list[Message] = []
-        self.clients: list[MqttClient] = []
-        self.connection_ends: list[ConnectionEnd] = []
-        self.connection_attempts: list[ConnectionAttempt] = []
-        self.subscribe_requests: list[SubscribeRequest] = []
-        self.deliveries: list[Delivery] = []
+        self._messages: list[Message] = []
+        self._clients: list[MqttClient] = []
+        self._connection_ends: list[ConnectionEnd] = []
+        self._connection_attempts: list[ConnectionAttempt] = []
+        self._subscribe_requests: list[SubscribeRequest] = []
+        self._deliveries: list[Delivery] = []
         self.connection_policy = connection_policy
         self.retained: dict[str, Message] = {}
         self._sessions: list[_Session] = []
@@ -352,6 +353,30 @@ class Broker:
         self._anonymous = 0
         self._connections = 0
         self._puback: Literal["immediate", "hold"] | Duration = "immediate"
+
+    @property
+    def messages(self) -> Sequence[Message]:
+        return History(self._messages)
+
+    @property
+    def clients(self) -> Sequence[MqttClient]:
+        return History(self._clients)
+
+    @property
+    def connection_ends(self) -> Sequence[ConnectionEnd]:
+        return History(self._connection_ends)
+
+    @property
+    def connection_attempts(self) -> Sequence[ConnectionAttempt]:
+        return History(self._connection_attempts)
+
+    @property
+    def subscribe_requests(self) -> Sequence[SubscribeRequest]:
+        return History(self._subscribe_requests)
+
+    @property
+    def deliveries(self) -> Sequence[Delivery]:
+        return History(self._deliveries)
 
     def accept(
         self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
@@ -506,7 +531,7 @@ class Broker:
     ) -> Delivery | None:
         """Return the first match in the delivery history now, or None; consume nothing."""
         wanted = payload.encode() if isinstance(payload, str) else payload
-        return _first(self.deliveries, topic, wanted)
+        return _first(self._deliveries, topic, wanted)
 
     def is_subscribed(self, topic: str) -> Condition[bool]:
         """A live condition: an active client currently subscribes to exactly `topic`."""
@@ -543,7 +568,7 @@ class Broker:
 
     def ended(self, connection_id: int) -> ConnectionEnd | None:
         """How and when the connection `connection_id` ended, or None while it has not."""
-        return next((e for e in self.connection_ends if e.connection_id == connection_id), None)
+        return next((e for e in self._connection_ends if e.connection_id == connection_id), None)
 
     def next_end(self, client_id: str | None = None) -> Condition[ConnectionEnd | None]:
         """A non-consuming condition for the first connection end recorded after this call; with
@@ -599,7 +624,7 @@ class Broker:
     # Routing.
 
     def _route(self, message: Message) -> None:
-        self.messages.append(message)
+        self._messages.append(message)
         self._log(f"mqtt: {message.client} → {message.topic} {message.payload[:60]!r}")
         if message.retain:
             if message.payload:
@@ -742,7 +767,7 @@ class _Session:
             dup,
             retain,
         )
-        self.broker.deliveries.append(delivery)
+        self.broker._deliveries.append(delivery)
         body = struct.pack(">H", len(topic.encode())) + topic.encode()
         if packet_id is not None:
             state.sent[packet_id] = delivery
@@ -889,7 +914,7 @@ class _Session:
             and stored is not None
             and not stored.clean
         )
-        broker.connection_attempts.append(ConnectionAttempt(connect, code, session_present))
+        broker._connection_attempts.append(ConnectionAttempt(connect, code, session_present))
         if code != ConnackCode.ACCEPTED:
             broker._log(f"mqtt: {connect.client_id!r} rejected: {code.name} ({code.value})")
             self.write(_packet(CONNACK, 0, bytes([0, code])))
@@ -936,7 +961,7 @@ class _Session:
         self.state.connection = self
         self.connected = True
         self.keepalive = connect.keepalive
-        broker.clients.append(
+        broker._clients.append(
             MqttClient(
                 connect.at,
                 self.client_id,
@@ -1090,7 +1115,7 @@ class _Session:
         packet_id: bytes,
         filters: list[RequestedFilter],
     ) -> None:
-        self.broker.subscribe_requests.append(
+        self.broker._subscribe_requests.append(
             SubscribeRequest(
                 now,
                 self.client_id,
@@ -1132,7 +1157,7 @@ class _Session:
             if self.connected:
                 assert by is not None
                 now = Duration(self.broker._now())
-                self.broker.connection_ends.append(
+                self.broker._connection_ends.append(
                     ConnectionEnd(now, self.client_id, self.connection_id, by, will_sent)
                 )
             self.close()

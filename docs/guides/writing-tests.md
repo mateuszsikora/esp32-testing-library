@@ -239,6 +239,14 @@ pytest-timeout's options set another, which says only that something is stuck
 ([the test's timeout](../features/pytest-plugin-user.md#the-tests-timeout)). A run with a real
 source or a bridge to a real service runs on the wall clock instead.
 
+## Reading a history
+
+A plural history attribute is a read-only view that sees later records. For example, keep
+`asked = network.dns.asked` before powering on the board and check `asked[-1]` after the device
+makes a query. Use `list(asked)` or `asked[:]` to freeze the names at that instant.
+Iteration visits the records present when iteration began. Query methods such as
+`broker.find_messages()`, `console.lines()` and `lines.events()` return a new list at each call.
+
 ## Which shape a condition has
 
 Every condition esp32tl hands out takes its name and its shape from what it waits for, so a test

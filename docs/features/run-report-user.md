@@ -36,6 +36,8 @@ def test_reports_a_fix(board, tmp_path):
   so far, as `(t, dir, data)` tuples in the order they reached the route, and `path` is the file.
 - One tap per route in a test.
 
+`tap.events` is a read-only view that sees later records in arrival order.
+
 ## Console taps
 
 `console.tap(path)` records firmware console output on both backends, from `board.power_on()`

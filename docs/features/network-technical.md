@@ -813,7 +813,7 @@ persist across the switches, so a test sees every lease of the run.
 
 ### Link changes
 
-`Internet.link_changes` is a `list[LinkChange]`. `LinkChange.cause` is a `LinkCause`, a `Literal`
+`Internet.link_changes` is a `Sequence[LinkChange]`. `LinkChange.cause` is a `LinkCause`, a `Literal`
 of the sixteen causes; `Ppp`'s `ended` callback takes a `PppCause`, the `Literal` of the three
 causes `Ppp` gives. `_link_change(up, cause)` appends to the list: it stamps
 `Duration(self.now())`, the instant the callback or the held board runs at, and keeps
@@ -1113,10 +1113,10 @@ the cache, and the host answers requests only for itself.
 `Internet.device_reset` and lease expiry clear the address, ARP cache and pending datagrams, reset
 IP connections and path queues. Reset waits for data-link readiness before acquisition; lease expiry
 restarts acquisition on the current link. `is_leased` reads `Internet.lease` at each call.
-`Station.leases` appends each `HostLease` at its ACK and is never cleared, as `Station.stop` and
-`start` leave it and the station link is never replaced; `Internet.leases` returns that list itself,
-`next_lease()` captures its length at the call and returns the record at that index once there is
-one, and `find_lease()` its first. `Internet._station(member, dhcp)` returns the `Station`, or
+The station appends each acknowledged `HostLease` to its private `_leases` list, which survives
+`Station.stop` and `start`. `Internet.leases` exposes the live, read-only view from `Station.leases`.
+A saved view sees later acknowledgements. `next_lease()` captures the history's length at the call
+and returns the record at that index once it arrives. `find_lease()` returns the first lease. `Internet._station(member, dhcp)` returns the `Station`, or
 raises the `ValueError` naming `network.<member>` behind another link, with the pointer to
 `network.dhcp.<dhcp>` behind an access point. There is no renewal/rebinding, conflict detection, or
 idle keep-alive. `tests/test_net_station.py` exercises the host against handmade packets;

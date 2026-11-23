@@ -3,10 +3,11 @@ what the test serves at each path and closed. Every request is kept, stamped wit
 time, for the test to look at.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from esp32tl.interfaces.condition import Condition, FirstFrom
+from esp32tl.interfaces.history import History
 from esp32tl.units import Duration
 
 # The statuses whose response ends with its head (RFC 9112 6.3): no body, and no Content-Length.
@@ -73,8 +74,12 @@ class HttpServer:
     ) -> None:
         self._now = now
         self._log = log
-        self.requests: list[HttpRequest] = []
+        self._requests: list[HttpRequest] = []
         self._served: dict[str, HttpResponse] = {}
+
+    @property
+    def requests(self) -> Sequence[HttpRequest]:
+        return History(self._requests)
 
     def serve(
         self,
@@ -131,7 +136,7 @@ class HttpServer:
     ) -> HttpRequest | None:
         """Return the first match among the requests recorded so far, or None; consume nothing."""
         _refuse_query(path, "find_request")
-        return next(filter(_wants(path, method), self.requests), None)
+        return next(filter(_wants(path, method), self._requests), None)
 
     def accept(
         self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
@@ -139,7 +144,7 @@ class HttpServer:
         return _Exchange(self, write, close)
 
     def _answer(self, request: HttpRequest) -> HttpResponse:
-        self.requests.append(request)
+        self._requests.append(request)
         response = self._served.get(request.path, HttpResponse(404, b"not found\n"))
         self._log(f"http: {request.method} {request.target} → {response.status}")
         return response

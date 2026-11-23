@@ -258,7 +258,7 @@ def test_a_next_request_poll_reads_only_the_requests_since_the_last_one(
 ) -> None:
     # As many requests as polls: rescanning from the boundary would read 50 M of them.
     n = 10_000
-    server.requests = history = CountingList[HttpRequest]()
+    server._requests = history = CountingList[HttpRequest]()
     posted = server.next_request("/log", method="POST")
     for _ in range(n):
         Client(server).send(b"GET /log HTTP/1.1\r\n\r\n")

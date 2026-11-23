@@ -6,38 +6,54 @@ from datetime import UTC, datetime
 import pytest
 from tracker_support import CLIENT_ID, TOPIC, Reports, serve_broker
 
-from esp32tl import TEST_CLIENT, Board, Broker, Message, NeverHappened
+from esp32tl import Board, Broker, NeverHappened
 from esp32tl.units import Position, seconds
 
 POSITION = {"fix": True, "lat": 52.229677, "lon": 21.012233, "time": 1935837296}
 NO_FIX = {**POSITION, "fix": False, "lat": None, "lon": None}
 
 
+@pytest.fixture
+def packet_broker() -> Broker:
+    """Stamp successive publications one second apart."""
+    broker = Broker(lambda: seconds(len(broker.messages)).ns)
+    return broker
+
+
 def received(
     broker: Broker, payload: object, *, topic: str = TOPIC, client: str = CLIENT_ID
 ) -> None:
-    broker.messages.append(
-        Message(
-            seconds(len(broker.messages)), client, topic, json.dumps(payload).encode(), 0, False
-        )
-    )
+    def string(value: str) -> bytes:
+        encoded = value.encode()
+        return len(encoded).to_bytes(2, "big") + encoded
+
+    def packet(header: int, body: bytes) -> bytes:
+        # All packets in these cases fit in a single Remaining Length byte.
+        assert len(body) < 128
+        return bytes([header, len(body)]) + body
+
+    session = broker.accept(("10.0.0.2", 1234), lambda _: None, lambda: None)
+    session.on_data(packet(0x10, string("MQTT") + b"\x04\x02\x00\x00" + string(client)))
+    session.on_data(packet(0x30, string(topic) + json.dumps(payload).encode()))
+    session.on_data(b"\xe0\x00")
 
 
-def test_waits_start_now_filter_the_topic_and_preserve_the_first_match() -> None:
-    broker = Broker(lambda: 0)
-    received(broker, POSITION)
-    reports = Reports(broker)
+def test_waits_start_now_filter_the_topic_and_preserve_the_first_match(
+    packet_broker: Broker,
+) -> None:
+    received(packet_broker, POSITION)
+    reports = Reports(packet_broker)
     next_report, positioned = reports.when_received(), reports.when_received(with_position=True)
     assert next_report() is None and positioned() is None
-    received(broker, "unrelated telemetry", topic="tracker/health")
-    received(broker, POSITION, client=TEST_CLIENT)
-    received(broker, POSITION, client="another-device")
+    received(packet_broker, "unrelated telemetry", topic="tracker/health")
+    packet_broker.publish(TOPIC, json.dumps(POSITION))
+    received(packet_broker, POSITION, client="another-device")
     assert next_report() is None and positioned() is None
-    received(broker, NO_FIX)
+    received(packet_broker, NO_FIX)
     without_fix = next_report()
     assert without_fix is not None and without_fix.position is None
     assert positioned() is None
-    received(broker, POSITION)
+    received(packet_broker, POSITION)
     with_fix = positioned()
     assert with_fix is not None and with_fix.position == Position(52.229677, 21.012233)
     assert with_fix.utc == datetime(2031, 5, 6, 12, 34, 56, tzinfo=UTC)
@@ -64,21 +80,20 @@ def test_waits_start_now_filter_the_topic_and_preserve_the_first_match() -> None
 )
 def test_position_wait_rejects_malformed_reports_instead_of_skipping_them(
     bad_report: object,
+    packet_broker: Broker,
 ) -> None:
-    broker = Broker(lambda: 0)
-    waiting = Reports(broker).when_received(with_position=True)
-    received(broker, bad_report)
-    received(broker, POSITION)
+    waiting = Reports(packet_broker).when_received(with_position=True)
+    received(packet_broker, bad_report)
+    received(packet_broker, POSITION)
     with pytest.raises(ValueError, match="invalid tracker report at 0 s"):
         waiting()
 
 
-def test_first_match_is_not_masked_by_a_later_malformed_report() -> None:
-    broker = Broker(lambda: 0)
-    reports = Reports(broker)
+def test_first_match_is_not_masked_by_a_later_malformed_report(packet_broker: Broker) -> None:
+    reports = Reports(packet_broker)
     waiting = reports.when_received()
-    received(broker, POSITION)
-    received(broker, {})
+    received(packet_broker, POSITION)
+    received(packet_broker, {})
     assert waiting() is not None
     with pytest.raises(ValueError, match="invalid tracker report at 1 s"):
         _ = reports.history
@@ -103,13 +118,14 @@ def test_report_timeout_names_the_expected_report(
 
 
 @pytest.mark.parametrize("with_position", [False, True])
-def test_report_conditions_reject_truth_testing_even_after_a_match(with_position: bool) -> None:
-    broker = Broker(lambda: 0)
-    condition = Reports(broker).when_received(with_position=with_position)
+def test_report_conditions_reject_truth_testing_even_after_a_match(
+    with_position: bool, packet_broker: Broker
+) -> None:
+    condition = Reports(packet_broker).when_received(with_position=with_position)
     assert condition() is None
     with pytest.raises(TypeError, match="call the condition 'a tracker report"):
         bool(condition)
-    received(broker, POSITION)
+    received(packet_broker, POSITION)
     assert condition() is not None
     with pytest.raises(TypeError, match="call the condition 'a tracker report"):
         bool(condition)

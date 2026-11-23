@@ -49,6 +49,8 @@ when CR and LF arrive in separate chunks before the response. Once a response st
 separator is closed. Leading LF, spaces and CR/LF in a subsequent prompted payload remain data;
 changing a command from CRLF to CR does not change its payload's matching key.
 
+`unseen_events` is a read-only view that sees later unmatched replay requests.
+
 ## Timing and diagnostics
 
 A command's time is the timestamp of its final fragment. Every recorded answer fragment keeps

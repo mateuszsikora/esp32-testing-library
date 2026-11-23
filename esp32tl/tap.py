@@ -10,12 +10,14 @@ file the test named.
 
 import hashlib
 import os
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from esp32tl import __version__
 from esp32tl.build import Build
+from esp32tl.interfaces.history import History
 from esp32tl.recording import Direction, Event, Header, Recording
 
 # The header's `source` for a route the test gave nothing at its far end: it heard what the
@@ -34,13 +36,17 @@ class Tap:
     def __init__(self, interface: str, path: Path) -> None:
         self.interface = interface
         self.path = path
-        self.events: list[tuple[int, Direction, bytes]] = []
+        self._events: list[tuple[int, Direction, bytes]] = []
+
+    @property
+    def events(self) -> Sequence[tuple[int, Direction, bytes]]:
+        return History(self._events)
 
     def record(self, t: int, direction: Direction, data: bytes) -> None:
         """`data` crossed the wire at `t`, `in` to the ESP32 or `out` of it. No bytes are no
         event."""
         if data:
-            self.events.append((t, direction, data))
+            self._events.append((t, direction, data))
 
     def recording(
         self,

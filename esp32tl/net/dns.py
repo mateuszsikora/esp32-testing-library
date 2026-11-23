@@ -1,11 +1,12 @@
 """DNS: every IN A question resolves to the simulated network (RFC 1035)."""
 
 import struct
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from ipaddress import IPv4Address
 
 from esp32tl.interfaces.condition import Condition, FirstFrom
+from esp32tl.interfaces.history import History
 from esp32tl.units import Duration
 
 
@@ -32,14 +33,18 @@ class Dns:
         self, address: str, now: Callable[[], int], log: Callable[[str], None] = lambda line: None
     ) -> None:
         self.address = IPv4Address(address).packed
-        self.questions: list[DnsQuestion] = []
+        self._questions: list[DnsQuestion] = []
         self._now = now
         self._log = log
 
     @property
-    def asked(self) -> list[str]:
+    def questions(self) -> Sequence[DnsQuestion]:
+        return History(self._questions)
+
+    @property
+    def asked(self) -> Sequence[str]:
         """The names of `questions`, in order."""
-        return [question.name for question in self.questions]
+        return History(self._questions.__len__, lambda i: self._questions[i].name)
 
     def next_question(self, name: str | None = None) -> Condition[DnsQuestion | None]:
         """A non-consuming condition for the first question recorded after this call; with
@@ -88,7 +93,7 @@ class Dns:
             return None
         qtype, qclass = struct.unpack(">HH", data[end : end + 4])
         name = b".".join(labels).decode("ascii", errors="backslashreplace")
-        self.questions.append(DnsQuestion(Duration(self._now()), name, qtype))
+        self._questions.append(DnsQuestion(Duration(self._now()), name, qtype))
         self._log(f"dns: {name} → {IPv4Address(self.address)}")
         answer = qtype == 1 and qclass == 1
         header = struct.pack(">HHHHHH", ident, 0x8080 | (flags & 0x0100), 1, int(answer), 0, 0)

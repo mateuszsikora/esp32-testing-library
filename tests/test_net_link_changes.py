@@ -43,12 +43,13 @@ def changes(net: Internet) -> list[tuple[int, bool, str]]:
 
 def test_ipcp_open_is_up_and_the_devices_terminate_request_is_down() -> None:
     net = opened()
+    history = net.link_changes
     assert changes(net) == [(0, True, "IPCP open")]
     net.receive(5 * MS, control(LCP, TERM_REQ, 3))
     assert changes(net)[1:] == [(5 * MS, False, "device terminated")]
     # The call that ends after it is no second down.
     net.stop(7 * MS)
-    assert len(net.link_changes) == 2
+    assert len(history) == 2
     net.start(9 * MS)
     open_ppp(net, 9 * MS)
     assert changes(net)[2:] == [(9 * MS, True, "IPCP open")]
@@ -225,7 +226,7 @@ def test_behind_an_access_point_nothing_is_recorded_and_the_conditions_refuse() 
 def test_a_next_link_poll_reads_only_the_changes_since_the_last_one() -> None:
     net = Internet(lambda: 0, link="station")
     net.start(0)
-    net.link_changes = history = CountingList[LinkChange]()
+    net._link_changes = history = CountingList[LinkChange]()
     net._station_link(MS, True)
     up = net.next_link_up()
     net._station_link(2 * MS, False)

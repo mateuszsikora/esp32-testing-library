@@ -34,15 +34,15 @@ takes with `lose_power()` and gives back with `restore_power()` or `power_on()`.
 running modem down as `lose_power()` does; back, it starts nothing. A PWRKEY pulse starts the
 modem only with both, and `power_on()` with `_board` off restores `_supply` and starts nothing.
 
-The model keeps every `ModemCommand` under an RLock. `commands` returns a snapshot. With the modem
-model, `Esp32Sim.report` appends the command section; `properties` adds all commands to the modem
+The model keeps every `ModemCommand` under an RLock. `commands` returns a read-only view that sees
+later records. With the modem model, `Esp32Sim.report` appends the command section; `properties` adds all commands to the modem
 route. Both check the route's source by type, so a model of the test's on `uart.modem`
 (`Uart.model`) adds neither. The rolling wire log still keeps only its normal last entries. Raw
-data-mode payloads are available as a snapshot through `modem_model().data_received`, the route's
+data-mode payloads are available as a live, read-only sequence through `modem_model().data_received`, the route's
 `ModemModel`; it was `model()` until `Uart.model(source)` took that name.
 
-`_power_changes` holds every `ModemPower` under the same lock, and `power_changes` returns it as
-a tuple. `_set_power(t, powered, cause)` is the one place power changes: `power_off`, `power_on`,
+`_power_changes` holds every `ModemPower` under the same lock, and `power_changes` exposes a
+read-only view. `_set_power(t, powered, cause)` is the one place power changes: `power_off`, `power_on`,
 `lose_power`, `supply(False)`, `driven` (PWRKEY, at `t + LATENCY_NS`) and `reset_driven` (RESET,
 `powered=True`) call it. It appends a `ModemRestart` when the modem was on, and a `ModemPower` when
 `powered` differs from `self.powered`, both only after the board's first instant (`t > 0`). So a
@@ -53,8 +53,8 @@ does not call it for a modem that is off. `power_on` on a modem that is off, wit
 supply on, appends a power change and no restart. Why a second history rather than
 changing `restarts`: [the decision](../decisions/harness.md#the-modems-power-changes-are-a-history-beside-its-restarts).
 
-`_mode_changes` holds every `ModeChange` under the same lock, and `mode_changes` returns it as a
-tuple. `_command` appends a dial's entry, `("data", "dial")` or `("command", "no carrier")`, stamped
+`_mode_changes` holds every `ModeChange` under the same lock, and `mode_changes` exposes a
+read-only view. `_command` appends a dial's entry, `("data", "dial")` or `("command", "no carrier")`, stamped
 `t`, the same stamp as the dial's `ModemCommand`; a hung modem returns before it. Every end of data
 mode goes through `_end_data(cause, at=None)`, which appends `("command", cause)` only when
 `data_mode` was set, stamped `at`, or `now()` when the caller gives none (`hang`,

@@ -1454,7 +1454,7 @@ def test_a_reset_restart_and_a_loss_in_command_mode() -> None:
     model = lilygo()
     reply(model, "ATD*99#", seconds(1).ns)
     pulse(model.reset_driven, seconds(2), ms(2600))
-    assert model.mode_changes[1:] == (ModeChange(seconds(4) + ms(601), "command", "restart"),)
+    assert model.mode_changes[1:] == [ModeChange(seconds(4) + ms(601), "command", "restart")]
     # In command mode, functionality and a loss add no entry.
     assert reply(model, "AT+CFUN=0", seconds(5).ns) == b"\r\nOK\r\n"
     model.hang()

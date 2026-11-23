@@ -2471,6 +2471,9 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_lines.py::test_next_change_by_the_firmware_ignores_the_test_s_and_a_model_s_changes`,
   `tests/test_modem_recovery.py::test_two_successive_next_presses_of_pwrkey_are_the_recovery_s_two_presses`
 
+- **296.** Every public history is a read-only view: a reference kept sees the records appended later,
+  and the test cannot change it. `tests/test_history.py`
+
 ## The reset reason ESP-IDF reports
 
 - **267.** Each boot's `Boot.idf_reason` is what the firmware's `esp_reset_reason()` reports for

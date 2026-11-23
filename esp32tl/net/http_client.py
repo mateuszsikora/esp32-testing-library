@@ -2,11 +2,12 @@
 
 import json as jsonlib
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from esp32tl.interfaces.condition import Condition
+from esp32tl.interfaces.history import History
 from esp32tl.net.client import ConnectionEnded, TcpConnection
 from esp32tl.net.http import MAX_BODY, MAX_HEAD
 
@@ -218,7 +219,11 @@ class HttpExchange:
 class HttpClient:
     def __init__(self, connect: Callable[[int], TcpConnection], log: Callable[[str], None]) -> None:
         self._connect, self._log = connect, log
-        self.exchanges: list[HttpExchange] = []
+        self._exchanges: list[HttpExchange] = []
+
+    @property
+    def exchanges(self) -> Sequence[HttpExchange]:
+        return History(self._exchanges)
 
     def get(
         self, path: str, *, port: int = 80, headers: dict[str, str] | None = None
@@ -279,7 +284,7 @@ class HttpClient:
             + body
         )
         exchange = HttpExchange(connection, method, path, self._log)
-        self.exchanges.append(exchange)
+        self._exchanges.append(exchange)
         self._log(f"http client: {connection.identity} {method} {path} requested")
         connection.write(request)
         return exchange

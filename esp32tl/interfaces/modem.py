@@ -1,6 +1,6 @@
 """The profile's uart.modem route, a replay or a cellular modem described by the test."""
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -169,12 +169,12 @@ class Modem(Uart):
         return self.modem_model().hung
 
     @property
-    def restarts(self) -> tuple[ModemRestart, ...]:
+    def restarts(self) -> Sequence[ModemRestart]:
         """Each time a run of the selected model ended, with what ended it."""
         return self.modem_model().restarts
 
     @property
-    def power_changes(self) -> tuple[ModemPower, ...]:
+    def power_changes(self) -> Sequence[ModemPower]:
         """Each time the selected model switched on or off, with what switched it, in the order the
         model made them."""
         return self.modem_model().power_changes
@@ -203,7 +203,7 @@ class Modem(Uart):
         return Condition(find, description)
 
     @property
-    def mode_changes(self) -> tuple[ModeChange, ...]:
+    def mode_changes(self) -> Sequence[ModeChange]:
         """Each dial the selected model answered, and each return to command mode, in the order
         the model made them."""
         return self.modem_model().mode_changes
@@ -232,8 +232,8 @@ class Modem(Uart):
         return Condition(find, description)
 
     @property
-    def commands(self) -> list[ModemCommand]:
-        """Every completed AT command and reply, as a snapshot."""
+    def commands(self) -> Sequence[ModemCommand]:
+        """Every completed AT command and reply."""
         return self.modem_model().commands
 
     def modem_model(self) -> ModemModel:

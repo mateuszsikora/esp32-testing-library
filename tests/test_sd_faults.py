@@ -316,10 +316,12 @@ def test_rules_and_card_changes_go_out_in_order_and_only_changes_are_acknowledge
     big.write_bytes(bytes(2 * UNIT))
     small.write_bytes(bytes(UNIT))
     slot = SdCard(ROUTE, directory=tmp_path, now=lambda: MS, started=lambda: True)
+    changes = slot.changes
     slot.insert(big)
     link = started(slot)
     link.receive(Sync(0))
     assert link.receive(SdCardAck(MS, str(big))) == []
+    assert len(changes) == 1
     fault = slot.fail("write", blocks=2047)
     slot.remove()
     with pytest.raises(SourceError, match="the slot is empty"):
