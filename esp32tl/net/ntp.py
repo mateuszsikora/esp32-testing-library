@@ -2,11 +2,12 @@
 clock."""
 
 import struct
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from esp32tl.interfaces.condition import Condition, FirstFrom
+from esp32tl.interfaces.history import History
 from esp32tl.units import Duration
 
 NTP_EPOCH = datetime(1900, 1, 1, tzinfo=UTC)
@@ -40,8 +41,12 @@ class Ntp:
         self._now = now
         self._world = utc_at_power_on
         self._log = log
-        self.exchanges: list[NtpExchange] = []
+        self._exchanges: list[NtpExchange] = []
         self._silent = False
+
+    @property
+    def exchanges(self) -> Sequence[NtpExchange]:
+        return History(self._exchanges)
 
     @property
     def requests(self) -> int:
@@ -91,7 +96,7 @@ class Ntp:
     def on_datagram(self, data: bytes) -> bytes | None:
         if len(data) < 48 or data[0] & 7 != 3 or (data[0] >> 3) & 7 not in (3, 4):
             return None
-        self.exchanges.append(NtpExchange(Duration(self._now()), not self._silent))
+        self._exchanges.append(NtpExchange(Duration(self._now()), not self._silent))
         if self._silent:
             return None
         stamp = self._stamp()

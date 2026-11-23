@@ -1,10 +1,11 @@
 """The harness host behind esp32sim's virtual station: DHCP client and single-host ARP."""
 
 import struct
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv4Network
 
+from esp32tl.interfaces.history import History
 from esp32tl.net.dhcp import ACK, COOKIE, DISCOVER, NAK, OFFER, REQUEST, _options
 from esp32tl.net.ethernet import ARP, BROADCAST_MAC, ETHERTYPES, IPV4, _whole
 from esp32tl.net.ip import UDP, Fragmented, checksum, ipv4, udp
@@ -43,7 +44,7 @@ class Station:
         self.mtu = 1500
         self.ignored: dict[int, int] = {}
         self.lease: HostLease | None = None
-        self.leases: list[HostLease] = []
+        self._leases: list[HostLease] = []
         self._xid = 0x53544100
         self.ready = False
         self._offered: bytes | None = None
@@ -53,6 +54,10 @@ class Station:
         self._arp_cache: dict[str, bytes] = {}
         self._pending: dict[str, list[bytes]] = {}
         self._arp_deadline: int | None = None
+
+    @property
+    def leases(self) -> Sequence[HostLease]:
+        return History(self._leases)
 
     @property
     def device_address(self) -> str | None:
@@ -197,7 +202,7 @@ class Station:
                 str(IPv4Address(mask)),
                 str(IPv4Address(router[:4])) if len(router) >= 4 else None,
             )
-            self.leases.append(self.lease)
+            self._leases.append(self.lease)
             self._deadline = None
             self._log(f"dhcp station: ACK {address}, device {self.lease.device_address}")
             self._changed()

@@ -1,7 +1,7 @@
 """The public board API shared by simulator and hardware backends."""
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import cached_property
@@ -275,7 +275,7 @@ class Board(ABC):
 
     @property
     @abstractmethod
-    def boots(self) -> tuple[Boot, ...]: ...
+    def boots(self) -> Sequence[Boot]: ...
 
     @property
     def boot(self) -> Boot:
@@ -337,7 +337,7 @@ class Board(ABC):
 
     @property
     @abstractmethod
-    def sleeps(self) -> tuple[Sleep, ...]:
+    def sleeps(self) -> Sequence[Sleep]:
         """The chip's deep sleeps, oldest first: at most one per boot, since the wake is a
         reset."""
 

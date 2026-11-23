@@ -545,8 +545,9 @@ def test_a_peripheral_advertises_its_name_services_and_manufacturer_data() -> No
     )
     central = BleCentral(air)
     # the first event, at the peripheral's creation, came before the central scanned
+    advertisements = central.advertisements
     air.wait(ms(650))
-    first, second, third = central.advertisements
+    first, second, third = advertisements
     assert first.name == "sensor" and first.service_uuids == ("181A",)
     assert first.manufacturer_data == (0x02E5, b"\x01\x02") and first.connectable
     assert (second.at - first.at, third.at - second.at) == (ms(200), ms(200))
@@ -753,7 +754,7 @@ def test_two_runs_advertise_and_connect_at_the_same_instants() -> None:
         air = Air()
         peripheral, central = connected(air)
         air.run(_wait(central.read("FF01")), within=seconds(1))
-        return [e.at for e in central.events + peripheral.events]
+        return [e.at for e in (*central.events, *peripheral.events)]
 
     assert run() == run()
 
@@ -766,7 +767,7 @@ N = 1000
 def test_a_next_advertisement_poll_reads_only_the_advertisements_since_the_last_one() -> None:
     air = Air()
     central = BleCentral(air)
-    central.advertisements = history = CountingList[Advertisement]()
+    central._advertisements = history = CountingList[Advertisement]()
     seen = central.next_advertisement(name="sensor")
     other = Advertisement(
         seconds(0), "00:00:00:00:5B:09", "public", "other", (), None, -50, True, b"", b""
@@ -784,7 +785,7 @@ def test_a_next_advertisement_poll_reads_only_the_advertisements_since_the_last_
 def test_a_next_write_poll_reads_only_the_writes_since_the_last_one() -> None:
     air = Air()
     peripheral = sensor(air)
-    peripheral.writes = history = CountingList[GattWrite]()
+    peripheral._writes = history = CountingList[GattWrite]()
     alarm = peripheral.next_write("FF01", b"ALARM")
     for _ in range(N):
         history.append(GattWrite(seconds(0), "FF01", b"21.5"))

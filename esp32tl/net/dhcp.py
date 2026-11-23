@@ -4,11 +4,12 @@ is kept, stamped with the board's time, for the test to look at.
 """
 
 import struct
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from ipaddress import IPv4Address
 
 from esp32tl.interfaces.condition import Condition
+from esp32tl.interfaces.history import History
 from esp32tl.units import Duration
 
 COOKIE = b"\x63\x82\x53\x63"
@@ -47,7 +48,11 @@ class Dhcp:
         self._now = now
         self._log = log
         self.local, self.device, self.dns, self.mask = local, device, dns, mask
-        self.leases: list[Lease] = []
+        self._leases: list[Lease] = []
+
+    @property
+    def leases(self) -> Sequence[Lease]:
+        return History(self._leases)
 
     def next_lease(self) -> Condition[Lease | None]:
         """A non-consuming condition for the first lease appended after this call."""
@@ -90,7 +95,7 @@ class Dhcp:
         self._log(f"dhcp: {name} from {_mac(chaddr)} → {answered} {self.device}")
         if reply == ACK:
             hostname = options.get(12)
-            self.leases.append(
+            self._leases.append(
                 Lease(
                     Duration(self._now()),
                     _mac(chaddr),

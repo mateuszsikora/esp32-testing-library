@@ -5013,15 +5013,13 @@ a long wait on a busy history cost time quadratic in its records: one poll of `_
 with a message a second about 65 M record checks, some 24 s of the test's CPU. Now each takes as
 its `find` a `FirstFrom` of `esp32tl/interfaces/condition.py`, which reads by index from where its
 last poll ended and, once it has a match, only the match: a poll reads the records appended since
-the last one. `next_boot` still pays for `Esp32Sim.boots`, which builds every boot at each read;
-boots are few, and a cheaper `boots` is a change of the backend, not of the condition. Records are
+the last one. `next_boot` originally paid for rebuilding every boot at each read. [#321](#public-history-properties-return-live-read-only-sequences) changed the backend to build a boot by index. Records are
 only appended, so a record it refused never matches later. `next_data`'s search for `until`
 likewise starts `len(until) - 1` bytes before where the last one ended. The documented semantics
 stay: the boundary is append order, polling never moves it, and the condition consumes nothing and
 returns the same record at every later poll.
 
-`FirstFrom` keeps the index of the match, not the record, and reads it again at each poll: `boots`
-is built anew at every read, and a `Boot` gains its `uptime_zero`, which takes no part in comparing
+`FirstFrom` keeps the index of the match, not the record, and reads it again at each poll: a `Boot` gains its `uptime_zero`, which takes no part in comparing
 boots, after the boot has begun, so a kept record would never show it.
 
 **Rejected:** a cursor that moves past a match, as `LineCondition`'s does, because that consumes:
@@ -5490,3 +5488,16 @@ test that reads `restarts` today would have to filter it.
 at the same instant. The power did not change, two entries at one instant would break the
 alternation a test can rely on, and `next_power_change(False)` would be satisfied by a reset the
 test did not mean.
+
+## Public history properties return live read-only sequences
+
+Status: decided (#321)
+
+A saved history observes subsequent appends. Its owner controls the order that an armed
+condition scans. Length and indexing read the underlying records directly. The same rule
+applies to replay's `unseen_events` and `tap.events`, both append-only histories used in reports.
+
+**Rejected:** returning a fresh tuple at every read costs O(n) at every poll on long histories
+such as broker telemetry. Public lists let a test's `clear()` invalidate the index of every
+armed condition. Restoring a separate list for `dns.asked` alongside a tuple for `questions`
+would give two histories of the same DNS queries different behavior again.

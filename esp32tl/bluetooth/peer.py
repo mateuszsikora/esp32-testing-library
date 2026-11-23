@@ -15,7 +15,7 @@ source sends goes out on the channel at the board's time it gives. `written_line
 """
 
 import bisect
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from typing import NamedTuple, TypeVar
 
@@ -32,6 +32,7 @@ from esp32tl.backends.clock import seconds
 from esp32tl.bluetooth.air import Air
 from esp32tl.bluetooth.controller import RSSI, SIX_DIGITS, Controller, Pairing, UnderWay
 from esp32tl.interfaces.condition import Condition, FirstFrom
+from esp32tl.interfaces.history import History
 from esp32tl.interfaces.uart import Source, Supplied
 from esp32tl.link.boardlink import Direction, Output
 from esp32tl.sources.model import InNanoseconds, Model, in_nanoseconds
@@ -358,11 +359,11 @@ class BluetoothDevice(Radio):
         return str(self.device.public_address).removesuffix("/P")
 
     @property
-    def pairings(self) -> list[Pairing]:
+    def pairings(self) -> Sequence[Pairing]:
         """The device's pairings that ended, in order: with whom, how, the number it showed or
         its user typed, and whether it succeeded."""
         assert self._controller is not None
-        return list(self._controller.pairings)
+        return History(self._controller.pairings)
 
     @property
     def pairing(self) -> UnderWay | None:
@@ -427,7 +428,7 @@ class _Lines:
         self._partial_at = Duration(0)
 
     def update(
-        self, events: list[ChannelEvent], openings: list[int], closed: int
+        self, events: Sequence[ChannelEvent], openings: list[int], closed: int
     ) -> list[WrittenLine]:
         """`lines`, with what `events` added since the last update. `openings` holds the index in
         `events` at which each opening of the channel began, and `closed` how many have closed."""
@@ -521,8 +522,8 @@ class SppPeer(BluetoothDevice):
         self.channel = channel
         self.secure = secure
         self.service_name = service_name
-        self.events: list[ChannelEvent] = []
-        self.refused: list[Refusal] = []
+        self._events: list[ChannelEvent] = []
+        self._refused: list[Refusal] = []
         self.lost = 0
         self._pending: list[Output] = []
         self._dlc: rfcomm.DLC | None = None
@@ -546,6 +547,14 @@ class SppPeer(BluetoothDevice):
             passkey=passkey,
         )
         air._join(self)
+
+    @property
+    def events(self) -> Sequence[ChannelEvent]:
+        return History(self._events)
+
+    @property
+    def refused(self) -> Sequence[Refusal]:
+        return History(self._refused)
 
     @property
     def channel_open(self) -> bool:
@@ -748,7 +757,7 @@ class SppPeer(BluetoothDevice):
         return False
 
     def _refuse(self, connection: Connection, why: str) -> None:
-        self.refused.append(Refusal(Duration(self.air._loop.now), f"{_named(connection)}: {why}"))
+        self._refused.append(Refusal(Duration(self.air._loop.now), f"{_named(connection)}: {why}"))
 
     def _opened(self, dlc: rfcomm.DLC) -> None:
         self._dlc = dlc
@@ -774,7 +783,7 @@ class SppPeer(BluetoothDevice):
 
     def _received(self, data: bytes) -> None:
         now = self.air._loop.now
-        self.events.append(ChannelEvent(Duration(now), "out", data))
+        self._events.append(ChannelEvent(Duration(now), "out", data))
         with self._failing():
             self._queue(now, "receive", lambda: self._driving.receive(now, data))
             self._flush(now)
@@ -859,7 +868,7 @@ class SppPeer(BluetoothDevice):
             if self._dlc is None or not self._reaches_holder():
                 self.lost += len(data)
                 continue
-            self.events.append(ChannelEvent(Duration(t), "in", data))
+            self._events.append(ChannelEvent(Duration(t), "in", data))
             self._dlc.write(data)
 
     def _reaches_holder(self) -> bool:

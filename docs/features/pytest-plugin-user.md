@@ -454,7 +454,9 @@ On [serial](serial-backend-user.md#power-on-time-and-console), power-on is a res
 advances continuously in wall time, waits poll the running board, and UTC comes from the host.
 Setup may already have flashed and booted the hardware.
 
-For esp32sim:
+On esp32sim, the boot and sleep histories (`board.boots`, `board.sleeps`) and the SD card histories
+(`changes`, `refused`, `faulted` and each fault's `hits`) are
+[read-only views that see later records](../guides/writing-tests.md#reading-a-history).
 
 - `board.power_on(utc=None)` starts the run: the runner starts, the firmware boots, and the
   board's clock starts at 0, where it stays until the test waits. `utc`, a `datetime` with a
@@ -580,8 +582,7 @@ end = board.wait_until(trip_end(broker, "car-1"), within=minutes(3))
   calls `find` at every turn of the link, at least every 100 ms of the board's time, so a `find`
   that reads the whole history since `start` at each call costs, over a long wait on a busy
   history, time that grows with the square of its records. The package's own `next_*` conditions
-  look at each poll only at what came since their last poll; `board.next_boot()` too, though
-  reading `board.boots` on esp32sim builds every boot so far.
+  look at each poll only at what came since their last poll, including `board.next_boot()` on esp32sim.
 - `find` that is not callable, a `description` that is not non-empty text, or an empty
   `service` raises `TypeError` at once, as
   `condition: description is '', not text naming the event`.
@@ -1374,7 +1375,7 @@ def test_sleeps_for_the_two_seconds_it_armed(board: Board):
     assert seconds(2) - ms(2) <= wake.at - sleep.latest <= seconds(2) + ms(1)
 ```
 
-- `board.sleeps` are the chip's deep sleeps, oldest first, a `tuple` of `Sleep`s (from `esp32tl`),
+- `board.sleeps` are the chip's deep sleeps, oldest first, a read-only view of `Sleep`s (from `esp32tl`),
   at most one per boot, since the wake is a reset. A `Sleep` is a frozen record: `boot`, the
   `number` of the boot that went to sleep, as in `board.boots`; `earliest` and `latest`, the
   `Duration`s between which the sleep began on the board's clock, 1 ms apart at most and a few

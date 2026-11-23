@@ -246,8 +246,8 @@ cannot fail with this backend; it is there for another caller:
   `reset` in `BoardLink.resets`, numbered from 2; `boot` is the last (`esp32tl/interfaces/board.py`,
   which also names the causes, `RESET_REASONS`). Each `idf_reason` is
   `idf_reset_reason(profile.chip, cause, hint)`, with the `reset`'s `hint`
-  ([protocol 5.5](../protocol.md#55-reset)) and 0 for the first boot, a power-on's. Each is built
-  anew at every read, with its
+  ([protocol 5.5](../protocol.md#55-reset)) and 0 for the first boot, a power-on's. Each boot is built
+  when its index is read, with its
   `uptime_zero` from `BoardLink.uptimes`, which keeps the last `uptime` of each boot by number
   (the boot after the `reset`s read before it, [protocol 5.24](../protocol.md#524-uptime-ext-245)):
   `UptimeZero(Duration(earliest), Duration(latest))`, or `None` for a boot that has none yet and
@@ -265,7 +265,8 @@ cannot fail with this backend; it is there for another caller:
 - `sleeps` is one `Sleep(boot, Duration(earliest), Duration(latest), frozenset(wakes))` per
   `sleep` in `BoardLink.sleeps`, which keeps each by the number of the boot it came in, the boot
   after the `reset`s read before it ([protocol 5.26](../protocol.md#526-sleep-ext-308)), in the
-  order the link read them; built anew at every read, through `_on()`. The runner sends at most one
+  order the link read them. The view checks `_on()` and uses `BoardLink.sleep_boots` to look up the sleep
+  at the requested index. The runner sends at most one
   a boot, before the `reset` of its wake; the link takes a second one in a boot as its `error`,
   `the runner sent a second sleep in boot {n}`, and the run ends, so a `Sleep` already read never
   changes. `next_sleep()` is `Board`'s, a `FirstFrom` over `sleeps`

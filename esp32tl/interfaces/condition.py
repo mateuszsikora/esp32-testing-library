@@ -101,10 +101,11 @@ class FirstFrom(Generic[T]):
         if self._found is not None:
             return history[self._found]
         wanted = self._wanted
-        for index in range(self._scanned, len(history)):
+        end = len(history)
+        for index in range(self._scanned, end):
             record = history[index]
             if wanted(record):
                 self._found = index
                 return record
-        self._scanned = max(self._scanned, len(history))
+        self._scanned = max(self._scanned, end)
         return None

@@ -113,8 +113,8 @@ later_report = broker.next_message("device/report")  # Excludes that already rec
 
 `find_message`, `find_connection` and `find_delivery` return records now, not conditions; they never wait or
 advance time. They include all history, including closed connections, test publications and
-Wills. The public `messages` and `clients` lists expose all records in append order; treat them
-as read-only histories. Network resets do not clear them. Payload decoding and application
+Wills. The public `messages` and `clients` properties are read-only views of all records
+in append order. Use `list(broker.messages)` to keep a snapshot. Network resets do not clear them. Payload decoding and application
 schema assertions belong in consumer code, as in the position tracker's `Reports` adapter.
 
 Four of them answer four questions about connections. `clients` is every connection the broker
@@ -209,7 +209,8 @@ happens after the call that makes it is a `next_*` method (`next_message`, `next
 and `next_handshake_completed`, NTP's `next_exchange`, DNS's `next_question`, a TCP connection's
 `next_data`); `find_*` reads the history now and returns a record or `None`; a plural attribute
 (`messages`, `clients`, `connection_ends`, `subscribe_requests`, `leases`, NTP's `exchanges`, DNS's
-`questions`) is the history itself; a condition for a state that holds now, and can stop holding,
+`questions`) is a [read-only view that sees later records](../guides/writing-tests.md#reading-a-history);
+a condition for a state that holds now, and can stop holding,
 is `is_<state>` (`is_subscribed(topic)`, the station's `is_leased`), true while it holds; and one
 for what has happened once and for good is named for it without `is_` (TLS's `handshake_started`
 and `handshake_completed`, a TCP connection's `established`, `closed`, `refused`, `reset` and
@@ -1605,7 +1606,8 @@ takes.
 
 The test's `esp32sim link` report includes every network event, with emulated times, and the
 modem's complete AT command history. `board.properties()["routes"]["uart.modem"]["network"]`
-contains the same structured transcript; `network.transcript()` returns it directly.
+contains the same structured transcript; `network.transcript()` returns it directly. Reading `network.events[i]`
+returns a copy of that event dictionary. Editing it leaves the transcript and report intact.
 Application stream bytes are hex-encoded plaintext, both directions, with connection identifiers,
 except on a [bridged](#bridge-a-port-to-a-real-service) port that carries TLS, where they are the
 ciphertext the bridge relays.

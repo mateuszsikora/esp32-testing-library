@@ -552,6 +552,9 @@ of the same time go out in the order they were given; empty bytes are dropped. W
 sends while no device holds the channel is lost, as it would be on the air: `peer.lost` counts its
 bytes. A source that raises, or returns what the peer cannot send, fails the air (below).
 
+The BLE and SPP histories are
+[read-only views that see later records](../guides/writing-tests.md#reading-a-history).
+
 `peer.events` holds what crossed the channel, in order, as `ChannelEvent(at, direction, data)`
 named tuples. `direction` is said from the firmware's side, as a tap's recording names it
 ([recording format](../recording-format.md)): `"out"`, written by the firmware to the peer;

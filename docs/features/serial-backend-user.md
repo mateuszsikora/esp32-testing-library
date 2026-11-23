@@ -210,6 +210,9 @@ not guaranteed, is in [the decision](../decisions/harness.md#the-serial-backend-
   not meet it;
 - UART0 on such a board was not measured, and the ESP32-C3 and ESP32-C6 not at all.
 
+The board API types `boots` and `sleeps` as read-only sequences. Reading either on serial
+skips the test because this backend cannot observe the chip's resets and deep sleeps.
+
 ## Peripheral limits
 
 The [capability table](board-profiles-user.md#saying-what-a-test-needs) decides source and tap skips

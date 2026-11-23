@@ -124,7 +124,7 @@ def test_delayed_softap_starts_dhcp_at_link_ready(
     discover = [e for e in network.events if e["event"] == "dhcp station: DISCOVER"]
     assert len(ready) == len(discover) == 1
     assert discover[0]["t_ns"] == ready[0]["t_ns"]
-    (tmp_path / "lifecycle.json").write_text(json.dumps(network.events, sort_keys=True))
+    (tmp_path / "lifecycle.json").write_text(json.dumps(network.events[:], sort_keys=True))
 
 
 @pytest.mark.parametrize("password", [None, PASSWORD], ids=["open", "wpa2"])

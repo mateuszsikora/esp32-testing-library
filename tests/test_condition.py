@@ -118,8 +118,21 @@ def test_first_from_reads_each_record_once_and_keeps_its_match() -> None:
     assert FirstFrom(lambda: history, len(history), wanted)() is None
 
 
+def test_first_from_visits_a_record_appended_during_a_poll() -> None:
+    records = [1]
+
+    def wanted(record: int) -> bool:
+        if record == 1:
+            records.append(2)
+        return record == 2
+
+    find = FirstFrom(lambda: records, 0, wanted)
+    assert find() is None
+    assert find() == 2
+
+
 def test_first_from_reads_the_match_from_the_history_at_each_poll() -> None:
-    # A history built anew at each call, as `boots` is, whose records gain what compares equal.
+    # A history built anew at each call, whose records gain what compares equal.
     first = Boot(1, Duration(0), POWERON_RESET)
     boots: list[Boot] = [first]
     find = FirstFrom(lambda: tuple(boots), 1, lambda boot: boot.cause == DEEPSLEEP_RESET)

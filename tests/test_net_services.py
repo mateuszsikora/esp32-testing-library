@@ -107,7 +107,9 @@ def test_ntp_keeps_every_request_with_its_time_and_whether_it_was_answered() -> 
 def test_ntp_next_exchange_is_a_described_condition_from_its_call() -> None:
     now = [0]
     ntp = Ntp(lambda: now[0])
+    exchanges = ntp.exchanges
     ntp.on_datagram(QUERY)
+    assert len(exchanges) == 1
     any_request = ntp.next_exchange()
     unanswered = ntp.next_exchange(answered=False)
     answered = ntp.next_exchange(answered=True)
@@ -137,6 +139,7 @@ def test_ntp_next_exchange_is_a_described_condition_from_its_call() -> None:
 def test_dns_keeps_every_question_it_parsed_with_its_time_and_type() -> None:
     now = [2_000_000_000]
     dns = Dns("10.64.0.1", lambda: now[0])
+    questions, asked = dns.questions, dns.asked
     question = b"\x04time\x04test\0\0\x01\0\x01"
     query = b"\x12\x34\x01\0\0\x01" + b"\0" * 6 + question
     dns.on_datagram(query)
@@ -147,11 +150,11 @@ def test_dns_keeps_every_question_it_parsed_with_its_time_and_type() -> None:
     assert dns.on_datagram(query[:2] + b"\x81\x00" + query[4:]) is None
     assert dns.on_datagram(query[:2] + b"\x11\x00" + query[4:]) is None
     assert dns.on_datagram(query[:4] + b"\0\x02" + query[6:] + question) is None
-    assert dns.questions == [
+    assert questions == [
         DnsQuestion(Duration(2_000_000_000), "time.test", 1),
         DnsQuestion(Duration(62_000_000_000), "time.test", 28),
     ]
-    assert dns.asked == ["time.test", "time.test"]
+    assert asked == ["time.test", "time.test"]
 
 
 def test_dns_next_question_is_a_described_condition_from_its_call() -> None:
@@ -189,7 +192,7 @@ N = 10_000
 
 def test_a_next_exchange_poll_reads_only_the_exchanges_since_the_last_one() -> None:
     ntp = Ntp(lambda: 0)
-    ntp.exchanges = history = CountingList[NtpExchange]()
+    ntp._exchanges = history = CountingList[NtpExchange]()
     ntp.go_silent()
     answered = ntp.next_exchange(answered=True)
     for _ in range(N):
@@ -205,7 +208,7 @@ def test_a_next_exchange_poll_reads_only_the_exchanges_since_the_last_one() -> N
 
 def test_a_next_question_poll_reads_only_the_questions_since_the_last_one() -> None:
     dns = Dns("10.64.0.1", lambda: 0)
-    dns.questions = history = CountingList[DnsQuestion]()
+    dns._questions = history = CountingList[DnsQuestion]()
     other = b"\0\x01\x01\0\0\x01" + b"\0" * 6 + b"\x06broker\x04test\0\0\x01\0\x01"
     time_test = dns.next_question("time.test")
     for _ in range(N):

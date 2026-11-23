@@ -3,13 +3,14 @@
 import math
 import struct
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from ipaddress import IPv4Address
 from typing import Literal, cast, overload
 
 from esp32tl.interfaces.condition import Condition, FirstFrom
+from esp32tl.interfaces.history import History
 from esp32tl.link.boardlink import Output
 from esp32tl.net.bridge import Bridge, address
 from esp32tl.net.client import ConnectionEnded, NotReachable, TcpConnection
@@ -150,7 +151,7 @@ class Internet:
         self._down = _Direction(LATENCY_NS)
         self._drop = False  # the path drops every datagram entering it: `set_path(drop=True)`
         self._datagram: int | None = None  # the size of the IPv4 datagram the link is sending
-        self.events: list[dict[str, object]] = []
+        self._events: list[dict[str, object]] = []
         self.ip = Network(
             self._downlink, self.log, mtu=self._mtu, carries=self._carries, now=self.now
         )
@@ -166,7 +167,7 @@ class Internet:
         self._builtin: dict[int, str] = {1883: "the broker", 80: "the HTTP server"}
         self.bridges: dict[int, Bridge] = {}
         # The connections the test opened, in order, and how many it opened to each port.
-        self.connections: list[TcpConnection] = []
+        self._connections: list[TcpConnection] = []
         self._opened: dict[int, int] = {}
         # The `accepting` conditions, each connecting again after a refusal.
         self._accepting: list[_Accepting] = []
@@ -176,10 +177,22 @@ class Internet:
         # Serves behind an access point only; its leases outlive the link's restarts.
         self.dhcp = Dhcp(self.now, self.log)
         # Behind a modem or a station: each time the link came up or went down, in order.
-        self.link_changes: list[LinkChange] = []
+        self._link_changes: list[LinkChange] = []
         self._link_up = False
         self.link: Ppp | Ethernet | Station = self._peer()
         self.active = False
+
+    @property
+    def events(self) -> Sequence[dict[str, object]]:
+        return History(self._events.__len__, lambda i: self._events[i].copy())
+
+    @property
+    def connections(self) -> Sequence[TcpConnection]:
+        return History(self._connections)
+
+    @property
+    def link_changes(self) -> Sequence[LinkChange]:
+        return History(self._link_changes)
 
     @property
     def ppp(self) -> Ppp:
@@ -214,7 +227,7 @@ class Internet:
         return Condition(lambda: self.lease, "the station has a DHCP lease", "DHCP station")
 
     @property
-    def leases(self) -> list[HostLease]:
+    def leases(self) -> Sequence[HostLease]:
         """Every lease the device's DHCP server acknowledged to the station, in order, renewed
         ones after a reset, a rejoin or an expiry included: the station's side of
         `network.dhcp.leases`."""
@@ -279,7 +292,7 @@ class Internet:
         if self._kind == "ethernet" or up is self._link_up:
             return
         self._link_up = up
-        self.link_changes.append(LinkChange(Duration(self.now()), up, cause))
+        self._link_changes.append(LinkChange(Duration(self.now()), up, cause))
 
     def _station_changed(self) -> None:
         if self.lease is None:
@@ -324,16 +337,16 @@ class Internet:
         return self._now() if self._at is None else self._at
 
     def log(self, event: str) -> None:
-        self.events.append({"t_ns": self.now(), "event": event})
+        self._events.append({"t_ns": self.now(), "event": event})
 
     def transcript(self) -> dict[str, object]:
         """Application traffic and network events, with no TLS keys: plaintext, but on a bridged
         port that carries TLS, where it is the ciphertext the bridge relays."""
-        return {"esp32tl_network": 1, "events": [dict(e) for e in self.events]}
+        return {"esp32tl_network": 1, "events": self.events[:]}
 
     def report(self) -> list[str]:
         lines = ["network events:"]
-        for event in self.events:
+        for event in self._events:
             detail = event.get("event")
             if detail is None:
                 detail = f"stream {event['stream']} {event['direction']} {event['data']} (hex)"
@@ -524,7 +537,7 @@ class Internet:
         identity = f"device:{port}/{number}"
 
         def record(direction: str, data: bytes) -> None:
-            self.events.append(
+            self._events.append(
                 {"t_ns": self.now(), "stream": identity, "direction": direction, "data": data.hex()}
             )
 
@@ -533,7 +546,7 @@ class Internet:
         # Kept only once the network has taken it: it raises when it has no port left.
         connection._opened(*self.ip.connect(device, port, local, connection))
         self._opened[port] = number
-        self.connections.append(connection)
+        self._connections.append(connection)
         return connection
 
     def _pump(self) -> None:
@@ -959,7 +972,7 @@ class _Traced:
         identity = f"{self.port}/{self._connections}"
 
         def record(direction: str, data: bytes) -> None:
-            self.network.events.append(
+            self.network._events.append(
                 {
                     "t_ns": self.network.now(),
                     "stream": identity,

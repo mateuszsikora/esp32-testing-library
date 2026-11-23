@@ -156,6 +156,7 @@ def test_each_sleep_is_recorded_with_the_timer_it_armed_and_the_wake_comes_at_it
     board: Esp32Sim, console: Console
 ) -> None:
     board.power_on()
+    boots, sleeps = board.boots, board.sleeps
     first = board.next_sleep()
     assert repr(first) == "the next deep sleep"
     line = board.wait_until(console.line(r"^timer_wake: sleeping (\d+) ms$"), within=seconds(1))
@@ -173,7 +174,6 @@ def test_each_sleep_is_recorded_with_the_timer_it_armed_and_the_wake_comes_at_it
     console.expect("timer_wake: done", timeout=2 * (SLEEP + BOOT_TIME))
     assert second() == board.sleeps[1]
 
-    boots, sleeps = board.boots, board.sleeps
     # the third boot returns from app_main: two sleeps, one in each of the first two boots
     assert [s.boot for s in sleeps] == [1, 2]
     for sleep in sleeps:

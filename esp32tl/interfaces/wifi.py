@@ -3,7 +3,7 @@ joining the device's own SoftAP. Both carry Ethernet to the harness network on t
 """
 
 import threading
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
@@ -11,6 +11,7 @@ from types import MappingProxyType
 from esp32tl.boards import CHIPS
 from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import SourceError
+from esp32tl.interfaces.history import History
 from esp32tl.link.boardlink import Direction, Interface, Output
 from esp32tl.link.protocol import Input, WifiAp
 from esp32tl.net import LATENCY_NS, Internet
@@ -159,7 +160,11 @@ class Wifi(Interface):
         self._on = False
         # The switches the test asked for and the link has not sent.
         self._pending: list[AirEvent] = []
-        self.events: list[AirEvent] = []
+        self._events: list[AirEvent] = []
+
+    @property
+    def events(self) -> Sequence[AirEvent]:
+        return History(self._events, lock=self._lock)
 
     @property
     def ethernet(self) -> bool:
@@ -341,7 +346,7 @@ class Wifi(Interface):
             self._on = on
             event = AirEvent(now, on)
             self._pending.append(event)
-            self.events.append(event)
+            self._events.append(event)
         if on:
             network.start(now)
             network.log("wifi: access point back on the air")

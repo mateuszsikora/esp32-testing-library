@@ -9,9 +9,10 @@ time; and a wait on one that times out while the connection is still connecting 
 got no answer.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from esp32tl.interfaces.condition import Condition
+from esp32tl.interfaces.history import History
 from esp32tl.net.ip import SYN_RETRIES
 from esp32tl.units import Duration
 
@@ -75,10 +76,14 @@ class TcpConnection:
         self._closing = False
         self._end: str | None = None
         self._why: str | None = None  # why a lost connection was lost, unless with the link
-        self.syns: list[Duration] = []
+        self._syns: list[Duration] = []
         self.established_at: Duration | None = None
         self.closed_at: Duration | None = None
         self.ended_at: Duration | None = None
+
+    @property
+    def syns(self) -> Sequence[Duration]:
+        return History(self._syns)
 
     def _opened(
         self, local_port: int, write: Callable[[bytes], None], close: Callable[[], None]
@@ -312,7 +317,7 @@ class TcpConnection:
     # The network's side, during the board's turns.
 
     def on_syn(self) -> None:
-        self.syns.append(Duration(self._now()))
+        self._syns.append(Duration(self._now()))
 
     def on_established(self) -> None:
         self.established_at = Duration(self._now())

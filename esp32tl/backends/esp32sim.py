@@ -63,7 +63,7 @@ import socket
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from multiprocessing import get_context
 from multiprocessing.context import SpawnProcess
@@ -95,6 +95,7 @@ from esp32tl.interfaces.board import (
 )
 from esp32tl.interfaces.console import ConsoleInput, ConsoleLines
 from esp32tl.interfaces.gnss import Gnss
+from esp32tl.interfaces.history import History
 from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.modem import Modem
 from esp32tl.interfaces.sd_card import SdCard
@@ -1090,34 +1091,37 @@ class Esp32Sim(Board):
         return self.process is not None
 
     @property
-    def boots(self) -> tuple[Boot, ...]:
+    def boots(self) -> Sequence[Boot]:
         """The chip's boots, in order: the first at power-on, then one at each reset, whatever
         caused it."""
         self._on()
-        # the run's first boot is a power-on's, which leaves no hint
-        starts = [(Duration(0), POWERON_RESET, 0)] + [
-            (Duration(r.t), r.cause, r.hint) for r in self.link.resets
-        ]
-        return tuple(
-            Boot(
-                n,
-                at,
-                cause,
-                self._uptime_zero(n),
-                idf_reset_reason(self.profile.chip, cause, hint),
-            )
-            for n, (at, cause, hint) in enumerate(starts, start=1)
+        return History(lambda: len(self.link.resets) + 1, self._boot_at)
+
+    def _boot_at(self, index: int) -> Boot:
+        at, cause, hint = Duration(0), POWERON_RESET, 0
+        if index:
+            reset = self.link.resets[index - 1]
+            at, cause, hint = Duration(reset.t), reset.cause, reset.hint
+        number = index + 1
+        return Boot(
+            number,
+            at,
+            cause,
+            self._uptime_zero(number),
+            idf_reset_reason(self.profile.chip, cause, hint),
         )
 
     @property
-    def sleeps(self) -> tuple[Sleep, ...]:
+    def sleeps(self) -> Sequence[Sleep]:
         """The chip's deep sleeps, oldest first, from the link's `sleep` messages: when each
         began, between the two slice boundaries around it, and what it armed to wake it."""
         self._on()
-        return tuple(
-            Sleep(boot, Duration(s.earliest), Duration(s.latest), frozenset(s.wakes))
-            for boot, s in self.link.sleeps.items()
-        )
+        return History(self.link.sleep_boots.__len__, self._sleep_at)
+
+    def _sleep_at(self, index: int) -> Sleep:
+        boot = self.link.sleep_boots[index]
+        sleep = self.link.sleeps[boot]
+        return Sleep(boot, Duration(sleep.earliest), Duration(sleep.latest), frozenset(sleep.wakes))
 
     def _uptime_zero(self, boot: int) -> UptimeZero | None:
         """Where boot number `boot`'s uptime counter counted zero, as the runner last said: `None`

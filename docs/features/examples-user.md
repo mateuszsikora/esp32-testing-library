@@ -313,6 +313,9 @@ small timing tolerances. The harness's TLS server repeats its bytes, so two runs
 the same times; `make determinism` runs the tracker over TLS and checks that
 ([testing](../guides/testing.md#determinism)).
 
+The position tracker's report-helper tests send MQTT CONNECT and PUBLISH packets through
+`Broker.accept()` to exercise the same message history as the tracker firmware.
+
 ## Periodic wake
 
 Read [the firmware](../../examples/periodic_wake/main/main.c) and
