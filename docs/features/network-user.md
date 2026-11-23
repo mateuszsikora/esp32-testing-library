@@ -1297,11 +1297,18 @@ def test_redials_after_a_dropped_call(board, modem):
     board.power_on()
     board.wait_until(network.next_link_up(), within=seconds(60))
     down, up = network.next_link_down(), network.next_link_up()
+    start = len(network.link_changes)
     modem.drop_call()
     dropped = down()  # LinkChange(at=..., up=False, cause='call ended'), at once
     redialled = board.wait_until(up, within=seconds(90))
     assert redialled.at - dropped.at < seconds(60)
+
+    board.wait(seconds(2))
+    assert [c for c in network.link_changes[start:] if c.up] == [redialled]
 ```
+
+The condition returns the first link-up even if the device redials again, so check the history
+after the two-second wait to catch a second link-up during that interval.
 
 Behind a Wi-Fi access point nothing is recorded: the network does not see the device join or
 leave its access point, only the frames it sends, so `link_changes` stays empty and both

@@ -180,6 +180,7 @@ def test_redials_after_a_dropped_call(
     [opened] = network.link_changes
     assert opened.up and opened.cause == "IPCP open"
     down, up = network.next_link_down(), network.next_link_up()
+    start = len(network.link_changes)
     dropped_at = board.now
     modem.drop_call(terminate=terminate)
     assert modem.registered and not modem.data_mode and modem.powered
@@ -201,10 +202,12 @@ def test_redials_after_a_dropped_call(
     requests = network.ntp.requests
     redialled = board.wait_until(up, within=seconds(60))
     assert redialled.cause == "IPCP open" and redialled.at > back.at
-    assert network.link_changes == [opened, down(), redialled]
     board.wait_until(console.line("modem_recovery: connected"), within=seconds(60))
     assert modem.data_mode and modem.registered and network.ppp.ipcp_open
     board.wait_until(lambda: network.ntp.requests > requests, within=seconds(5))
+
+    board.wait(seconds(2))
+    assert network.link_changes[start:] == [down(), redialled]
 
     # nothing took the modem down: every command in its history has an answer, and no restart
     assert not modem.restarts
