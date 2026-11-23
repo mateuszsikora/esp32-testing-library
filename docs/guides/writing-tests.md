@@ -204,6 +204,10 @@ Every wait is on the board's clock, and every limit a test states is part of wha
   `test_reports_on_connect` in the position tracker does with
   `network.broker.next_connection()`
   ([history, next events and current state](../features/network-user.md#history-next-events-and-current-state)).
+- A `next_*` condition finds the first matching event. To check that it happened exactly once,
+  save the history position before the action and count the matching events at the end of the
+  interval. The [redial example](../features/network-user.md#when-the-link-comes-up-and-goes-down)
+  checks the link-ups in `network.link_changes` since the call was dropped.
 - To check a state over a whole interval, not only at its end, keep the instant it started and
   assert on the line's history: `buzzer.assert_stayed_off(since=off_since)` fails on a pulse the
   waits did not see ([named output conditions](../features/pytest-plugin-user.md#named-output-conditions)).
