@@ -5501,3 +5501,20 @@ applies to replay's `unseen_events` and `tap.events`, both append-only histories
 such as broker telemetry. Public lists let a test's `clear()` invalidate the index of every
 armed condition. Restoring a separate list for `dns.asked` alongside a tuple for `questions`
 would give two histories of the same DNS queries different behavior again.
+
+## The broker records complete control packets received from its clients
+
+Status: decided (#322)
+
+Each received packet has a kind, client ID, connection ID and the board time when the packet
+was complete. This is the instant from which the broker measures keepalive.
+
+**Rejected:** a single `last_packet_at` per connection. The history gives the latest packet with
+`[-1]` after filtering by connection and also gives the intervals between pings.
+
+**Rejected:** recording partial packets or their bytes. The transcript already has the stream's
+bytes as they arrived.
+
+**Rejected:** recording packets the broker writes in this history. The history tells the test when
+the client last spoke. An outgoing PUBLISH has its own `Delivery` record. A broker reply,
+including a delayed or manually released PUBACK, says nothing about new client activity.

@@ -91,7 +91,8 @@ def test_public_history_properties(device: Esp32Sim, tmp_path: Path) -> None:
         (net.dhcp, "leases"),
         (
             net.broker,
-            "messages clients connection_ends connection_attempts subscribe_requests deliveries",
+            "messages clients connection_ends connection_attempts subscribe_requests deliveries "
+            "received_packets",
         ),
         (net.http, "requests"),
         (net.http_client, "exchanges"),

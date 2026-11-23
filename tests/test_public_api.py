@@ -327,3 +327,8 @@ def test_every_condition_has_the_shape_of_its_kind() -> None:
                     " once and for good goes in HAPPENED, an action in ACTIONS"
                 )
     assert not wrong, "\n".join(sorted(wrong))
+
+
+def test_received_packet_kind_is_a_public_type() -> None:
+    assert typing.get_type_hints(esp32tl.ReceivedPacket)["kind"] is esp32tl.PacketKind
+    assert {"ReceivedPacket", "PacketKind"} <= set(esp32tl.__all__)

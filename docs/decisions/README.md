@@ -373,6 +373,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A deep sleep is a history of its own beside boots, without the timer's due time](harness.md#a-deep-sleep-is-a-history-of-its-own-beside-boots-without-the-timers-due-time) | `harness.md` | decided (#308) |
 | [The modem's power changes are a history beside its restarts](harness.md#the-modems-power-changes-are-a-history-beside-its-restarts) | `harness.md` | decided (#311) |
 | [Public history properties return live read-only sequences](harness.md#public-history-properties-return-live-read-only-sequences) | `harness.md` | decided (#321) |
+| [The broker records complete control packets received from its clients](harness.md#the-broker-records-complete-control-packets-received-from-its-clients) | `harness.md` | decided (#322) |
 
 ## The runner crate and esp32sim
 

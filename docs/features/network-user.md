@@ -55,6 +55,7 @@ silent; an AT-only model still works without PPP. The network's broker is `modem
 | `next_connection()` | Condition returning the first accepted MQTT CONNECT recorded **after this method call** |
 | `find_connection()` | Immediate history query returning the first accepted CONNECT, or `None`, even if that connection has closed |
 | `next_connection_attempt()` | Condition returning the first accepted or rejected CONNECT outcome recorded **after this method call** |
+| `next_received_packet(kind=None, *, client_id=None)` | Condition for the first matching [received control packet](#received-control-packets) after this call |
 | `next_end(client_id=None)` | Condition returning the first connection end recorded **after this method call**; with `client_id`, the first of a connection with that client ID ([how each connection ended](#how-each-connection-ended)) |
 | `ended(connection_id)` | Immediate query returning how that connection ended, a `ConnectionEnd`, or `None` while it has not |
 | `next_subscribe(filter=None)` | Condition returning the first SUBSCRIBE recorded **after this method call**; with `filter`, the first naming exactly that topic filter ([every SUBSCRIBE and UNSUBSCRIBE](#every-subscribe-and-unsubscribe)) |
@@ -62,6 +63,7 @@ silent; an AT-only model still works without PPP. The network's broker is `modem
 | `publish(topic, payload, retain=False, qos=0)` | Publish from the test at the board's current time; bytes or UTF-8 text, QoS 0 or 1. The message's `client` is `TEST_CLIENT` |
 | `messages`, `clients`, `retained` | Message history, accepted-client history and currently retained messages |
 | `connection_attempts` | CONNECT outcome history, including accepted and rejected attempts |
+| `received_packets` | Complete client control packets across all connections, in the order the broker read them |
 | `connection_ends` | How and when each accepted connection ended, each a `ConnectionEnd`, in the order they ended |
 | `subscribe_requests` | Every SUBSCRIBE and UNSUBSCRIBE received, each a `SubscribeRequest` |
 | `puback` | Policy for new incoming QoS 1 exchanges: `"immediate"` (default), `"hold"`, or a nonnegative `Duration` |
@@ -204,11 +206,11 @@ a previously true condition false.
 The names say which is which, on every service of the network, by the rule of [writing
 tests](../guides/writing-tests.md#which-shape-a-condition-has): a condition that sees only what
 happens after the call that makes it is a `next_*` method (`next_message`, `next_connection`,
-`next_connection_attempt`, `next_end`, `next_delivery`, `next_subscribe`, HTTP's
+`next_connection_attempt`, `next_end`, `next_received_packet`, `next_delivery`, `next_subscribe`, HTTP's
 `next_request`, DHCP's `next_lease`, the station's `next_lease`, TLS's `next_handshake_started`
 and `next_handshake_completed`, NTP's `next_exchange`, DNS's `next_question`, a TCP connection's
 `next_data`); `find_*` reads the history now and returns a record or `None`; a plural attribute
-(`messages`, `clients`, `connection_ends`, `subscribe_requests`, `leases`, NTP's `exchanges`, DNS's
+(`messages`, `clients`, `received_packets`, `connection_ends`, `subscribe_requests`, `leases`, NTP's `exchanges`, DNS's
 `questions`) is a [read-only view that sees later records](../guides/writing-tests.md#reading-a-history);
 a condition for a state that holds now, and can stop holding,
 is `is_<state>` (`is_subscribed(topic)`, the station's `is_leased`), true while it holds; and one
@@ -224,7 +226,7 @@ b'new'`, `the next MQTT client connection`, `the next MQTT connection attempt`, 
 connection end of 'logger-1'`, `the next MQTT delivery on 'a/+' saying b'new'`, `the next MQTT
 SUBSCRIBE to 'a/#'` and `an active MQTT subscription to 'a/#'`. Call a condition with `()` or pass
 it to `board.wait_until`. Boolean coercion of any MQTT condition, including those from
-`next_message`, `next_connection`, `next_connection_attempt`, `next_end`, `next_delivery`,
+`next_message`, `next_connection`, `next_connection_attempt`, `next_end`, `next_received_packet`, `next_delivery`,
 `next_subscribe` and `is_subscribed`, raises `TypeError("call the MQTT condition with (), or pass it
 to board.wait_until")`, before and after a match, so an unevaluated `assert
 broker.next_connection()` fails. Use `assert broker.find_connection() is not None` to inspect past
@@ -243,6 +245,32 @@ A CONNECT with an empty client ID and `CleanSession=1` receives a generated ID s
 per-broker counter and skip IDs already in its accepted-client history, so anonymous clients
 remain independent and repeated test runs assign the same IDs. An empty ID with
 `CleanSession=0` receives CONNACK return code 2 (`Identifier rejected`) and is disconnected.
+
+### Received control packets
+
+Each entry in `broker.received_packets` is a frozen `ReceivedPacket`. Its `at` is the board
+time when the last byte reached the broker. Its `connection_id` distinguishes reconnects by the
+same `client_id` and matches the ID in `MqttClient` and `ConnectionEnd`. An accepted anonymous
+CONNECT carries the assigned ID. A rejected CONNECT carries the ID the client sent, even
+`""`. A DISCONNECT is recorded. Incomplete packets and packets the broker rejects as `malformed` leave no entry.
+
+The `kind` is one of the `PacketKind` values: `CONNECT`, `PUBLISH`, `PUBACK`, `SUBSCRIBE`,
+`UNSUBSCRIBE`, `PINGREQ` or `DISCONNECT`. Passing any other kind to
+`next_received_packet` raises `ValueError`. Through TLS the timestamp is when the broker
+received the plaintext. A bridge replacing the broker on port 1883 adds no entries.
+
+For a client that stays connected and idle after CONNECT, check its first ping against its
+advertised keepalive:
+
+```python
+connected = broker.next_connection()
+ping = broker.next_received_packet("PINGREQ", client_id="logger-1")
+board.power_on()
+client = board.wait_until(connected, within=seconds(60))
+packet = board.wait_until(ping, within=seconds(client.keepalive))
+assert packet.connection_id == client.connection_id
+assert packet.at - client.at <= seconds(client.keepalive)
+```
 
 ### How each connection ended
 
@@ -1206,7 +1234,7 @@ tracker publish QoS 0; `mqtt_session` subscribes at QoS 1, so it answers a PUBAC
 
 A device that loses its power or its coverage sends no FIN and no RST, so a broker on the internet
 goes on holding the connection: it publishes the Will only when the keepalive runs out, 1.5 times
-the keepalive after the device's last packet (MQTT 3.1.1, 3.1.2.10). The network does the same.
+the keepalive after [the device's last packet](#received-control-packets) (MQTT 3.1.1, 3.1.2.10). The network does the same.
 `board.power_off()`, `modem.lose_registration()`, `modem.lose_power()`, `modem.hang()`,
 `modem.drop_call()`, PPP ended by the device and `wifi.access_point_off()` end the link; the
 broker's end of each connection the device opened stays open and silent,
