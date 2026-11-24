@@ -357,6 +357,10 @@ comes within `BOOT_TIME = seconds(0.1)` after it. The tests demonstrate:
 
 - The pin pulses every 15 minutes: four pulses, from power-on and three wakes, and the count from
   0 to 3.
+- A change made while the chip sleeps finds the pulse of the next wake: `pin.next_change(on=True)`,
+  made once the first sleep has begun, returns the wake's rise, within `BOOT_TIME` after the wake,
+  when it is asked after the next sleep has begun. A wait on `pin.is_on`, asked at least every
+  100 ms, could miss the 20 ms pulse.
 - A day of wakes spends less wall time asleep than booting: 95 wakes, 96 pulses, in under 24 hours
   of the board's time, every interval within the tolerance, and the sleeps take less wall time
   than the boots between them (about 0.4 s against 6.6 s on an M2 Pro).

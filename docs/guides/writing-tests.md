@@ -199,11 +199,44 @@ Every wait is on the board's clock, and every limit a test states is part of wha
   15-minute sleeps that way in seconds. To check the interval it armed, take the sleep from
   `board.sleeps`, or wait on `board.next_sleep()`: `wake.at - sleep.latest` is the time it slept,
   where the last line before the sleep comes some unknown time before it.
-- A `next_*` condition, of the network or `board.next_boot()`, sees only what happens after the
-  call that makes it, so make it before the action that causes the event, as
-  `test_reports_on_connect` in the position tracker does with
-  `network.broker.next_connection()`
+- Every `next_*` condition but `connection.next_data(start=…)`, which counts from the offset into
+  `received` it is given, sees only what happens after the call that makes it: the network's,
+  `board.next_boot()`, `board.next_sleep()`, a line's `next_change` (`output.next_change()` and
+  `lines.next_change()`), the modem's `next_power_change()` and `next_mode_change()`, and the
+  Bluetooth peers' (`SppPeer.next_write()` and `next_written_line()`, and the BLE peers'
+  `next_connection()`, `next_disconnection()`, `next_pairing()`, `next_write()`,
+  `next_advertisement()` and `next_notification()`). Each starts from the history there is at the
+  call, consumes nothing and can be asked any time later, so it finds an event anywhere between
+  the call and the question, even one that polling would miss. `console.line()` starts at its
+  call too, but consumes what it finds: asked again after a match, it looks for the next line.
+  Make a condition before the action that causes the event, as `test_reports_on_connect` in the
+  position tracker does with `network.broker.next_connection()`
   ([history, next events and current state](../features/network-user.md#history-next-events-and-current-state)).
+  A condition made while the chip sleeps finds what the next wake does, as
+  `test_a_change_made_while_asleep_finds_the_pulse_of_the_next_wake` in the
+  [periodic wake](../../examples/periodic_wake/tests/test_periodic_wake.py) does, with
+  `INTERVAL`, `TOLERANCE` and `BOOT_TIME` the constants of that file:
+
+  ```python
+  pin = board.lines.output("wake.pulse")
+  board.power_on()
+  # Before the sleep: when a wait for the console's count returns, the chip may sleep already.
+  slept = board.next_sleep()
+  board.wait_until(slept, within=seconds(1))
+
+  # Asleep: the pulse of the next wake is after this call.
+  pulse = pin.next_change(on=True)
+  slept = board.next_sleep()
+  wake = board.wait_for_wake(within=INTERVAL + TOLERANCE)
+  board.wait_until(slept, within=seconds(1))
+  rise = pulse()
+  assert rise is not None  # 20 ms high: a wait on `pin.is_on` could miss it.
+  assert wake.at < rise.t < wake.at + BOOT_TIME
+  ```
+
+  For an event that already happened, read the history (`board.sleeps`, `pin.events()`), not a
+  `next_*` made after it, which waits for the next one
+  ([reading a history](#reading-a-history)).
 - A `next_*` condition finds the first matching event. To check that it happened exactly once,
   save the history position before the action and count the matching events at the end of the
   interval. The [redial example](../features/network-user.md#when-the-link-comes-up-and-goes-down)
