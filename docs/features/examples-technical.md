@@ -162,7 +162,14 @@ and `board.console.line`. `next_count` waits up to `BOOT_TIME` for the count's l
 that ends after the call, so it reads each boot's line once. `pulse_starts` walks the line's
 firmware events: each high level starts a pulse, and the next low or undriven level ends it, which
 must come 20 to 21 ms later; a pin still high at the end fails it. `assert_every_interval` checks
-each pair of pulse starts, naming the pulse that broke the interval. The day's test,
+each pair of pulse starts, naming the pulse that broke the interval.
+`test_a_change_made_while_asleep_finds_the_pulse_of_the_next_wake` makes each
+`board.next_sleep()` before the sleep it waits for: right after `board.power_on()`, and before
+`wait_for_wake`. One made after `next_count` waits for the sleep after the next wake: the wait for
+the count's line returns at 0.1 s of the board's time, and the chip already sleeps then. It makes
+`pin.next_change(on=True)` once the first sleep has begun, after the power-on pulse and the pin's
+change to undriven, and asks it only after the second sleep has begun, when the wake's pulse is
+over. The day's test,
 `test_a_day_of_wakes_spends_less_wall_time_asleep_than_booting`, reads `time.monotonic()` around
 each `wait_for_wake`, the sleep, and each `next_count` after it, the boot, and requires the
 sleeps' sum to be less than the boots': a busy host slows both down alike, the runner's skip

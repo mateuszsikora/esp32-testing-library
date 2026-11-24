@@ -39,6 +39,23 @@ def test_the_pin_pulses_every_15_minutes(board: Board) -> None:
     assert_every_interval(starts)
 
 
+def test_a_change_made_while_asleep_finds_the_pulse_of_the_next_wake(board: Board) -> None:
+    pin = board.lines.output("wake.pulse")
+    board.power_on()
+    # Before the sleep: when a wait for the console's count returns, the chip may sleep already.
+    slept = board.next_sleep()
+    board.wait_until(slept, within=seconds(1))
+
+    # Asleep: the pulse of the next wake is after this call.
+    pulse = pin.next_change(on=True)
+    slept = board.next_sleep()
+    wake = board.wait_for_wake(within=INTERVAL + TOLERANCE)
+    board.wait_until(slept, within=seconds(1))
+    rise = pulse()
+    assert rise is not None  # 20 ms high: a wait on `pin.is_on` could miss it.
+    assert wake.at < rise.t < wake.at + BOOT_TIME
+
+
 def test_a_day_of_wakes_spends_less_wall_time_asleep_than_booting(board: Board) -> None:
     pin = board.lines.output("wake.pulse")
     board.power_on()

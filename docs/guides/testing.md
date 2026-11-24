@@ -529,9 +529,10 @@ Build with `firmware/build.sh --examples sd_data_logger`, then run
 `.venv/bin/pytest examples/sd_data_logger/tests`. It needs the runner and ROM ELF as well.
 
 `examples/periodic_wake/tests/test_periodic_wake.py` runs deep sleep with a timer wake: a pulse
-on GPIO18 every 15 minutes, the wake count in RTC memory through sleeps, a reset and a power
-cycle, and a day of wakes whose sleeps take less wall time than its boots: about 0.4 s against
-6.6 s on an M2 Pro, where without the runner's steps through the sleeps they take 330 s. Build with
+on GPIO18 every 15 minutes, a line's `next_change` made during a sleep that finds the next wake's
+pulse, the wake count in RTC memory through sleeps, a reset and a power cycle, and a day of wakes
+whose sleeps take less wall time than its boots: about 0.4 s against 6.6 s on an M2 Pro, where
+without the runner's steps through the sleeps they take 330 s. Build with
 `firmware/build.sh --examples periodic_wake`, then run
 `.venv/bin/pytest examples/periodic_wake/tests`.
 
