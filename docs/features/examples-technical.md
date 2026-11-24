@@ -268,9 +268,9 @@ from the time the adapter heard the command (the time a line came, for the pause
 checked to within 0.1 s and the ignition retries to within 0.2 s, since each retry also waits for an
 answer. `next_reading` waits at most one pause and a second for the next reading line and returns
 its `name=value` pairs. The tests of a silent adapter and of one that ends its link count
-`bt.pairings()`: the reconnection adds none. `hang_up(peer)` disconnects every link of
-`peer.device`, Bumble's `Device`, through `Connection.disconnect()`, in a coroutine started on the
-air; the test checks that the new connection comes less than `READ_PERIOD` after the last reading,
+`bt.pairings()`: the reconnection adds none. The test of the adapter that ends its link waits
+for `peer.disconnect()`'s condition, within 100 ms, which ends every link of the peer with reason
+`0x13`; it checks that the new connection comes less than `READ_PERIOD` after the last reading,
 inside the reader's pause, which is where the old session's `talk()` would otherwise carry on. The
 two endings with nothing to read share one parametrised test, with the model's keyword arguments
 as its parameter.

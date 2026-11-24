@@ -14,6 +14,7 @@ source sends goes out on the channel at the board's time it gives. `written_line
 `next_written_line` read the device's writes as lines, cut at a separator across its chunks.
 """
 
+import asyncio
 import bisect
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
@@ -289,8 +290,13 @@ class BluetoothDevice(Radio):
 
     `switch_off` and `out_of_range` take it off the air without a word, until `switch_on` and
     `in_range` have both undone what was done; `present` says whether it is on the air. To another
-    device the two look the same. The link keys stay until `forget_keys`.
+    device the two look the same. The link keys stay until `forget_keys`. `disconnect` ends the
+    device's links while it stays on the air, as a device that hangs up does; a device that goes
+    silent, whose links end at their supervision timeout, is `out_of_range`.
     """
+
+    # The service that names the device's conditions in `bool()`'s `TypeError`.
+    _service = "Bluetooth"
 
     def __init__(
         self,
@@ -399,6 +405,82 @@ class BluetoothDevice(Radio):
         self._serve(device)
         return device
 
+    def disconnect(self) -> Condition[bool]:
+        """Ends every link the device has, at the air's time, as a device that hangs up while it
+        stays switched on and in range does: its host sends `HCI_Disconnect` with Bumble's
+        default reason, `REMOTE_USER_TERMINATED_CONNECTION_ERROR` (0x13), which the other side's
+        host gets in its `Disconnection_Complete`. What runs on a link, L2CAP and RFCOMM, ends
+        with it. The device stays `present`, keeps its link keys and stays connectable: the
+        other side can page it again at once, and authenticates with the key it kept.
+
+        The condition holds once every link the device had at the call has ended, read from the
+        disconnection's own completion: a link the other side makes again before the condition
+        is asked does not hide the end. The other links are ended even when ending one fails;
+        what Bumble raised for the first that failed, in the order of `device.connections`, is
+        then raised from the condition, as a `PeerError`, once all are done.
+
+        The call raises `PeerError` at once without a link, which the other side makes (a device
+        switched off has none left), while the device is out of range, and with a link that lost
+        contact: one the device left while out of range, or one whose other side left the air,
+        as a board's chip does at a reset or a power-off. Such a link ends at its supervision
+        timeout, on both sides, and no word of the device's reaches the other side before then."""
+        with self.air._lock:
+            connections = list(self.device.connections.values())
+            if not connections:
+                raise PeerError(
+                    f"{self.name}: not connected: disconnect needs a link, which the device makes"
+                )
+            if not self.present:
+                raise PeerError(
+                    f"{self.name}: out of range: its links end at their supervision timeout,"
+                    " not with disconnect(); wait for it, and call in_range() for a new link"
+                )
+            controller = self._controller
+            assert controller is not None
+            lost = [c for c in connections if controller.lost_contact(c.peer_address)]
+            if lost:
+                raise PeerError(
+                    f"{self.name}: lost contact with {', '.join(_named(c) for c in lost)}: the"
+                    " link ends at its supervision timeout, not with disconnect(); wait for it"
+                )
+            description = f"{self.name}'s disconnection ({self.address})"
+            outcome: dict[str, BaseException | bool] = {}
+
+            async def run() -> None:
+                try:
+                    # Each link's end is asked for, whatever becomes of the others; the first
+                    # failure is the condition's.
+                    results = await asyncio.gather(
+                        *(connection.disconnect() for connection in connections),
+                        return_exceptions=True,
+                    )
+                    failed = [r for r in results if isinstance(r, BaseException)]
+                    if failed:
+                        raise failed[0]
+                    outcome["done"] = True
+                except asyncio.CancelledError:
+                    # The task itself cancelled, as when the air is over, stays cancelled; what
+                    # Bumble cancels under it, as its `Device.disconnect` does at the host's
+                    # `EVENT_FLUSH`, ends the operation.
+                    task = asyncio.current_task()
+                    if task is not None and task.cancelling():
+                        raise
+                    outcome["error"] = PeerError("Bumble cancelled it before the link ended")
+                except Exception as error:
+                    outcome["error"] = error
+
+            self.air.start(run())
+
+        def ended() -> bool:
+            error = outcome.get("error")
+            if isinstance(error, PeerError):
+                raise PeerError(f"{description}: {error}") from error
+            if isinstance(error, BaseException):
+                raise PeerError(f"{description}: {type(error).__name__}: {error}") from error
+            return outcome.get("done") is True
+
+        return Condition(ended, description, self._service)
+
     def _powering_off(self) -> None:
         # The inquiry under way does not start again when it ends here.
         self.device.auto_restart_inquiry = False
@@ -482,13 +564,15 @@ class SppPeer(BluetoothDevice):
 
     At the device's DISC the peer answers UA and the channel is closed; it never sends DISC
     itself, and, while it stays on the air, never ends its multiplexer, its L2CAP channel or its
-    link by itself: those are the device's host's to end, or the test's, through
-    `device.connections`.
+    link by itself: those are the device's host's to end, or the test's, with `disconnect`, which
+    ends the link and the channel with it, as an adapter that hangs up does.
 
     The source gets `supply` on a power loss, when it is `Supplied`; out of range it runs on, and
     what it sends is lost. A `Model` states its times in `Duration`s; any other source in
     nanoseconds.
     """
+
+    _service = "SPP"
 
     def __init__(
         self,

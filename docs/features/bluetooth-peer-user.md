@@ -83,7 +83,8 @@ From the first look on:
   board.wait_until()`.
 - **What the test does on the air happens at the board's current instant:** a device made with
   `SppPeer(bt.air, ...)` or `BluetoothDevice(bt.air, ...)`, before power-on or after, `peer.rssi`
-  set, `peer.switch_off()` and the other calls of [a peer that leaves](#a-peer-that-leaves), and a
+  set, `peer.switch_off()` and the other calls of [a peer that leaves](#a-peer-that-leaves),
+  `peer.disconnect()` ([the peer hangs up](#the-peer-hangs-up-disconnect)), and a
   coroutine on a device's Bumble side started with `bt.air.start(...)`, which then runs as the board
   runs. `board.wait_until` can wait for what the devices do, as `peer.channel_open`.
 - **The board's supply and resets reach the controller.** `board.power_off()` takes it off the air
@@ -405,11 +406,13 @@ peer.out_of_range()  # it runs on, out of reach
 peer.in_range()
 peer.present  # on and in range
 peer.forget_keys()  # it loses the link keys it keeps
+peer.disconnect()  # it ends its links and stays on the air
 ```
 
 Each call takes effect at the air's time, from the test or from a coroutine on the air. Power and
 range are apart: a peer switched off and out of range is `present` again once both are undone.
-Saying what is already so changes nothing.
+Saying what is already so changes nothing. `disconnect()` is not a way of leaving: the peer hangs
+up and stays on the air ([the peer hangs up](#the-peer-hangs-up-disconnect)).
 
 To a device on the air both ways of leaving look the same:
 
@@ -460,8 +463,9 @@ The peer answers at once and starts nothing itself. At the device's RFCOMM DISC 
 answers UA and the channel is closed: `channel_open` is false, `is_closed` holds, and a line the
 close cut off is a `WrittenLine` with `complete=False`. It never sends DISC itself, never closes its
 RFCOMM multiplexer or the L2CAP channel under it, and, while it stays on the air
-([above](#a-peer-that-leaves)), never ends the ACL link: it answers each of these when the device's
-host asks, and that is all. A real SPP adapter may end the link itself sooner; this one never does
+([above](#a-peer-that-leaves)), never ends the ACL link by itself: it answers each of these when the
+device's host asks, and that is all. A real SPP adapter may end the link itself sooner; this one
+does only when the test calls [`disconnect()`](#the-peer-hangs-up-disconnect)
 ([decision](../decisions/harness.md#the-spp-peer-ends-nothing-itself-after-the-device-closes-the-channel)).
 
 Measured on `examples/obd_reader`, built with ESP-IDF v5.3.6, from the run's HCI tap
@@ -492,26 +496,47 @@ In the same example with an adapter that stopped answering, after which the read
 once, its search started 50 ms after the line it prints before `esp_spp_disconnect`, `obd_reader:
 the adapter stopped answering`, and SDP 91 ms after it, on the old link: no page and no pairing.
 
-To end the link from the peer's side, as an adapter that drops its connection does, a test
-disconnects the peer's connections on the air, as `hang_up` in
-`examples/obd_reader/tests/test_obd_reader.py` does:
+### The peer hangs up: `disconnect()`
+
+To end the link from the peer's side, as an adapter that drops its connection does, a test calls
+`disconnect()`, as `examples/obd_reader/tests/test_obd_reader.py` does:
 
 ```python
-async def hang_up(peer: SppPeer) -> None:
-    for connection in list(peer.device.connections.values()):
-        await connection.disconnect()
-
-
-hung_up = board.bluetooth.air.start(hang_up(peer))
-board.wait_until(hung_up.done, within=ms(100))  # The peer's end of each link is gone.
+board.wait_until(peer.disconnect(), within=ms(100))  # The peer's end of each link is gone.
 board.wait_until(board.console.line("obd_reader: disconnected"), within=ms(100))
 ```
 
-Wait for the task `air.start` returns, not for `peer.is_closed`: after the device's own close the
-channel is closed already while the link is still up, so `is_closed` says nothing about the link.
-On the air the hang-up completes at the instant it starts, and `peer.device.connections` is then
-empty. What the firmware makes of it comes later, at its own events: wait for one of those, here
-the console line it prints at `ESP_SPP_CLOSE_EVT`.
+`disconnect()` is a `BluetoothDevice`'s, so a plain `BluetoothDevice` has it too. At the air's
+time it ends every ACL link the peer has, each with `HCI_Disconnect` and Bumble's default reason,
+`REMOTE_USER_TERMINATED_CONNECTION_ERROR`, `0x13`, which the firmware's host gets in its
+`Disconnection_Complete`. RFCOMM and L2CAP end with the link: `channel_open` turns false, and a
+line the end cut off is a `WrittenLine` with `complete=False`, as after any close. The peer stays
+`present`, keeps its link keys and stays connectable, so the firmware can page it again at once,
+authenticate with the key it kept, and open the channel again.
+
+It returns a described condition that holds once every link the peer had at the call has ended. It
+is read from the disconnection's own completion, not from `peer.device.connections` when it is
+asked, so a firmware that pages the peer again before the next poll does not hide the end. On the
+air the disconnection completes at the instant it starts. The other links are ended even when
+ending one fails; what Bumble raised for the first that failed is then raised from the condition as
+a `PeerError`. The condition is named `peer's disconnection (00:00:00:00:5B:01)` in
+`NeverHappened`, and refuses `bool()`: `call the SPP condition with (), or pass it to
+board.wait_until`, or `the Bluetooth condition` for a plain `BluetoothDevice`.
+
+Wait for this condition, not for `peer.is_closed`: after the device's own close the channel is
+closed already while the link is still up, so `is_closed` says nothing about the link. What the
+firmware makes of it comes later, at its own events: wait for one of those, here the console line it
+prints at `ESP_SPP_CLOSE_EVT`.
+
+`disconnect()` takes no reason. For an adapter that ends the link itself, call `disconnect()`; for
+one that goes silent, as one whose power or radio fails, call `out_of_range()`, whose links end at
+the supervision timeout with `CONNECTION_TIMEOUT`, `0x08` ([above](#a-peer-that-leaves)), and
+`in_range()` to bring it back. `disconnect()` raises `PeerError` at once
+([below](#when-something-goes-wrong)) with no link, while the peer is out of range, and with a link
+that lost contact: one the peer left while it was out of range, or one whose other side left the
+air, as the board's controller does at `board.reset()`, at a reset the firmware makes itself, at its
+`HCI_Reset`, or at `board.power_off()`. Such a link ends only at its supervision timeout, and
+nothing the peer sends reaches the other side before then.
 
 Measured on the same example: the firmware's host gets `Disconnection_Complete`, reason `0x13`, 0.1
 ms after, and `ESP_SPP_CLOSE_EVT` reaches the firmware 10.6 ms after; no RFCOMM or L2CAP frame goes
@@ -619,6 +644,11 @@ On the air:
 | `bench: source.quiet_until returned 0 s, not after the air's 0 s: what it sends by then belongs in the poll at 0 s` | `AirError`, from `PeerError` | `quiet_until` returned a time not after the air's |
 | `{description} did not complete within 10 s: waited from 0 s to 10 s of the board's time` | `NeverHappened` | `air.run` ran out of `within`; `the awaitable` without a `description` |
 | `air.wait: this air is on the board's clock, which only the board's link moves: let the board run with board.wait() or board.wait_until()` | `AirError` | `air.wait`, `air.advance` or `air.run`, each named, on `bt.air` |
+| `peer: not connected: disconnect needs a link, which the device makes` | `PeerError` | `disconnect()` on a peer with no link, which a peer switched off never has |
+| `peer: out of range: its links end at their supervision timeout, not with disconnect(); wait for it, and call in_range() for a new link` | `PeerError` | `disconnect()` on a peer out of range that still has a link |
+| `peer: lost contact with 24:0A:C4:00:00:01: the link ends at its supervision timeout, not with disconnect(); wait for it` | `PeerError` | `disconnect()` with a link that lost contact and has not fallen yet: the peer left it while out of range and is back, or the other side left the air, as the board's controller does at a reset or a power-off |
+| `peer's disconnection (00:00:00:00:5B:01): HCI_Error: …` | `PeerError`, from Bumble's exception, raised by the condition | Bumble raised while ending a link, the first that failed; the type and message are Bumble's, and the other links are ended all the same |
+| `peer's disconnection (00:00:00:00:5B:01): Bumble cancelled it before the link ended` | `PeerError`, raised by the condition | Bumble cancelled the wait for a link's end under the call, as its `Device.disconnect` does at its host's `EVENT_FLUSH` |
 | `SppPeer: service_name is '', not None or a string of 1 to 255 bytes` | `PeerError` | A service name that is not a string or `None`, empty, or longer than 255 bytes |
 | `the air is at 1 s: it cannot go back to 0.5 s` | `ValueError` | `air.advance` to a time before the air's |
 | `air.advance takes a Duration, as seconds(1), not 1` | `TypeError` | `air.advance(1)`: a plain number where a `Duration` belongs |

@@ -2076,18 +2076,45 @@ within the target's connection accept timeout, as
 `LMP_RESPONSE_TIMEOUT`, because the pager is there and answers.
 
 
-## A peer's own call that ends its link is postponed
+## A peer's own call that ends its link ends every ACL link with 0x13
 
-Status: postponed (#75)
+Status: decided (#327)
 
 A peer leaves with `switch_off` or `out_of_range`, after which nothing is sent and each end's link
-falls at its supervision timeout ([above](#a-peer-leaves-without-a-word-keeps-its-keys-and-its-old-link-stays-dead-until-it-falls)).
+falls at its supervision timeout
+([above](#a-peer-leaves-without-a-word-keeps-its-keys-and-its-old-link-stays-dead-until-it-falls)).
 A peer that ends a link itself, as an adapter that drops its connection and is there again at once,
-has no call on `SppPeer` or `BluetoothDevice`: the OBD-II reader's test ends it through Bumble,
-with `Connection.disconnect()` on each of `peer.device.connections`, in a coroutine started on the
-air. One example needs it so far; a call of the peer's own, the counterpart of the SD card's
-`remove()`, waits until a second test does, so that what it ends (the RFCOMM channel or the link)
-and with which reason is chosen from more than one case.
+calls `BluetoothDevice.disconnect()`, so `SppPeer` and a plain `BluetoothDevice` both have it: the
+link belongs to the Classic device, the channel to SPP. It ends every ACL link in
+`device.connections` with `Connection.disconnect()` and Bumble's default reason,
+`REMOTE_USER_TERMINATED_CONNECTION_ERROR`, `0x13`; RFCOMM and L2CAP end with the link, and the peer
+stays `present`, keeps its keys and stays connectable, so the device can page it again at once. This
+was postponed (#75) until a second case, so that what it ends and with which reason would be chosen
+from more than one. The first is the OBD-II reader's test, whose adapter hangs up between two
+rounds. The second is a use case, not a test in this repository: replaying a recorded session of a
+Classic adapter that drops its link during the session and stays on the air, so that the firmware
+connects to it again, with the replay ending the link when the recorded event is due. A replayed
+peer itself is still postponed ([below](#a-replayed-peer-is-postponed)); the call is decided now
+because both cases end the ACL link, not only the RFCOMM channel, and both want the adapter powered
+and in range right after.
+
+It returns a condition that holds once every link the peer had at the call has ended, read from
+the task's completion. With no link it raises `PeerError` at once: a hang-up when the firmware
+holds no link is a wrong expectation. Out of range, or with a link that lost contact, because the
+peer left the air or the other side did, as a board's chip does at a reset, it raises too: such a
+link ends at its supervision timeout, and modelling a local detach of an unreachable link is left
+out ([user doc](../features/bluetooth-peer-user.md#the-peer-hangs-up-disconnect)).
+
+**Rejected:** a condition read from `device.connections` when it is polled, because a firmware
+that pages the peer again before the next poll would hide the end; and a `reason` parameter,
+because both cases want `0x13`, and a link lost to distance is already `out_of_range()`, which ends
+it at the supervision timeout with `0x08`, with `in_range()` to bring the peer back.
+
+**Postponed:** closing only the RFCOMM channel, a DISC from the peer, until a test needs a peer that
+closes its channel and keeps its link; a `Disconnection` history for Classic, with the
+`SppPeer.channels` of [the SPP peer ends nothing itself after the device closes the
+channel](#the-spp-peer-ends-nothing-itself-after-the-device-closes-the-channel); and
+`BlePeripheral.disconnect()`, the same gap on LE, until a test needs it.
 
 ## A replayed peer is postponed
 
@@ -5402,10 +5429,11 @@ Status: decided (#309)
 
 At the device's DISC for the channel, `SppPeer` answers UA and the channel is closed; it sends no
 DISC of its own, does not close its RFCOMM multiplexer or the L2CAP channel under it, and does not
-end the ACL link. The device's host does each of these, or the test does, through
-`peer.device.connections`. Measured on `examples/obd_reader` with ESP-IDF v5.3.6, Bluedroid then
-closes the multiplexer 20 ms after the DLC's UA and the L2CAP channel 20 ms after that, and ends
-the link 4.02 s later, at its `L2CAP_LINK_INACTIVITY_TOUT`
+end the ACL link. The device's host does each of these, or the test ends the link with
+`peer.disconnect()` ([above](#a-peers-own-call-that-ends-its-link-ends-every-acl-link-with-0x13)).
+Measured on `examples/obd_reader` with ESP-IDF v5.3.6, Bluedroid then closes the multiplexer 20 ms
+after the DLC's UA and the L2CAP channel 20 ms after that, and ends the link 4.02 s later, at its
+`L2CAP_LINK_INACTIVITY_TOUT`
 ([user doc](../features/bluetooth-peer-user.md#when-the-channel-closes)). Devices differ in what
 they do after a close, and no specification or vendor document says what a typical SPP adapter
 does, so the peer does the least a device can, and a test that needs another device states it.

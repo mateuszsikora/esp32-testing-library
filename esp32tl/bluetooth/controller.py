@@ -1624,6 +1624,11 @@ class Controller(LinkLayer):
     def _let_go_of(self, other: LinkLayer) -> None:
         self._let_go(other.public_address)
 
+    def lost_contact(self, peer: hci.Address) -> bool:
+        """Whether this side's link to `peer` lost contact, and waits for its supervision
+        timeout: no packet of this side's reaches `peer` any more."""
+        return peer in self._lost_contact
+
     def authenticated(self, peer: hci.Address) -> bool:
         """Whether the link to `peer` is authenticated, on this side: by legacy pairing, by a
         key, or by Bumble's Secure Simple Pairing. A responder's host is not told, as the

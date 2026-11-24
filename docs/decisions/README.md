@@ -233,7 +233,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A page its host does not answer in time ends at the connection accept timeout](harness.md#a-page-its-host-does-not-answer-in-time-ends-at-the-connection-accept-timeout) | `harness.md` | decided (#166) |
 | [Two pages at one instant make one link, the page accepted first](harness.md#two-pages-at-one-instant-make-one-link-the-page-accepted-first) | `harness.md` | decided (#141) |
 | [A role switch asked of a pager whose page ended is refused](harness.md#a-role-switch-asked-of-a-pager-whose-page-ended-is-refused) | `harness.md` | decided (#141) |
-| [A peer's own call that ends its link is postponed](harness.md#a-peers-own-call-that-ends-its-link-is-postponed) | `harness.md` | postponed (#75) |
+| [A peer's own call that ends its link ends every ACL link with 0x13](harness.md#a-peers-own-call-that-ends-its-link-ends-every-acl-link-with-0x13) | `harness.md` | decided (#327) |
 | [A replayed peer is postponed](harness.md#a-replayed-peer-is-postponed) | `harness.md` | postponed (#33, #34) |
 | [The HCI tap is a btsnoop file on the board's time, with its header beside it](harness.md#the-hci-tap-is-a-btsnoop-file-on-the-boards-time-with-its-header-beside-it) | `harness.md` | decided (#34) |
 | [The firmware's controller is a controller of the air, with the guest's features and buffer](harness.md#the-firmwares-controller-is-a-controller-of-the-air-with-the-guests-features-and-buffer) | `harness.md` | decided (#34) |
