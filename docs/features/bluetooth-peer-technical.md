@@ -109,13 +109,39 @@ interface that puts the firmware's controller on the board's link is
    Bumble's own `on_disc_frame` first, so the UA goes out at the DISC's instant, and adds nothing
    else: the multiplexer (DLCI 0), its L2CAP channel and the ACL link stay, and Bumble's
    multiplexer answers the device's DISC on DLCI 0, its L2CAP the Disconnection Request, and its
-   host the link's end, each when the device's host sends it. Nothing in `SppPeer` sends a DISC,
-   closes the multiplexer or calls `Connection.disconnect`. A link of the peer's ends otherwise
-   only when it leaves (`switch_off` at once, `out_of_range` at the supervision timeout) or when
-   an authentication fails (`Controller._authentication_failed`'s `LMP_detach`), and a test ends
-   one through `peer.device.connections`
+   host the link's end, each when the device's host sends it. Nothing in `SppPeer` sends a DISC
+   or closes the multiplexer, and nothing calls `Connection.disconnect` but `disconnect()`, which
+   the test calls. A link of the peer's ends otherwise only when it leaves (`switch_off` at once,
+   `out_of_range` at the supervision timeout) or when an authentication fails
+   (`Controller._authentication_failed`'s `LMP_detach`)
    ([user doc](bluetooth-peer-user.md#when-the-channel-closes),
    [decision](../decisions/harness.md#the-spp-peer-ends-nothing-itself-after-the-device-closes-the-channel)).
+   `BluetoothDevice.disconnect()`, under the air's lock, takes the Bumble connections in
+   `device.connections` at the call; with none it raises `PeerError` (`not connected`), and so it
+   does while the device is not `present` (`out of range`) and while
+   `Controller.lost_contact(peer)` holds for one of them (`lost contact with …`). That holds after
+   the device left the air and came back, and also after the other side's controller left it, as
+   `Controller._restart` does through `left()` at `GuestController.chip_reset`, `chip_off` and the
+   firmware's `HCI_Reset`: the pair is in `Link._severed` until the link falls, so no `LMP_detach`
+   would reach the other side, and modelling a local detach of an unreachable link is left out.
+   Otherwise it starts one task on the air with `Air.start`. The task awaits
+   `Connection.disconnect()` of each connection, with Bumble's default reason `0x13`, through
+   `asyncio.gather(..., return_exceptions=True)`, so the other links are ended even when one fails,
+   and raises the first failure, in the order of `device.connections`, once all are done. Bumble's
+   `Device.disconnect` sends `HCI_Disconnect` and returns at the host's `Disconnection_Complete`.
+   Bumble's `Controller.on_hci_disconnect_command` sends `LMP_detach` with the reason to the other
+   side, whose host gets `Disconnection_Complete` with it, and tells its own host at once. L2CAP
+   and RFCOMM close on both sides with the link, which closes the DLC: `channel_open` turns false,
+   and `_closed` is counted, so `_Lines` cuts the partial line. The task's outcome goes into a dict
+   that the returned `Condition` reads: `True` once every link ended; what Bumble raised, as
+   `PeerError(f"{description}: {type}: {message}")` from it; and a `CancelledError` raised under
+   the task, as Bumble's `Device.disconnect` raises at the host's `EVENT_FLUSH` through
+   `cancel_on_event`, as `Bumble cancelled it before the link ended`. A cancellation of the task
+   itself, as when the air closes, stays a cancellation. The condition's description is `{name}'s
+   disconnection ({address})`, its service the class's `_service`: `"Bluetooth"` for a
+   `BluetoothDevice`, `"SPP"` for an `SppPeer`. It never reads `device.connections` when polled, so
+   a link the device makes again before the poll does not hide the end
+   ([decision](../decisions/harness.md#a-peers-own-call-that-ends-its-link-ends-every-acl-link-with-0x13)).
    `_received(data)` appends `ChannelEvent(Duration(now), "out", data)` to `events`, gives
    `_driving.receive(now, data)` to `_queue`, and flushes. `poll(now)`, the party's, does the same
    with `_driving.poll(now)`. Both run inside the loop and hand a `PeerError` to `Air.fail`.
@@ -583,7 +609,7 @@ interface that puts the firmware's controller on the board's link is
 | `BoardLoop()` | `now`, an `int` of nanoseconds; `time()`; `run_idle()`, the next timer's time or `None` |
 | `AirError` | A `RuntimeError`: what failed on the air, as its `__cause__` |
 | `Link()` | `esp32tl/bluetooth/air.py`: Bumble's `LocalLink`; `present(address)`, `reaches(sender, receiver)`, `leave(address, peers)`, `back(address)`, `let_go(one, other)` |
-| `Controller(name, link, address)` | `esp32tl/bluetooth/controller.py`: Bumble's `Controller` with the additions above; `link`, a `Link`; `acl_to_host`, a class attribute, `None`; `class_of_device`, `extended_inquiry_response` (240 bytes), `inquiry_mode`, `rssi`, `page_timeout`, `connection_accept_timeout`, in slots; `iac_laps`; `default_link_policy`, `link_policies`; `inquiry_scan_activity`, `page_scan_activity`, `(interval, window)`; `inquiry_scan_type`, `page_scan_type`; `host_acl_length`; `unknown_commands`; `authenticated(peer)`; `random_bytes(n)`; `left()`, `returned()`, `power_lost()` |
+| `Controller(name, link, address)` | `esp32tl/bluetooth/controller.py`: Bumble's `Controller` with the additions above; `link`, a `Link`; `acl_to_host`, a class attribute, `None`; `class_of_device`, `extended_inquiry_response` (240 bytes), `inquiry_mode`, `rssi`, `page_timeout`, `connection_accept_timeout`, in slots; `iac_laps`; `default_link_policy`, `link_policies`; `inquiry_scan_activity`, `page_scan_activity`, `(interval, window)`; `inquiry_scan_type`, `page_scan_type`; `host_acl_length`; `unknown_commands`; `authenticated(peer)`; `lost_contact(peer)`; `random_bytes(n)`; `left()`, `returned()`, `power_lost()` |
 | `Pairing(t, peer, initiator, method, number, status, authenticated=False)` | `esp32tl/bluetooth/controller.py`: frozen dataclass, a pairing that ended, `t: Duration` on the air's clock; `succeeded` |
 | `UnderWay(initiator, method, number=None, authenticated=False)` | A pairing under way; `Controller.under_way`, by peer, and `Controller.pairings` |
 | `LEGACY`, `JUST_WORKS`, `NUMERIC_COMPARISON`, `PASSKEY_ENTRY`, `SIMPLE_PAIRING` | The methods' names: `"legacy"`, `"just_works"`, `"numeric_comparison"`, `"passkey_entry"`, `"simple_pairing"` |
@@ -603,7 +629,7 @@ interface that puts the firmware's controller on the board's link is
 | `SLOT_S`, `PAGE_TIMEOUT_SLOTS`, `ACCEPT_TIMEOUT_SLOTS`, `LINK_SUPERVISION_TIMEOUT_SLOTS` | `0.000625`; `0x2000`, 5.12 s; `0x1F40`, 5 s; `0x7D00`, 20 s: Bluetooth Core 5.4, Vol 4, Part E, 7.3.16, 7.3.14 and 7.3.42 |
 | `ACCEPT_TIMEOUTS` | `range(0x0001, 0xB541)`: the connection accept timeouts a host may write, up to 29 s |
 | `HeardPage(connection, switching=False)`, `Answer(late=False, timer=None)` | `esp32tl/bluetooth/controller.py`: dataclasses, a page this side heard, in `_heard`, and an answer its host owes, in `_owed` |
-| `BluetoothDevice(air, *, name, pin=None, class_of_device=CLASS_OF_DEVICE, rssi=RSSI, address=ADDRESS, io_capability=None, confirms=True, passkey=None)` | `esp32tl/bluetooth/peer.py`: `device`, the Bumble `Device`; `address`; `name`, `pin`, `class_of_device`, `io_capability`, `confirms`, `passkey`; `rssi`, read and written; `present`; `pairing`, the controller's latest `UnderWay` or `None`; `pairings`, a live read-only view of the controller's pairing history; `switch_off()`, `switch_on()`, `out_of_range()`, `in_range()`, `forget_keys()` |
+| `BluetoothDevice(air, *, name, pin=None, class_of_device=CLASS_OF_DEVICE, rssi=RSSI, address=ADDRESS, io_capability=None, confirms=True, passkey=None)` | `esp32tl/bluetooth/peer.py`: `device`, the Bumble `Device`; `address`; `name`, `pin`, `class_of_device`, `io_capability`, `confirms`, `passkey`; `rssi`, read and written; `present`; `pairing`, the controller's latest `UnderWay` or `None`; `pairings`, a live read-only view of the controller's pairing history; `switch_off()`, `switch_on()`, `out_of_range()`, `in_range()`, `forget_keys()`; `disconnect()`, a `Condition[bool]` of service `_service`, `"Bluetooth"` (`"SPP"` for an `SppPeer`) |
 | `IO_CAPABILITIES` | `esp32tl/bluetooth/peer.py`: the four names a test gives, to Bumble's `PairingDelegate.IoCapability`: `DISPLAY_OUTPUT_ONLY`, `DISPLAY_OUTPUT_AND_YES_NO_INPUT`, `KEYBOARD_INPUT_ONLY`, `NO_OUTPUT_NO_INPUT` |
 | `SppPeer(air, *, name, pin, source, address=ADDRESS, channel=CHANNEL, secure=True, class_of_device=CLASS_OF_DEVICE, rssi=RSSI, service_name=SERVICE_NAME, io_capability=None, confirms=True, passkey=None)` | A `BluetoothDevice`, also: `source`, `channel`, `secure`, `service_name`; `events`, `ChannelEvent(at, direction, data)` named tuples; `refused`, `Refusal(at, why)` named tuples; `lost`; `channel_open`; `is_open`, `is_closed`, `next_write(data=None)`; `written_lines(separator=SEPARATOR)`, `WrittenLine(at, data, opening, complete)` named tuples; `next_written_line(data=None, separator=SEPARATOR)`; the party's `poll(now)` and `quiet_until()` |
 | `SERVICE_NAME`, `LANGUAGE`, `L2CAP_FEATURES` | `esp32tl/bluetooth/peer.py`: `"Serial Port"`; `(0x656E, 106, 0x0100)`; `(FIXED_CHANNELS, FCS_OPTION)` |

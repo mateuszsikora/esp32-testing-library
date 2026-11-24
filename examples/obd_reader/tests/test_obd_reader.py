@@ -36,12 +36,6 @@ def adapter_on_the_air(board: Board, adapter: Elm327, *, pin: str = PIN) -> SppP
     return SppPeer(board.bluetooth.air, name=NAME, pin=pin, source=adapter, address=ADDRESS)
 
 
-async def hang_up(peer: SppPeer) -> None:
-    """The adapter ends its links itself, as one that drops its connection does."""
-    for connection in list(peer.device.connections.values()):
-        await connection.disconnect()
-
-
 def next_reading(board: Board) -> dict[str, str]:
     line = board.wait_until(board.console.line(READING), within=READ_PERIOD + seconds(1))
     return dict(value.split("=") for value in line["values"].split())
@@ -215,7 +209,9 @@ def test_an_adapter_that_hangs_up_between_two_rounds_gets_a_new_session(board: B
     disconnected = board.console.line("obd_reader: disconnected")
     connected = board.console.line("obd_reader: connected")
     asked = len(adapter.requests)
-    board.bluetooth.air.start(hang_up(peer))
+    # The adapter ends its link itself, as one that drops its connection does, and stays on the
+    # air.
+    board.wait_until(peer.disconnect(), within=ms(100))
     board.wait_until(disconnected, within=seconds(1))
     # Found and connected again, with its key, before the reader's pause after `last` is over.
     again = board.wait_until(connected, within=seconds(1))

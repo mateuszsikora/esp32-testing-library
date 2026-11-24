@@ -4191,3 +4191,176 @@ def test_a_next_written_line_poll_reads_only_the_lines_since_the_last_one(air: A
     air.call(lambda: dlc.write(b"RM\r"))
     assert alarm() == WrittenLine(seconds(0), b"ALARM", 0, True)
     assert alarm() is alarm() and lines.reads == N + 3
+
+
+# The peer hangs up: `disconnect()` ends its links while it stays on the air.
+
+REMOTE_USER_TERMINATED = hci.HCI_ErrorCode.REMOTE_USER_TERMINATED_CONNECTION_ERROR
+
+
+def test_disconnect_ends_the_link_and_the_peer_stays_on_the_air_with_its_key(air: Air) -> None:
+    echo = Echo()
+    peer = SppPeer(air, name="peer", pin="1234", source=echo)
+    esp32 = Initiator(air)
+    dlc = air.run(esp32.session(), within=seconds(10))
+    assert dlc.multiplexer.l2cap_channel.connection.authenticated and peer.channel_open
+    air.call(lambda: dlc.write(b"AT\rAT+PART"))
+    start = air._loop.now
+
+    ended = peer.disconnect()
+    assert air.run(_until(ended), within=seconds(1)) is True
+    # Ended at the instant of the call, and the device's host was told the remote user did it.
+    assert esp32.fell == [(start, REMOTE_USER_TERMINATED)]
+    assert not peer.channel_open
+    assert peer.present
+    assert not peer.device.connections and not esp32.device.connections
+    # The line the end cut off is a line too, not complete.
+    assert peer.written_lines()[-1] == WrittenLine(Duration(start), b"AT+PART", 0, False)
+
+    # Connectable: paged again at once, it authenticates with the key it kept.
+    dlc = air.run(esp32.open(air.run(esp32.connect(PEER), within=seconds(1))), within=seconds(1))
+    air.call(lambda: dlc.write(b"PING\r"))
+    assert esp32.delegate.asked == 1
+    assert peer.channel_open and echo.heard[-1] == (air._loop.now, b"PING\r")
+
+
+def test_a_plain_device_disconnects_too_and_names_its_condition_bluetooth(air: Air) -> None:
+    phone = BluetoothDevice(air, name="phone", pin="1234")
+    esp32 = Initiator(air)
+    air.run(esp32.connect(PEER), within=seconds(1))
+    ended = phone.disconnect()
+    assert repr(ended) == "phone's disconnection (00:00:00:00:5B:01)"
+    with pytest.raises(TypeError, match="the Bluetooth condition"):
+        bool(ended)
+    assert ended() is True
+    assert esp32.fell == [(air._loop.now, REMOTE_USER_TERMINATED)]
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo(), address="00:00:00:00:5B:02")
+    air.run(esp32.connect(peer.device.public_address), within=seconds(10))
+    with pytest.raises(TypeError, match="the SPP condition"):
+        bool(peer.disconnect())
+
+
+def test_the_disconnect_condition_holds_after_the_device_connected_again(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    air.run(esp32.session(), within=seconds(10))
+    ended = peer.disconnect()
+    # The device pages the peer back before the test asks the condition.
+    air.run(esp32.connect(PEER), within=seconds(1))
+    assert len(peer.device.connections) == 1
+    assert ended() is True
+
+
+def test_disconnect_without_a_link_says_the_device_makes_it(air: Air) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    with pytest.raises(
+        PeerError, match=r"^peer: not connected: disconnect needs a link, which the device makes$"
+    ):
+        peer.disconnect()
+    # Switched off, the peer's end of every link is gone at once: none left to end.
+    esp32 = Initiator(air)
+    air.run(link_to(esp32), within=seconds(1))
+    peer.switch_off()
+    with pytest.raises(PeerError, match="not connected"):
+        peer.disconnect()
+
+
+def test_disconnect_out_of_range_says_the_links_end_at_their_supervision_timeout(
+    air: Air,
+) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    air.run(esp32.session(), within=seconds(10))
+    peer.out_of_range()
+    with pytest.raises(
+        PeerError,
+        match=re.escape(
+            "peer: out of range: its links end at their supervision timeout, not with"
+            " disconnect(); wait for it, and call in_range() for a new link"
+        ),
+    ):
+        peer.disconnect()
+    # Back in range, the link that lost contact still ends only at its timeout.
+    peer.in_range()
+    with pytest.raises(
+        PeerError,
+        match=re.escape(
+            f"peer: lost contact with {DEVICE}: the link ends at its supervision timeout, not"
+            " with disconnect(); wait for it"
+        ),
+    ):
+        peer.disconnect()
+    assert peer.device.connections and esp32.fell == []
+    air.advance(seconds(20))
+    assert esp32.fell == [(20_000 * MS, hci.HCI_ErrorCode.CONNECTION_TIMEOUT_ERROR)]
+    with pytest.raises(PeerError, match="not connected"):
+        peer.disconnect()
+
+
+def test_disconnect_refuses_a_link_whose_other_side_left_the_air(air: Air) -> None:
+    # The device's chip starts again, as at a board's reset, and its host is told nothing: the
+    # peer, on the air all along, holds a link that lost contact.
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    esp32 = Initiator(air)
+    air.run(esp32.session(), within=seconds(10))
+    air.call(esp32.controller._restart)
+    assert peer.present
+    with pytest.raises(
+        PeerError,
+        match=re.escape(
+            f"peer: lost contact with {DEVICE}: the link ends at its supervision timeout, not"
+            " with disconnect(); wait for it"
+        ),
+    ):
+        peer.disconnect()
+    air.advance(seconds(20))
+    assert not peer.device.connections and not peer.channel_open
+
+
+def test_what_bumble_raises_in_a_disconnect_is_raised_once_every_link_was_ended(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    peer = BluetoothDevice(air, name="peer", pin="1234")
+    first = Initiator(air)
+    second = Initiator(air, address="24:0A:C4:00:00:02", name="second")
+    air.run(link_to(first), within=seconds(1))
+    air.run(link_to(second), within=seconds(1))
+    refusing, _ = peer.device.connections.values()
+    assert str(refusing.peer_address) == DEVICE + "/P"
+
+    async def refused(reason: int = 0) -> None:
+        raise hci.HCI_Error(hci.HCI_ErrorCode.COMMAND_DISALLOWED_ERROR)  # type: ignore[no-untyped-call]
+
+    monkeypatch.setattr(refusing, "disconnect", refused)
+    ended = peer.disconnect()
+    with pytest.raises(PeerError, match=r"^peer's disconnection \(00:00:00:00:5B:01\): HCI_Error"):
+        ended()
+    # The other link ended all the same.
+    assert second.fell == [(air._loop.now, REMOTE_USER_TERMINATED)] and first.fell == []
+    assert list(peer.device.connections.values()) == [refusing]
+
+
+def test_a_disconnect_bumble_cancels_under_the_call_is_raised_from_the_condition(
+    air: Air, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    peer = SppPeer(air, name="peer", pin="1234", source=Echo())
+    air.run(link_to(Initiator(air)), within=seconds(1))
+    [connection] = peer.device.connections.values()
+
+    async def cancelled(reason: int = 0) -> None:
+        # As Bumble's `Device.disconnect` does at the host's `EVENT_FLUSH`.
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(connection, "disconnect", cancelled)
+    ended = peer.disconnect()
+    with pytest.raises(
+        PeerError,
+        match=re.escape("peer's disconnection (00:00:00:00:5B:01): Bumble cancelled it before"),
+    ):
+        ended()
+
+
+async def _until(condition: Callable[[], Any]) -> Any:
+    while not (found := condition()):
+        await asyncio.sleep(0.001)
+    return found

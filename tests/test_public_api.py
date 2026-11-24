@@ -222,6 +222,7 @@ ACTIONS = {
     (esp32tl.BleCentral, "write"),
     (esp32tl.BlePeripheral, "indicate"),
     (esp32tl.BlePeripheral, "notify"),
+    (esp32tl.BluetoothDevice, "disconnect"),
     # It connects at the call, and again after each refusal.
     (esp32tl.Internet, "accepting"),
 }

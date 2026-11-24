@@ -908,6 +908,25 @@ that references to its number keep their meaning.
     the channel is closed; it ends nothing else by itself: 60 s later the device's multiplexer and
     its L2CAP channel are still open, and the link is up on both sides.
     `tests/test_spp_peer.py::test_after_the_device_closes_the_channel_the_peer_ends_nothing_itself`
+- **297.** `disconnect()` of a Classic device ends every link it has at the air's instant, with
+    reason `0x13` (`REMOTE_USER_TERMINATED_CONNECTION_ERROR`) at the other side's host: the SPP
+    channel is closed, a line it cut off is not complete, the device stays `present` with no link
+    left, and is paged and authenticated again with the key it kept. Its condition holds once those
+    links ended, even after the other side connected again before it was asked; its service is
+    `Bluetooth` for a plain device and `SPP` for an `SppPeer`. Without a link, out of range, or
+    with a link that lost contact (the peer came back in range, or the other side's chip
+    restarted), it raises `PeerError` at once. When ending one link fails, the others are ended
+    all the same, and the condition raises what Bumble raised, or a cancellation Bumble raised
+    under it, as a `PeerError`.
+    `tests/test_spp_peer.py::test_disconnect_ends_the_link_and_the_peer_stays_on_the_air_with_its_key`,
+    `tests/test_spp_peer.py::test_a_plain_device_disconnects_too_and_names_its_condition_bluetooth`,
+    `tests/test_spp_peer.py::test_the_disconnect_condition_holds_after_the_device_connected_again`,
+    `tests/test_spp_peer.py::test_disconnect_without_a_link_says_the_device_makes_it`,
+    `tests/test_spp_peer.py::test_disconnect_out_of_range_says_the_links_end_at_their_supervision_timeout`,
+    `tests/test_spp_peer.py::test_disconnect_refuses_a_link_whose_other_side_left_the_air`,
+    `tests/test_spp_peer.py::test_what_bumble_raises_in_a_disconnect_is_raised_once_every_link_was_ended`,
+    `tests/test_spp_peer.py::test_a_disconnect_bumble_cancels_under_the_call_is_raised_from_the_condition`,
+    `examples/obd_reader/tests/test_obd_reader.py::test_an_adapter_that_hangs_up_between_two_rounds_gets_a_new_session`
 
 ## The esp32tl command
 

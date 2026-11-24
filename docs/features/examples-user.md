@@ -480,8 +480,8 @@ The tests demonstrate:
   with `ATZ`.
 - An adapter that ends its link between two rounds gets a new session: the reader finds it and
   connects again before its 1 s pause is over, and starts the new session from `ATZ`, with the key
-  of the first pairing. The test ends the link through the peer's Bumble device,
-  `peer.device.connections`, in a coroutine started with `board.bluetooth.air.start(...)`.
+  of the first pairing. The test ends the link with `peer.disconnect()`, as the adapter does when
+  it hangs up and stays on the air.
 - A device that is no ELM327 (`Elm327(version="OK")`) and a vehicle with none of the three readings
   end the session: the reader disconnects, searches again 5 s later, to within a tick, and the
   next session ends the same way.
