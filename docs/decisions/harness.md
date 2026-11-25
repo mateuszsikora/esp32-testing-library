@@ -5561,3 +5561,46 @@ bytes as they arrived.
 **Rejected:** recording packets the broker writes in this history. The history tells the test when
 the client last spoke. An outgoing PUBLISH has its own `Delivery` record. A broker reply,
 including a delayed or manually released PUBACK, says nothing about new client activity.
+
+## The GNSS receiver answers every CASIC frame and acts on none
+
+Status: decided (#333)
+
+The receiver model answers each CASIC frame the firmware writes to it with ACK-ACK, or ACK-NAK for
+a bad checksum and for a class and id the test refused, and keeps each in `gnss.casic_frames`, so
+that a test can check what a firmware does with an acknowledgement, a refusal or their count. The
+answers are those an L76K gave `tools/casic_probe` on a LilyGO T-A7670G
+([stage 0 findings](../stage0-findings.md#casic-answers-of-an-l76k)): ACK-ACK to AID-INI, to a zero
+MSG-GPSEPH and to a CFG-PRT query, though ZKW's specification asks an answer for CFG frames only,
+and ACK-NAK to a bad checksum, which neither specification says. A silenced receiver sends
+nothing, answers included, as `go_silent` says.
+
+**Rejected:** acting on the frames, a CFG-RATE changing the epochs or a CFG-MSG the sentences.
+Each frame the model understood would be a part of the L76K's configuration to keep true, and a
+test whose firmware needs the change to take effect writes a model of its own.
+
+**Rejected:** answering the `$PCAS` NMEA commands here. The specifications give no answer to those
+that set something, so a receiver that answers none of them is true to them; the `$PCAS06` query,
+answered with a `$GPTXT` sentence, is NMEA, apart from CASIC frames, and is a change of its own.
+
+**Rejected:** no answer to a bad checksum, which the model gave until the L76K was measured: the
+L76K answered each of 8 such frames with ACK-NAK, 2.6 ms after it.
+
+**Rejected:** answering a query with the data it asks for, as the L76K answers the CFG-PRT query
+with two CFG-PRT frames before its ACK-ACK. That is acting on the frame, as above.
+
+**Rejected:** ACK-NAK for a class and id the specification does not define, as the L76K answered
+CFG `0x06 0x7F`. It needs the list of what the L76K takes, which no source gives whole and one
+probe cannot find; a test whose firmware sends one refuses it with `gnss.refuse(cls, id)`.
+
+The answer comes `answer_after` after the frame's last byte reached the receiver, at the route's
+baud, and the model keeps it until then, sending it from `poll`.
+
+**Rejected:** answering `answer_after` after the instant of the piece that completes the frame.
+That instant is when the firmware wrote the piece's first byte into its FIFO: at 9600 baud a
+66-byte AID-INI frame is still on the line for 68.75 ms, and an answer 1.5 ms after the write
+would come while the firmware is still sending, before a real receiver could answer.
+
+**Rejected:** handing the answer to the runner as soon as the frame is found. The runner does not
+drop what is queued on an RX line at a power cut, so an answer meant for one boot could reach the
+next one, and one queued before `go_silent` would still go out.

@@ -209,15 +209,16 @@ are in [models-technical.md](models-technical.md).
    [run-report-technical.md](run-report-technical.md#data-flow); before either makes anything it
    calls the backend's `asked(Request(...))`, which refuses a source or a tap after power-on or one
    no backend gives, and skips the test when this backend does not give it. Each model call
-   (`fix`, `move`, `stand_still`, `degrade`, `lose_fix`, `go_silent`, `resume`) goes through
+   (`fix`, `move`, `stand_still`, `degrade`, `lose_fix`, `go_silent`, `resume`, `refuse`,
+   `answer_after`) goes through
    `Gnss._tell(call, step)`: `call` on the route's source when it is a `GnssReceiver` already; a
    `SourceError` when it is a replay, a real device or a model of the test's; otherwise `_ask("model")` first, the same `asked` check
-   with `Request("uart.gnss", source="model")`, then `call` on a new `GnssReceiver(now, world)`,
+   with `Request("uart.gnss", source="model")`, then `call` on a new `GnssReceiver(now, world, baud=wire.baud)`,
    which becomes the source of kind `model`, its `source_detail` `a GNSS receiver`, only once
    `call` has returned, so a refused first call leaves the route without a source. Each call that
    succeeds goes into the `RunLog` as a step of the test at the board's time, as
-   `uart.gnss.move(heading=NORTH, speed=m_s(10))`. `position` and `receiver()` read the receiver
-   and make none: without one they raise `SourceError`. `now` and `world` are the backend's, the
+   `uart.gnss.move(heading=NORTH, speed=m_s(10))`. `position`, `casic_frames` and `receiver()` read
+   the receiver and make none: without one they raise `SourceError`. `now` and `world` are the backend's, the
    held clock's time and the world's time at power-on
    ([models-technical.md](models-technical.md#data-flow)).
 11. **`lines` fixture** returns `board.lines`, the one `Lines` the link carries for every

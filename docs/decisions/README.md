@@ -375,6 +375,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The modem's power changes are a history beside its restarts](harness.md#the-modems-power-changes-are-a-history-beside-its-restarts) | `harness.md` | decided (#311) |
 | [Public history properties return live read-only sequences](harness.md#public-history-properties-return-live-read-only-sequences) | `harness.md` | decided (#321) |
 | [The broker records complete control packets received from its clients](harness.md#the-broker-records-complete-control-packets-received-from-its-clients) | `harness.md` | decided (#322) |
+| [The GNSS receiver answers every CASIC frame and acts on none](harness.md#the-gnss-receiver-answers-every-casic-frame-and-acts-on-none) | `harness.md` | decided (#333) |
 
 ## The runner crate and esp32sim
 
