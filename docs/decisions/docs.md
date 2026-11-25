@@ -262,6 +262,24 @@ through either path.
 **Rejected:** a separate copy for Codex, because the two workflows would drift. A user-level
 installation would also need setup on every machine instead of travelling with the checkout.
 
+## The triage-feedback skill opens the issues without a plan review
+
+Status: decided (25 November 2026)
+
+`/triage-feedback <report>` verifies a consumer's report, decides what is worth doing here, and
+opens an issue for each such point that nothing covers yet. Invoking the skill is the
+maintainer's consent to open those issues, so it does not stop to have its plan approved. What it
+dropped, and why, it reports afterwards. It gives no consent to anything else: commenting,
+editing other issues, pushing, opening pull requests and anything upstream still need their own
+yes. Dropped points get no decision entry and no reply to the consumer, and the consumer's
+project is never named in an issue, as esp32tl is judged by what it gives anyone testing
+firmware.
+
+**Rejected:** stopping after the analysis for the plan to be approved, because the maintainer
+asked for a skill that goes from the report to the issues, and the issues can still be edited or
+closed; and one issue per report, because each point is implemented, reviewed and closed on its
+own.
+
 ## Invariant numbers are bold text, not ordered-list markers
 
 Status: decided (#113)

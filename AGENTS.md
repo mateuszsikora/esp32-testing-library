@@ -77,5 +77,6 @@ only that a document changed: also check that what it now says is true of the co
 such skill added later: opening a pull request runs `make docs-check` before pushing and fills the
 Documentation section of the pull request template; a review treats missing documentation as a
 Major finding and checks that the documentation is true; merging runs `make docs-check` after the
-base branch is merged in, never only before. When a skill and this file or a document in `docs/`
+base branch is merged in, never only before. A skill that opens issues ends each one with the
+documentation its implementation must update. When a skill and this file or a document in `docs/`
 disagree, the skill is wrong.

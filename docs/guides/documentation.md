@@ -227,6 +227,12 @@ for any of those jobs does the same:
 - **merging or shipping:** run `make docs-check` after merging the base branch in, never only
   before: the merge changes what the branch changed.
 
+A skill that opens issues carries the contract forward: the
+[`triage-feedback` skill](development.md#agent-skills) ends every issue's plan with the documents
+the table in `AGENTS.md` names for the files it will change, the decisions and invariants it
+records, and the line "Implementation must include the relevant documentation in the same
+change and pass `make docs-check` (see `AGENTS.md`)."
+
 ## Known limits
 
 - The check proves coverage, not correctness. Review owns the question "is the documentation now
