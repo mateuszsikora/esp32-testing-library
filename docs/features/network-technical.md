@@ -965,7 +965,11 @@ included, which would otherwise end the link's thread with the turn unanswered, 
 handler, the client, the topic and `message.at` (`add_note`), and appended to `Broker._failures`;
 the remaining handlers still run. At the end of the outermost `_dispatch`, `Broker._failures` goes
 to `test_error`, one call each. `Broker.disconnect` sets `_test_side` while it closes a session
-outside any event, so the Will's failures stay for it to raise itself.
+outside any event, so the Will's failures stay for it to raise itself. The test's immediate `publish` outside any event
+routes as an event of its own, through `_dispatch`, so that what a client's write callback feeds
+back synchronously while the message is offered, and what its handlers raise, waits until every
+`_State` has been offered it; from inside a handler it routes at once, so that a `disconnect` the
+handler makes next comes after it.
 
 `test_error` is `handlers.reraise` by default, which raises from the call that ran the event, once
 the event and those queued behind it are done, so the connection stays and later packets of the
@@ -1087,7 +1091,9 @@ and the connection up, `pytest.fail` and `pytest.skip` reaching the test with th
 `test_error`, `refuse_wait` inside a handler and a policy, every guarded call of `Esp32Sim` and the
 console's expects refusing on a board never set up, and, on a real `HeldClock` with
 `test_clock.Run`, an exception and a `pytest.fail` raised in the link's thread failing `wait` and
-`wait_until` at the next turn, after which a wait goes on.
+`wait_until` at the next turn, after which a wait goes on, a `RunEnded` a handler raises failing a
+`wait_until` whose condition holds, and a handler's error fed back through a client's write while
+the test publishes coming out only once the other subscription has the message.
 `tests/test_mqtt_handlers.py` runs `firmware/mqtt_session`: a handler answering each report during a
 plain `board.wait` over a 200 ms path, each `Delivery.at` equal to its report's `at` or 50 ms
 after it, a handler whose `board.wait` fails the test's wait with the message naming it, and one

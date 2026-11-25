@@ -10,6 +10,7 @@ from test_net_mqtt import CONNECT, DUPLICATE, PUBACK, PUBLISH, SUBSCRIBE
 from esp32tl import Registration
 from esp32tl.backends.clock import HeldClock
 from esp32tl.backends.esp32sim import Esp32Sim
+from esp32tl.interfaces import RunEnded
 from esp32tl.interfaces.console import Console
 from esp32tl.net.handlers import handling, refuse_board, refuse_wait
 from esp32tl.net.mqtt import TEST_CLIENT, Broker, ConnackCode, Message, _Session
@@ -396,3 +397,59 @@ def test_every_call_on_the_board_from_a_handler_is_refused_before_it_touches_the
         f"{call}: called from the broker's on_publish handler for 'a/b': a handler {rule}"
     )
     refuse_board(call)  # outside a handler, nothing to refuse
+
+
+def test_a_handler_failure_fed_back_while_the_test_publishes_waits_for_every_subscription() -> None:
+    broker = Broker(lambda: 0)
+    fed: list[bool] = []
+    first: list[_Session] = []
+
+    def feeds_back(data: bytes) -> None:
+        # The first client answers the test's publication from inside the write, at once.
+        if data[0] >> 4 == 3 and not fed:
+            fed.append(True)
+            first[0].on_data(b"\x30\x06\0\x03d/xy")
+
+    first.append(broker.accept(("10.0.0.2", 100), feeds_back, lambda: None))
+    first[0].on_data(CONNECT[:-1] + b"a" + SUBSCRIBE)
+    _, sent, _ = connected(broker, CONNECT[:-1] + b"b" + SUBSCRIBE)
+
+    def fails(message: Message) -> None:
+        raise ValueError("no answer")
+
+    broker.on_publish("d/x", fails)
+    with pytest.raises(ValueError, match="no answer"):
+        broker.publish("a/b", "hi")
+    # Both subscriptions had the test's message before the handler's error came out.
+    assert fed == [True] and sent[-1] == b"\x30\x07\0\x03a/bhi"
+    assert [m.topic for m in broker.messages] == ["a/b", "d/x"]
+
+
+def test_a_run_ended_a_handler_raises_is_not_taken_for_the_end_of_the_run() -> None:
+    clock = HeldClock()
+    broker = Broker(lambda: clock.now, test_error=clock.fail)
+    session = broker.accept(("10.64.0.2", 4000), lambda data: None, lambda: None)
+
+    def fails(message: Message) -> None:
+        raise RunEnded("made up by the handler")
+
+    broker.on_publish("a/b", fails)
+
+    class MqttRun(Run):
+        def _print(self, until: int) -> None:
+            if not broker.clients:
+                session.on_data(CONNECT + b"\x30\x09\0\x03a/bdata")
+
+    run = MqttRun(clock=clock)
+    try:
+        # The condition holds at the turn: a RunEnded taken for the run's end would return it.
+        with pytest.raises(RuntimeError) as raised:
+            run.clock.wait_until(lambda: broker.clients or None, S, "a client")
+        assert str(raised.value) == (
+            "a handler of the test's raised RunEnded: made up by the handler"
+        )
+        assert isinstance(raised.value.__cause__, RunEnded)
+        run.clock.wait(S)
+    finally:
+        run.clock.stop()
+        run.runner.join(5)

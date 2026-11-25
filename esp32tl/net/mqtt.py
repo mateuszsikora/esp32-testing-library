@@ -772,7 +772,14 @@ class Broker:
         data = payload.encode() if isinstance(payload, str) else payload
         now = self._now()
         if after is None or not after.ns:
-            self._route(Message(Duration(now), TEST_CLIENT, topic, data, qos, retain), own=True)
+            message = Message(Duration(now), TEST_CLIENT, topic, data, qos, retain)
+            if self._events:
+                # From a handler: at once, so that what it does next, a disconnect, comes after.
+                self._route(message, own=True)
+            else:
+                # An event of its own: what a client's write callback feeds back while it is
+                # offered waits for every subscription to have it, and so does what that raises.
+                self._dispatch(lambda: self._route(message, own=True))
             return
         self._scheduled_count += 1
         due = now + after.ns

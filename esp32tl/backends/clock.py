@@ -128,7 +128,12 @@ class HeldClock:
     def fail(self, error: BaseException) -> None:
         """`error`, raised by the test's code that the link's thread ran, as a broker's handler,
         goes to the test's wait, which raises it at the next turn; only the first one before the
-        wait raises."""
+        wait raises. A `RunEnded` goes as a `RuntimeError` that names it, with it as its cause:
+        a wait, and the console's end of file, take a `RunEnded` for the end of the run."""
+        if isinstance(error, RunEnded):
+            wrapped = RuntimeError(f"a handler of the test's raised RunEnded: {error}")
+            wrapped.__cause__ = error
+            error = wrapped
         with self._cv:
             if self._failure is None:
                 self._failure = error

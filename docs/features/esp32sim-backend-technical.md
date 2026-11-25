@@ -330,7 +330,9 @@ in the test's thread:
   went, as a broker's `on_publish` handler. The first one is kept until a wait raises it:
   `_advance`, under which every wait goes, raises it, with the traceback of where it was raised, as
   soon as the next turn has come and before it looks for the run's end, and forgets it. The link
-  stays held at that turn, and a later wait goes on from it.
+  stays held at that turn, and a later wait goes on from it. A `RunEnded` is kept as
+  `RuntimeError("a handler of the test's raised RunEnded: <message>")` with it as its cause, since
+  `_wait` and the console's `pexpect.EOF` take a `RunEnded` for the end of the run.
 - `now` is the block point of the last held turn, 0 until the first.
 - `stop()` is the link's side only: the held turn, or the next, answers `stop`, and no turn is held
   after it. It returns whether the link was held at that moment. `end(reason, at=None)` is the

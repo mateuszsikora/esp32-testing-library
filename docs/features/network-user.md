@@ -437,7 +437,9 @@ path's one way down later, as every publication of the test's does
   the error, unlike a [`connection_policy`](#reject-mqtt-connections-and-check-credentials) that
   raises; the run goes on, and a test that expects the error, in `pytest.raises`, can wait again.
   `pytest.fail(...)` and `pytest.skip(...)` in a handler go the same way: the wait raises them, and
-  the test fails or is skipped with their message.
+  the test fails or is skipped with their message. A `RunEnded` a handler raises comes as
+  `RuntimeError: a handler of the test's raised RunEnded: …`, so that no wait takes it for the end
+  of the run.
   A Will's handler that raises during the test's own `broker.disconnect` raises from
   `disconnect`.
 - **The transcript** logs `mqtt: on_publish 'dev/+/req' registered` and `mqtt: on_publish

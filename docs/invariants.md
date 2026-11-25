@@ -1862,6 +1862,8 @@ that references to its number keep their meaning.
   `tests/test_net_mqtt_handlers.py::test_on_the_held_clock_what_a_handler_raises_fails_the_test_s_wait_at_the_next_turn`,
   `tests/test_net_mqtt_handlers.py::test_pytest_fail_and_skip_in_a_handler_reach_the_test_and_the_rest_of_the_event_goes_on`,
   `tests/test_net_mqtt_handlers.py::test_every_call_on_the_board_from_a_handler_is_refused_before_it_touches_the_board`,
+  `tests/test_net_mqtt_handlers.py::test_a_run_ended_a_handler_raises_is_not_taken_for_the_end_of_the_run`,
+  `tests/test_net_mqtt_handlers.py::test_a_handler_failure_fed_back_while_the_test_publishes_waits_for_every_subscription`,
   `tests/test_net_mqtt_policy.py::test_policy_errors_in_a_board_run_fail_the_link_naming_them`,
   `tests/test_net_mqtt_policy.py::test_pytest_fail_in_a_policy_closes_the_connection_and_raises_as_an_exception`,
   `tests/test_mqtt_handlers.py::test_a_handler_that_waits_on_the_board_fails_the_wait_naming_the_handler`,
