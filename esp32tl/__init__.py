@@ -90,6 +90,7 @@ from esp32tl.interfaces.sd_card import CardChange as CardChange
 from esp32tl.interfaces.sd_card import CardFault as CardFault
 from esp32tl.interfaces.sd_card import CardImage as CardImage
 from esp32tl.interfaces.sd_card import CardImageBuilder as CardImageBuilder
+from esp32tl.interfaces.sd_card import CardLayout as CardLayout
 from esp32tl.interfaces.sd_card import FaultedOperation as FaultedOperation
 from esp32tl.interfaces.sd_card import SdCard as SdCard
 from esp32tl.interfaces.uart import Source as Source
@@ -203,6 +204,7 @@ __all__ = [
     "CardFault",
     "CardImage",
     "CardImageBuilder",
+    "CardLayout",
     "CasicFrame",
     "CertificateAuthority",
     "ChannelEvent",

@@ -416,7 +416,7 @@ A test imports from three modules, and from no other:
 
 | Module | What it holds |
 |---|---|
-| `esp32tl` | Every class, exception and constant a test names: the board (`Board`, `Boot`, `UptimeZero`, `Sleep`, `POWERON_RESET`, `DEEPSLEEP_RESET`, `RESET_REASONS`, `Condition`, `condition`), its profile (`BoardProfile`, `UartRoute`, `LineRoute`, `SdCardRoute`), the interfaces and what they return (`Console`, `ConsoleLine`, `Uart`, `Gnss`, `Modem`, `Lines`, `OutputLine`, `LineEvent`, `SdCard`, `CardImage`, `Wifi`, `EmulatedMacs` and `emulated_macs`, `Bluetooth`, `Tap`, ...), the sources and models (`Replay`, `Real`, `Model`, `ReactiveModel`, `IdleFramedModel`, `Timed`, `TimedAtRate`, `GnssReceiver`, `CasicFrame`, `ModemModel`, `ModemCommand`, `ModemRestart`, `ModemPower`, `ModeChange`, `Protocol`, `AT`, `PMTK`, `UBX`, `GNSS`), the build and the flash (`Build`, `FlashSnapshot`, `Namespaces`, `Typed`, `u8` to `i64`), the network and its services (`Internet`, `LinkChange`, `Broker`, `Message`, `MqttClient`, `ConnectionEnd`, `TEST_CLIENT`, `Publication`, `Registration`, `HttpServer`, `HttpRequest`, `NtpExchange`, `DnsQuestion`, `TcpConnection`, `CertificateAuthority`, ...), Bluetooth (`Air`, `SppPeer`, `BluetoothDevice`, `ChannelEvent`, `WrittenLine`, `Refusal`, `Pairing`, `BlePeripheral`, `BleCentral`, `BleDevice`, `GattService`, `GattCharacteristic`, `Advertisement`, `LeConnection`, `Disconnection`, `GattRead`, `GattWrite`, `Notification`, `Subscription`, `LePairing`, `Discovery`, `DiscoveredService`, `DiscoveredCharacteristic`, `LeEvent`, ...) and the exceptions (`NeverHappened`, `RunEnded`, `BoardOff`, `SourceError`, `BackendError`, `PeerError`, `AirError`, `BleError`, `ConnectionEnded`, `NotReachable`, ...). `esp32tl.__all__` lists them all |
+| `esp32tl` | Every class, exception and constant a test names: the board (`Board`, `Boot`, `UptimeZero`, `Sleep`, `POWERON_RESET`, `DEEPSLEEP_RESET`, `RESET_REASONS`, `Condition`, `condition`), its profile (`BoardProfile`, `UartRoute`, `LineRoute`, `SdCardRoute`), the interfaces and what they return (`Console`, `ConsoleLine`, `Uart`, `Gnss`, `Modem`, `Lines`, `OutputLine`, `LineEvent`, `SdCard`, `CardImage`, `CardLayout`, `Wifi`, `EmulatedMacs` and `emulated_macs`, `Bluetooth`, `Tap`, ...), the sources and models (`Replay`, `Real`, `Model`, `ReactiveModel`, `IdleFramedModel`, `Timed`, `TimedAtRate`, `GnssReceiver`, `CasicFrame`, `ModemModel`, `ModemCommand`, `ModemRestart`, `ModemPower`, `ModeChange`, `Protocol`, `AT`, `PMTK`, `UBX`, `GNSS`), the build and the flash (`Build`, `FlashSnapshot`, `Namespaces`, `Typed`, `u8` to `i64`), the network and its services (`Internet`, `LinkChange`, `Broker`, `Message`, `MqttClient`, `ConnectionEnd`, `TEST_CLIENT`, `Publication`, `Registration`, `HttpServer`, `HttpRequest`, `NtpExchange`, `DnsQuestion`, `TcpConnection`, `CertificateAuthority`, ...), Bluetooth (`Air`, `SppPeer`, `BluetoothDevice`, `ChannelEvent`, `WrittenLine`, `Refusal`, `Pairing`, `BlePeripheral`, `BleCentral`, `BleDevice`, `GattService`, `GattCharacteristic`, `Advertisement`, `LeConnection`, `Disconnection`, `GattRead`, `GattWrite`, `Notification`, `Subscription`, `LePairing`, `Discovery`, `DiscoveredService`, `DiscoveredCharacteristic`, `LeEvent`, ...) and the exceptions (`NeverHappened`, `RunEnded`, `BoardOff`, `SourceError`, `BackendError`, `PeerError`, `AirError`, `BleError`, `ConnectionEnded`, `NotReachable`, ...). `esp32tl.__all__` lists them all |
 | `esp32tl.units` | The units: `Duration`, `Speed`, `Distance`, `Rate`, `Heading`, `Position`, their constructors (`ms`, `seconds`, `km_h`, `m`, ...), the compass points and `about` ([units](models-user.md#units)) |
 | `esp32tl.recording` | The recording format: reading and writing a recording, and its `Recording`, `Header`, `Event` and `ClockSwitch` ([the recording format](../recording-format.md)) |
 
@@ -996,6 +996,61 @@ def test_the_example_writes_its_files_into_the_image(board: Board):
   argument raises `NotADirectoryError`, and a missing directory raises `FileNotFoundError`.
   These exceptions carry the card-relative path in `filename`. Tool failures, including an
   unreadable FAT filesystem, remain `SourceError` naming the command and its stderr.
+- `card.blocks(name)` returns the card blocks that hold the file or directory `name` on the image
+  as it is at the call, as a tuple of `range`s of 512-byte blocks, the numbers `fail`, `delay` and
+  `observe` take in `blocks=` ([below](#making-the-card-fail-or-slow-down)): the file's clusters
+  in the order of its cluster chain, neighbouring clusters merged into one range. A file's last
+  cluster is whole, also where the file ends before it. `""` or `"/"` is the root directory: on
+  FAT12 and FAT16 its fixed region, on FAT32 its cluster chain. An empty file holds no cluster and
+  gives `()`. The name matches case-insensitively, by its long name or by its 8.3 name, as FatFs
+  on the firmware does: `blocks("ALONGN~1.TXT")` finds the file `A Long Name.txt`, which
+  `read_bytes` finds by its long name only. A missing path raises `FileNotFoundError`, a file used
+  as a parent `NotADirectoryError`, and a path the readers refuse `ValueError`, as they do.
+- The result is a tuple, and a rule's `blocks=` takes one `range`: give a rule for each range,
+  each with its own `count`. A fragmented file, a directory of more than one cluster, FAT32's root
+  and the two copies of the FAT are more than one range; the copies lie next to each other, so
+  `range(layout.fats[0].start, layout.fats[-1].stop)` covers both.
+- `card.layout` is a `CardLayout`, the regions of the file system in blocks: `fats`, one `range`
+  per copy of the FAT, which is where a cluster is allocated and freed; `root`, the fixed root
+  region of FAT12 and FAT16, or `None` on FAT32; `data`, from the first data block to the end of
+  the file system; and `cluster_blocks`, the blocks of a cluster. Below `fats[0].start` are the
+  boot sector and, on FAT32, its FSInfo sector and the backup boot sector. The builder's cards are
+  FAT12 on the smallest sizes, FAT16 at the default 32 MiB and FAT32 from 512 MiB.
+- Both read the image file itself and need no tool. They take the file system to start at block
+  0, without a partition table, as the builder makes it. An image that starts with a partition
+  table, as ESP-IDF writes when the firmware formats the card (`format_if_mount_failed`,
+  `esp_vfs_fat_sdcard_format`), raises `SourceError`:
+  `sd_card: PATH holds no FAT file system at block 0: it starts with a partition table`; one with
+  no FAT boot sector there names what is wrong, as
+  `sd_card: PATH holds no FAT file system at block 0: its boot sector has no 55 AA signature`.
+  A broken cluster chain raises `sd_card: the cluster chain of NAME on the card is broken`.
+- **What the blocks can tell, and what they cannot.** The mapping is the image's at the moment of
+  the call, not a file's future. A file the firmware has not created yet has no blocks, and the
+  clusters it gets are allocated as it writes. Its directory entry and the FAT may reach the card
+  only when the firmware syncs or closes the file: ESP-IDF's FatFs keeps one sector of the FAT or
+  of a directory in its window and writes it when it moves to another sector, and at `f_sync` and
+  `f_close` (`sync_window`, `move_window`, `sync_fs` in `components/fatfs/src/ff.c`, ESP-IDF
+  v5.3.6). So the card never reports file events, a file created, resized, renamed or deleted:
+  the card sees blocks, and the instant a block is written is not the instant of the file
+  operation. What does work:
+  - aim a rule at the blocks of a directory, where a file's entry is created, its size updated,
+    and the entry renamed or deleted;
+  - aim one at the blocks of a file that already exists, for an overwrite, or at the FAT;
+  - map the hits of an `observe` to files after the run, from the final image. A run is
+    deterministic, so the same writes come at the same positions in the next run, and a later
+    test can cut the power at the k-th write of a given file.
+
+  ```python
+  def test_power_lost_while_the_log_is_created(board: Board):
+      card = board.sd_card.image(size_mb=32).build()
+      board.sd_card.insert(card)
+      (root,) = card.blocks("")  # FAT16: the fixed root region
+      entry = board.sd_card.observe("write", blocks=root, count=1)
+      board.power_on()
+      board.wait_until(lambda: entry.hits, within=seconds(5))
+      board.power_off()  # right after the firmware wrote the new file's entry
+      assert "LOG.TXT" in card.list_files()
+  ```
 - `card.path` is the host image path; the object also supports `os.fspath`. Images created by the
   builder are removed when the board closes, even when never inserted or when the test fails.
   Read or copy results before teardown. Later reader/builder calls raise

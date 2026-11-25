@@ -5735,3 +5735,38 @@ the client, would still need the broker.
 **Rejected:** a handler's exception failing the link, as a `connection_policy`'s does. Nothing of
 the device's caused it, and ending the run would take from the test the device's state it may want
 to look at; the wait it interrupted raises it, with its traceback.
+
+## A card image maps names to blocks, and the card reports no file events
+
+Status: decided (#337)
+
+`CardImage.blocks(name)` gives the blocks that hold a file or directory on the image as it is at
+the call, and `CardImage.layout` the FATs, the fixed root and the data region, so that a test can
+aim `fail`, `delay` and `observe` at a directory, an existing file or the FAT, and map the hits of
+an `observe` to files from the final image. Both parse the boot sector, the FAT and the
+directories in Python: the builder's images are superfloppies, so the parse is short, needs no
+tool beside those the builder already needs, and reads the FAT and the directories from one open
+file in one call.
+
+**Rejected:** `mshowfat` and `minfo`. Two more commands in `MTOOLS` and the install line, two
+processes per call whose views of the image are not one, and output to parse: `mshowfat` gives
+clusters, which still need `minfo`'s numbers to become blocks, and has no clusters for the fixed
+root of FAT12 and FAT16.
+
+**Rejected:** file-system events from the card, an entry created, a size changed, a rename, an
+unlink. The card sees blocks, and the file system on it is the firmware's choice: FAT, LittleFS or
+raw blocks. ESP-IDF's FatFs keeps one sector of the FAT or a directory in its window and writes it
+when it moves to another sector or at a sync or close, so the instant a block reaches the card is
+not the instant of the file operation, and such events would be wrong in a way the test cannot see.
+
+**Rejected:** a file filter on a rule, `observe("write", file="plan_*.json")`, for the same reason:
+the blocks of a file being created are not known until they are written, and its entry and FAT
+chain may reach the card after its data.
+
+**Postponed:** an image whose file system is not at block 0, as when the firmware formats the card
+with a partition table: `blocks` and `layout` refuse it with `SourceError`, `it starts with a
+partition table`. The builder makes none, and no test has needed one.
+
+**Postponed:** a rule's `blocks=` taking the tuple `blocks` returns. A rule takes one `range`, so a
+file in several ranges takes a rule for each, each counting on its own; no test has needed one
+count across them yet.

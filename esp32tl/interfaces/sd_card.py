@@ -3,7 +3,8 @@
 On the `esp32sim` backend the card is a model in the runner, holding an image file: an SD card in
 SPI mode on the slot's pins, which writes what the firmware writes into the file as it goes. The
 test puts a card in before power-on, and may take it out and put one in while the firmware runs.
-The image builder and reader use mtools; external image paths remain supported.
+The image builder and reader use mtools, and `CardImage.blocks` and `layout` read the image's FAT
+file system themselves; external image paths remain supported.
 
 The test can also make the card fail or slow down at block level, from the board's current
 instant on: `sd_card.fail("write")`, `sd_card.delay("read", ms(50))`, or only watch what the
@@ -14,10 +15,11 @@ firmware does with it: `sd_card.observe("write")`. The rules go to the runner on
 import errno
 import os
 import shutil
+import struct
 import subprocess
 import threading
 from collections import deque
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory, mkdtemp
@@ -153,6 +155,50 @@ class CardImage(os.PathLike[str]):
                 raise NotADirectoryError(errno.ENOTDIR, "card path is not a directory", directory)
         return sorted(name for name, is_directory in self._entries(path) if not is_directory)
 
+    def blocks(self, name: str) -> tuple[range, ...]:
+        """The card blocks that hold the file or directory `name` on the image as it is now: its
+        clusters in the order of its chain, neighbouring ones merged into one range. `""` or `"/"`
+        is the root directory: the fixed root region of FAT12 and FAT16, the root's chain on
+        FAT32. An empty file holds no cluster, so it gives `()`."""
+        self._check()
+        with self._volume() as volume:
+            if name in ("", "/"):
+                return volume.root_blocks()
+            parts = _path(name).parts
+            directory: int | None = volume.root_cluster
+            walked = PurePosixPath(".")
+            for index, part in enumerate(parts):
+                match = next(
+                    (e for e in volume.entries(directory, str(walked)) if e.matches(part)), None
+                )
+                if match is None:
+                    raise FileNotFoundError(errno.ENOENT, "no such file or directory on card", name)
+                found = match
+                walked /= found.name
+                if index < len(parts) - 1 and not found.directory:
+                    raise NotADirectoryError(
+                        errno.ENOTDIR, "card path is not a directory", str(walked)
+                    )
+                directory = found.cluster
+            if found.cluster == 0:
+                if found.directory:
+                    raise SourceError(f"sd_card: the directory {walked} on the card has no cluster")
+                return ()
+            return volume.runs(volume.chain(found.cluster, str(walked)))
+
+    @property
+    def layout(self) -> "CardLayout":
+        """The regions of the file system on the image as it is now, in card blocks."""
+        self._check()
+        with self._volume() as volume:
+            return volume.layout
+
+    def _volume(self) -> "_Volume":
+        try:
+            return _Volume(self.path)
+        except FileNotFoundError:
+            raise SourceError(f"sd_card: no image at {self.path}") from None
+
     def _entries(self, directory: PurePosixPath) -> list[tuple[str, bool]]:
         # Read actual directory entries instead of interpreting locale-dependent tool errors.
         target = "" if directory == PurePosixPath(".") else f"{directory}/"
@@ -181,6 +227,224 @@ class CardImage(os.PathLike[str]):
             if index < len(parts) - 1 and not is_directory:
                 raise NotADirectoryError(errno.ENOTDIR, "card path is not a directory", str(parent))
         return parent, is_directory
+
+
+@dataclass(frozen=True)
+class CardLayout:
+    """The regions of a card image's FAT file system, in the card's 512-byte blocks: `fats`, one
+    range per copy of the FAT, in order; `root`, the fixed root directory region of FAT12 and
+    FAT16, `None` on FAT32, whose root is a cluster chain; `data`, from the first data block to
+    the end of the file system; and `cluster_blocks`, the blocks of a cluster. The blocks below
+    `fats[0].start` are the reserved region: the boot sector, and on FAT32 its FSInfo sector and
+    the backup boot sector."""
+
+    fats: tuple[range, ...]
+    root: range | None
+    data: range
+    cluster_blocks: int
+
+
+@dataclass(frozen=True)
+class _Entry:
+    """A directory entry: its long name, or its short one without a long name; its short name;
+    whether it is a directory; and its first cluster, 0 for none."""
+
+    name: str
+    short: str
+    directory: bool
+    cluster: int
+
+    def matches(self, part: str) -> bool:
+        wanted = part.casefold()
+        return wanted in (self.name.casefold(), self.short.casefold())
+
+
+class _Volume:
+    """The FAT file system at block 0 of an image, read from the file as it is: the image is a
+    superfloppy, as the builder makes it, so that block N of the card is sector N of the image."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._file = path.open("rb")
+        try:
+            self._parse()
+        except BaseException:
+            self._file.close()
+            raise
+
+    def __enter__(self) -> "_Volume":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self._file.close()
+
+    def _refuse(self, why: str) -> SourceError:
+        return SourceError(f"sd_card: {self.path} holds no FAT file system at block 0: {why}")
+
+    def _invalid(self, boot: bytes, why: str) -> SourceError:
+        """The refusal of a boot sector whose BIOS parameter block no FAT has: a partition table
+        when the MBR's table at 446 names a partition, as after ESP-IDF formats the card."""
+        if any(boot[446 + 16 * n + 4] for n in range(4)):
+            return self._refuse("it starts with a partition table")
+        return self._refuse(why)
+
+    def _read(self, block: int, count: int) -> bytes:
+        self._file.seek(block * BLOCK)
+        data = self._file.read(count * BLOCK)
+        if len(data) != count * BLOCK:
+            raise SourceError(
+                f"sd_card: {self.path} ends before block {block + count - 1} of its file system"
+            )
+        return data
+
+    def _parse(self) -> None:
+        boot = self._read(0, 1)
+        if boot[510:512] != b"\x55\xaa":
+            raise self._refuse("its boot sector has no 55 AA signature")
+        sector_bytes, per_cluster, reserved, fats, root_entries, total16 = struct.unpack_from(
+            "<HBHBHH", boot, 11
+        )
+        (fat16_length,) = struct.unpack_from("<H", boot, 22)
+        total32, fat32_length, _, _, root_cluster = struct.unpack_from("<IIHHI", boot, 32)
+        if sector_bytes != BLOCK:
+            raise self._invalid(boot, f"its sectors are {sector_bytes} bytes, not {BLOCK}")
+        if per_cluster not in (1, 2, 4, 8, 16, 32, 64, 128) or reserved == 0 or fats == 0:
+            raise self._invalid(boot, "its BIOS parameter block is not a FAT one")
+        fat_length = fat16_length or fat32_length
+        total = total16 or total32
+        root_blocks = (root_entries * 32 + BLOCK - 1) // BLOCK
+        first_data = reserved + fats * fat_length + root_blocks
+        if fat_length == 0 or total <= first_data:
+            raise self._invalid(boot, "its BIOS parameter block is not a FAT one")
+        self.clusters = (total - first_data) // per_cluster
+        # The FAT type is the count of clusters' (Microsoft's FAT specification).
+        if self.clusters < 4085:
+            self.bits = 12
+        elif self.clusters < 65525:
+            self.bits = 16
+        else:
+            self.bits = 32
+        if (self.bits == 32) != (root_entries == 0):
+            raise self._refuse(f"{self.clusters} clusters with a fixed root of {root_entries}")
+        start = reserved + fats * fat_length
+        self.layout = CardLayout(
+            fats=tuple(
+                range(reserved + n * fat_length, reserved + (n + 1) * fat_length)
+                for n in range(fats)
+            ),
+            root=None if self.bits == 32 else range(start, first_data),
+            data=range(first_data, total),
+            cluster_blocks=per_cluster,
+        )
+        self.root_cluster = root_cluster if self.bits == 32 else None
+        self._fat = reserved
+
+    def _next(self, cluster: int) -> int:
+        """The FAT's entry for `cluster`, in the first FAT: FAT32's active copy flag (`ext_flags`)
+        is not read, since mformat and FatFs keep the copies mirrored."""
+        offset = cluster + cluster // 2 if self.bits == 12 else cluster * self.bits // 8
+        self._file.seek(self._fat * BLOCK + offset)
+        raw = self._file.read(4 if self.bits == 32 else 2)
+        value = int.from_bytes(raw, "little")
+        if self.bits == 12:
+            return value >> 4 if cluster & 1 else value & 0xFFF
+        return value & 0x0FFFFFFF if self.bits == 32 else value
+
+    def chain(self, cluster: int, name: str) -> list[int]:
+        """The clusters of the chain that starts at `cluster`, in order."""
+        end = {12: 0xFF8, 16: 0xFFF8, 32: 0x0FFFFFF8}[self.bits]
+        chain: list[int] = []
+        while True:
+            if not 2 <= cluster < self.clusters + 2 or len(chain) == self.clusters:
+                raise SourceError(f"sd_card: the cluster chain of {name} on the card is broken")
+            chain.append(cluster)
+            cluster = self._next(cluster)
+            if cluster >= end:
+                return chain
+
+    def runs(self, chain: list[int]) -> tuple[range, ...]:
+        """The blocks of `chain`, neighbouring clusters merged into one range."""
+        size = self.layout.cluster_blocks
+        runs: list[range] = []
+        for cluster in chain:
+            start = self.layout.data.start + (cluster - 2) * size
+            if runs and runs[-1].stop == start:
+                runs[-1] = range(runs[-1].start, start + size)
+            else:
+                runs.append(range(start, start + size))
+        return tuple(runs)
+
+    def root_blocks(self) -> tuple[range, ...]:
+        if self.layout.root is not None:
+            return (self.layout.root,)
+        assert self.root_cluster is not None
+        return self.runs(self.chain(self.root_cluster, "/"))
+
+    def entries(self, cluster: int | None, name: str) -> Iterator[_Entry]:
+        """The entries of the directory whose chain starts at `cluster`; `None` is the root."""
+        if cluster is None:
+            regions = self.root_blocks()
+        elif cluster == 0:
+            raise SourceError(f"sd_card: the directory {name} on the card has no cluster")
+        else:
+            regions = self.runs(self.chain(cluster, name))
+        pieces: dict[int, bytes] = {}
+        for region in regions:
+            data = self._read(region.start, len(region))
+            for offset in range(0, len(data), 32):
+                record = data[offset : offset + 32]
+                first, attributes = record[0], record[11]
+                if first == 0:
+                    return
+                if first == 0xE5:
+                    pieces = {}
+                    continue
+                if attributes & 0x3F == 0x0F:
+                    if first & 0x40:
+                        pieces = {}
+                    pieces[first & 0x1F] = record
+                    continue
+                long_name = _long_name(pieces, record[:11])
+                pieces = {}
+                if attributes & 0x08 or record[:2] in (b".\x20", b".."):
+                    continue
+                short = _short_name(record)
+                high = struct.unpack_from("<H", record, 20)[0] if self.bits == 32 else 0
+                yield _Entry(
+                    long_name or short,
+                    short,
+                    bool(attributes & 0x10),
+                    high << 16 | struct.unpack_from("<H", record, 26)[0],
+                )
+
+
+def _short_name(record: bytes) -> str:
+    """An entry's 8.3 name, lowercased as its case bits say, in code page 437 as FatFs's is."""
+    base = (b"\xe5" + record[1:8] if record[0] == 0x05 else record[:8]).rstrip(b" ")
+    extension = record[8:11].rstrip(b" ")
+    name, ext = base.decode("cp437"), extension.decode("cp437")
+    if record[12] & 0x08:
+        name = name.lower()
+    if record[12] & 0x10:
+        ext = ext.lower()
+    return f"{name}.{ext}" if ext else name
+
+
+def _long_name(pieces: dict[int, bytes], short: bytes) -> str | None:
+    """The long name its pieces spell, or `None` when they are not whole or are another
+    entry's."""
+    if not pieces or sorted(pieces) != list(range(1, len(pieces) + 1)):
+        return None
+    checksum = 0
+    for byte in short:
+        checksum = (((checksum & 1) << 7) + (checksum >> 1) + byte) & 0xFF
+    if any(piece[13] != checksum for piece in pieces.values()):
+        return None
+    raw = b"".join(pieces[n][1:11] + pieces[n][14:26] + pieces[n][28:32] for n in sorted(pieces))
+    units = [raw[n : n + 2] for n in range(0, len(raw), 2)]
+    if b"\x00\x00" in units:
+        units = units[: units.index(b"\x00\x00")]
+    return b"".join(units).decode("utf-16-le", errors="replace")
 
 
 def fat32_clusters(size_mb: int, cluster_kb: int) -> int:
