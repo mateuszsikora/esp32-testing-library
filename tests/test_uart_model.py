@@ -4,7 +4,7 @@ profile whose UART1 is `uart.aux`. The firmware writes its AT commands there and
 answers, as it would from any part that speaks AT."""
 
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -28,6 +28,9 @@ AUX = Wire(tx=26, rx=27, baud=115200)
 HELLO = RunnerHello(2, "esp32", recording.EMULATED, "357b0e542dfe97d4c62ec4a15c01c4969164448c")
 # How long the part takes to answer a command, from the end of its line.
 ANSWER = ms(1)
+# The longest PwrkeySampler goes without reading the line: short enough to see modem_at's 100 ms
+# pulse.
+SAMPLE = ms(10)
 
 
 class AtResponder(ReactiveModel):
@@ -58,6 +61,55 @@ class AtResponder(ReactiveModel):
         self.supplied.append(on)
         self._on = on
         self._heard = b""
+
+
+class RealTimeClock(ReactiveModel):
+    """A part that answers AT with the world's time: `+CCLK:` to `AT+CCLK?`, dated by the board
+    at the answer's instant, and `OK` to every command line, `ANSWER` after its CR LF. `dated`
+    is every time it gave, with the instant it went in at."""
+
+    answer_after = ANSWER
+
+    def __init__(self, board: Board) -> None:
+        self.board = board
+        self.dated: list[tuple[Duration, datetime]] = []
+        self._heard = b""
+
+    def receive(self, at: Duration, data: bytes) -> Iterable[Timed]:
+        self._heard += data
+        answers = []
+        while b"\r\n" in self._heard:
+            line, _, self._heard = self._heard.partition(b"\r\n")
+            answer, clock = at + self.answer_after, b""
+            if line == b"AT+CCLK?":
+                utc = self.board.utc_at(answer)
+                self.dated.append((answer, utc))
+                clock = f'\r\n+CCLK: "{utc:%y/%m/%d,%H:%M:%S}+00"\r\n'.encode()
+            answers.append((answer, clock + b"\r\nOK\r\n"))
+        return answers
+
+
+class PwrkeySampler(ReactiveModel):
+    """A part that answers nothing and reads the firmware's PWRKEY from its `poll`, at every
+    turn, at most `SAMPLE` apart; `samples` is each instant with the level it read."""
+
+    answer_after = None
+
+    def __init__(self, board: Board) -> None:
+        self.board = board
+        self.samples: list[tuple[Duration, int | None]] = []
+        self._next = Duration(0)
+
+    def receive(self, at: Duration, data: bytes) -> Iterable[Timed]:
+        return ()
+
+    def poll(self, now: Duration) -> Iterable[Timed]:
+        self.samples.append((now, self.board.lines.level("aux.pwrkey")))
+        self._next = now + SAMPLE
+        return ()
+
+    def quiet_until(self) -> Duration | None:
+        return self._next
 
 
 class OnlyReceives:
@@ -299,6 +351,37 @@ def test_the_test_s_model_loses_its_power_with_the_board(board: Board) -> None:
     assert part.supplied == [False, True]
     board.console.expect_exact("modem_at: dialogue complete", timeout=seconds(5))
     assert part.lines[heard : heard + 2] == [b"+++AT", b"ATE0"]
+
+
+@pytest.mark.app_path("../firmware/modem_at")
+@pytest.mark.board_profile(path="boards/aux-uart.toml")
+def test_a_model_dates_what_it_sends_by_the_world_s_time_the_test_gave(board: Board) -> None:
+    world = datetime(2031, 7, 4, 9, 30, tzinfo=UTC)
+    part = board.uart("aux").model(RealTimeClock(board))
+    board.power_on(utc=world)
+    line = board.wait_until(board.console.line(r'\+CCLK: "'), within=seconds(5))
+    [(answer, utc)] = part.dated
+    assert utc == world + timedelta(microseconds=answer.ns // 1000)
+    assert f'+CCLK: "{utc:%y/%m/%d,%H:%M:%S}+00"' in line.text
+    assert '+CCLK: "31/07/04,09:30:' in line.text
+
+
+@pytest.mark.app_path("../firmware/modem_at")
+@pytest.mark.board_profile(path="boards/aux-uart.toml")
+def test_a_model_s_poll_reads_the_levels_the_firmware_drove_up_to_now(board: Board) -> None:
+    part = board.uart("aux").model(PwrkeySampler(board))
+    board.power_on()
+    board.console.expect_exact("modem_at: powered on RI=0")
+    driven = [
+        event
+        for event in board.lines.events()
+        if event.name == "aux.pwrkey" and event.by == "firmware"
+    ]
+    assert [event.level for event in driven][-2:] == [1, 0], "modem_at pulses PWRKEY"
+    for now, level in part.samples:
+        before = [event.level for event in driven if event.t <= now]
+        assert level == (before[-1] if before else None), f"PWRKEY read at {now}"
+    assert 1 in {level for _, level in part.samples}
 
 
 @pytest.mark.app_path("../firmware/modem_at")

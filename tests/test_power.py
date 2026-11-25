@@ -6,6 +6,7 @@ mtools."""
 import hashlib
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -225,6 +226,30 @@ def test_the_board_cannot_be_reset_or_read_for_boots_before_power_on(board: Esp3
         assert board.boots
     with pytest.raises(BoardOff, match=r"call board.power_on\(\) first"):
         board.next_boot()
+
+
+def test_utc_at_is_the_world_s_time_at_an_instant_from_the_first_power_on_through_a_power_off(
+    board: Esp32Sim, console: Console
+) -> None:
+    with pytest.raises(BoardOff, match=r"^the board is off; call board.power_on\(\) first$"):
+        board.utc_at(seconds(0))
+    world = datetime(2031, 7, 4, 9, 30, tzinfo=UTC)
+    board.power_on(utc=world)
+    assert board.utc_at(seconds(0)) == world
+    booted(console)
+    assert (
+        board.utc_at(board.now) == board.utc == world + timedelta(microseconds=board.now.ns // 1000)
+    )
+    # Later than now: a model dates what it sends ahead.
+    assert board.utc_at(board.now + ms(1.5)) == board.utc + timedelta(microseconds=1500)
+    with pytest.raises(TypeError, match=r"^board.utc_at takes a Duration, as seconds\(2\), not 2$"):
+        board.utc_at(2)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match=r"^board.utc_at takes a Duration of 0 or more, not -1 s$"):
+        board.utc_at(seconds(-1))
+    board.power_off()
+    board.wait(seconds(1))
+    # The world's time runs on while the board is off.
+    assert board.utc_at(board.now) == world + timedelta(microseconds=board.now.ns // 1000)
 
 
 def test_next_boot_is_the_boot_after_it_of_its_cause_through_a_reset_and_a_power_cycle(

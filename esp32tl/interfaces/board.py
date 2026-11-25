@@ -355,7 +355,15 @@ class Board(ABC):
 
     @property
     @abstractmethod
-    def utc(self) -> datetime: ...
+    def utc(self) -> datetime:
+        """The world's time now: `utc_at(now)`."""
+
+    @abstractmethod
+    def utc_at(self, at: Duration) -> datetime:
+        """The world's time at the board's instant `at`: the UTC instant at the first power-on,
+        plus `at`. `at` may be later than `now`, for a model that dates what it sends ahead.
+        Raises `BoardOff` before the first power-on; after a `power_off` it still answers, since
+        the world's time runs on."""
 
     @abstractmethod
     def wait(self, duration: Duration) -> None: ...

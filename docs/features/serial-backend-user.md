@@ -151,8 +151,8 @@ first, as on esp32sim.
 
 `board.clock` is `wall`. `board.now` uses monotonic elapsed time from the reset request, including
 reset latency, and advances while the test body runs. `board.utc` is the host's UTC at reset plus
-elapsed time. Supplying `utc` to `power_on` raises
-`ValueError: serial: power_on cannot set the real board's UTC; omit utc`.
+elapsed time, and `board.utc_at(at)` the host's UTC at reset plus `at`. Supplying `utc` to
+`power_on` raises `ValueError: serial: power_on cannot set the real board's UTC; omit utc`.
 
 `board.wait`, `board.wait_until`, `console.expect`, `console.expect_exact`, `console.line` and
 `console.lines` use the same interface as the emulator, but durations and timeouts are wall time.

@@ -557,9 +557,11 @@ with a proxy, an attribute that cannot be called and a model on no supply. It al
 model hears what the firmware sends at another rate than the profile's and answers at the
 profile's, and that the run fails on the frame errors that follow. It then runs `modem_at`
 against a model of the test's, `AtResponder`, a `Model`, on `uart.aux` of
-`tests/boards/aux-uart.toml`, through a power cycle, and, through `pytester`, a tap whose recording
-names the model `model:Ok`, one in nanoseconds; `tests/test_serial_backend.py` checks that `serial`
-skips it at the call. `tests/test_duration_model.py` runs one scripted exchange through a
+`tests/boards/aux-uart.toml`, through a power cycle; `RealTimeClock`, which answers `AT+CCLK?`
+with `board.utc_at` under `board.power_on(utc=...)`; `PwrkeySampler`, whose `poll` reads
+`board.lines.level("aux.pwrkey")` at every turn, at most 10 ms apart, through the firmware's
+PWRKEY pulse; and, through `pytester`, a tap whose recording names the model `model:Ok`, one in
+nanoseconds; `tests/test_serial_backend.py` checks that `serial` skips it at the call. `tests/test_duration_model.py` runs one scripted exchange through a
 `BoardLink`, with an unprompted message and a command cut in two, against a model in nanoseconds
 and the same model as a `Model`, and checks that the link sends the runner the same messages and
 that the models heard the same bytes at the same instants; then each thing a `Model` can get wrong,

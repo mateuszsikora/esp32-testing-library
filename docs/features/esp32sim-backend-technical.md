@@ -127,7 +127,7 @@ each, gone with the socket's directory in `_close_link`.
 started, it switches the supply back on (below), and refuses a `utc` with a `ValueError`. The
 first time it raises a `TypeError` for a `utc` that is not a `datetime`, and a `ValueError` for
 one without a timezone; it keeps `utc` converted to UTC,
-or `POWER_ON_UTC`, for `Esp32Sim.utc` and the GNSS receiver's dates, and logs
+or `POWER_ON_UTC`, for `Esp32Sim.utc`, `Esp32Sim.utc_at` and the GNSS receiver's dates, and logs
 `board.power_on(), the world's time {utc}` at 0 once the runner has started. Then:
 
 1. **`listen()`** binds a Unix stream socket at `link.sock` in a new directory from
@@ -273,13 +273,13 @@ cannot fail with this backend; it is there for another caller:
   from the length it has at the call, described as `the next deep sleep`; it is not overridden
   here. Nothing about a sleep goes into the run's log: its wake does, as the next boot.
 
-`_on()`, which `now`, `utc`, `boots` and every wait go through, asks only that the runner has
-started, so the test can wait on a board that is off: the runner idles the guest and still takes
-the turns the clock bounds. `_asked` refuses a source or a tap once the runner has started, with
-or without the supply: `the board is on already` while it is on, `the board has been on` after.
-`nvs` refuses only while the supply is on, with `BoardOff: board.nvs: the board is on: call
-board.power_off() first, and write the flash while it is off`; with the supply off it writes the
-runner's flash for the next boot.
+`_on()`, which `now`, `utc`, `utc_at`, `boots` and every wait go through, asks only that the
+runner has started, so the test can wait on a board that is off: the runner idles the guest and
+still takes the turns the clock bounds. `_asked` refuses a source or a tap once the runner has
+started, with or without the supply: `the board is on already` while it is on, `the board has been
+on` after. `nvs` refuses only while the supply is on, with `BoardOff: board.nvs: the board is on:
+call board.power_off() first, and write the flash while it is off`; with the supply off it writes
+the runner's flash for the next boot.
 
 A `reset()`, `power_off()` or `power_on()` once the run has ended (the runner exited, or the
 link failed, and the backend has ended the clock) raises `RunEnded` at once, through
@@ -335,10 +335,13 @@ in the test's thread:
 
 `Esp32Sim` takes the test's durations with `nanoseconds(value, what)`, which takes a `Duration`
 (`esp32tl/units.py`) of 0 or more and returns its `ns`, and refuses anything else, naming `what`
-(`board.wait`, `board.wait_until: within`, `board.wait_for_wake: within`, and `within` for
-`wait_on_clock`, whose callers pass a `Duration` they have checked). `now` is the clock's time as a
-`Duration`; `utc` adds it, in microseconds, to the UTC instant at power-on. `wait`, `wait_until`,
-`wait_on_clock`, `now` and `utc` raise `BoardOff` before `power_on()`. `wait_until` describes its
+(`board.wait`, `board.wait_until: within`, `board.wait_for_wake: within`, `board.utc_at`, and
+`within` for `wait_on_clock`, whose callers pass a `Duration` they have checked). `now` is the
+clock's time as a `Duration`; `utc` adds it, in microseconds, to the UTC instant at power-on.
+`utc_at(at)` adds `at` the same way, checked with `nanoseconds(at, "board.utc_at")` after `_on()`:
+it reads neither the clock nor the supply, so a model can call it from the link's thread, at an
+instant later than `now`, and after a `power_off`. `wait`, `wait_until`, `wait_on_clock`, `now`,
+`utc` and `utc_at` raise `BoardOff` before `power_on()`. `wait_until` describes its
 condition as `the condition {condition.__qualname__}`, or by its `repr` when it has no qualified
 name; `wait_on_clock(condition, within, description)` takes the description from the caller, as the
 console does. `wait` logs `board.wait({seconds})` at the board's time it starts from, and `the run
@@ -879,7 +882,8 @@ with `board.now` after the tenth fix, `gpio_echo` with the LilyGO profile's pull
 without a card, through `board.reset()` with one, and through a power cycle with one: the reset
 causes, NVS, RTC and RAM counts and the card's
 lines the firmware prints, `boots`, `now` across the power-off, every `BoardOff` and the `utc`
-refusal, and that the build's flash files are unchanged.
+refusal, `utc_at` under a given `utc`, ahead of `now`, across a power-off and its refusals, and
+that the build's flash files are unchanged.
 `tests/test_timer_wake.py` runs `firmware/timer_wake` through its two sleeps with
 `board.wait_for_wake`: the boot it returns, the board's time at most 1 ms after it, at most two
 turns of the link per sleep, `NeverHappened` once the firmware sleeps no more, the `BoardOff` and
