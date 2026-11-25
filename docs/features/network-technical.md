@@ -395,16 +395,23 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   `HttpServer._answer` runs a handler in `handling` and catches `BaseException`, so that
   `pytest.fail` and `pytest.skip`, which are no `Exception`, answer `500` and reach the test
   too, instead of ending the link's thread with the runner's turn unanswered.
-- `ntp.py`: accepts NTP v3/v4 client requests; returns a v4 stratum-1 server response. The
-  origin timestamp copies the client's transmit field. Reference, receive and transmit stamps
-  use world UTC plus emulated time, including fractions and the 32-bit NTP era wrap.
+- `ntp.py`: accepts NTP v3/v4 client requests; returns a v4 server response, by default
+  stratum 1 with leap indicator 0 and reference id `ESPT`, and after `unsynchronised()` (until
+  `synchronised()`, the `_synchronised` flag) stratum 0 with leap indicator 3, reference id
+  `INIT` and a reference timestamp of 0. The origin timestamp copies the client's transmit
+  field. Receive and transmit stamps, and the reference stamp of a synchronised answer, use world
+  UTC plus emulated time, including fractions and the 32-bit NTP era wrap.
   `go_silent` / `resume` toggle whether new datagrams receive replies, without changing the
-  UDP binding, the clock or already queued packets. Every client request, silent or not, is
-  appended to `exchanges` as an `NtpExchange(at, answered)` before the silence is checked, `at`
-  being `Duration(now())` and `answered` `not _silent`; a datagram under 48 bytes, not in client
-  mode or of a version other than 3 or 4 returns `None` before anything is recorded. `requests`
-  is a property that counts the answered exchanges. Each state transition is logged once, a
-  request while silent is not logged, and resuming never replays unanswered datagrams.
+  UDP binding, the clock or already queued packets; the silence is checked before
+  `_synchronised`, so it wins over both. Every client request, silent or not, is appended to
+  `exchanges` as an `NtpExchange(at, answered, synchronised)`, `at` being `Duration(now())`,
+  `answered` `not _silent` and `synchronised` `_synchronised` for an answered one, `None` for
+  one that is not; a datagram under 48 bytes, not in client mode or of a version other than 3 or
+  4 returns `None` before anything is recorded. `requests` is a property that counts the answered
+  exchanges. Each state transition (`ntp: silent`, `ntp: resumed`, `ntp: unsynchronised`,
+  `ntp: synchronised`) is logged once, an answer as `ntp: answered` or
+  `ntp: answered unsynchronised`, a request while silent is not logged, and resuming never
+  replays unanswered datagrams.
 - `mqtt.py`: incremental MQTT 3.1.1 parsing (up to 1 MiB per packet); CONNECT, QoS 0/1 PUBLISH,
   PUBACK, SUBSCRIBE/SUBACK, UNSUBSCRIBE/UNSUBACK, PING and DISCONNECT. Retained state belongs to
   the test's broker; session state (`_State`: subscriptions, the queue, the packet IDs in use and
@@ -1207,13 +1214,14 @@ Session Present, a QoS 1 message published while offline, and one redelivered wi
 with its 60 s keepalive, the Will 90 s after the device's last packet after `board.power_off()` and
 after `modem.lose_registration()`, and none after a power cycle of 5 s that takes the session over
 with Session Present.
-NTP tests cover silence from startup, idempotent transitions and resumed replies using elapsed
-world time; `tests/test_net_services.py` also checks the `exchanges` and `questions` records, the
-`next_exchange` and `next_question` conditions, and `tests/test_net_path.py` that an exchange is
-stamped when the request comes off the path, not when the link carried it. A MemoryBIO handshake
-with verification disabled solely for certificate inspection checks independent leaf validity
-dates, UTC normalization and a signature from the unchanged CA; firmware tests enforce those dates
-against its NTP clock.
+NTP tests cover silence from startup, idempotent transitions and resumed replies using elapsed world
+time, the header and reference stamp of a synchronised and an unsynchronised answer, switching
+between them and silence winning over both; `tests/test_net_services.py` also checks the `exchanges`
+and `questions` records, the `next_exchange` and `next_question` conditions, and
+`tests/test_net_path.py` that an exchange is stamped when the request comes off the path, not when
+the link carried it. A MemoryBIO handshake with verification disabled solely for certificate
+inspection checks independent leaf validity dates, UTC normalization and a signature from the
+unchanged CA; firmware tests enforce those dates against its NTP clock.
 `tests/test_modem_model.py` checks network selection, binary pluses, guarded escape, reset, the
 keepalive expiry run by the modem out of data mode, and the route-specific overflow policy.
 `tests/test_pppos_client.py` exercises unmodified firmware in

@@ -2653,6 +2653,17 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_net_services.py::test_dns_next_question_is_a_described_condition_from_its_call`,
   `tests/test_net_path.py::test_a_stated_rtt_is_exact_from_the_request_to_the_answers_stamp`,
   `examples/position_tracker/tests/test_tracker.py::test_retries_ntp_further_apart_and_resolves_its_name_again`
+- **308.** After `ntp.unsynchronised()` every answer carries leap indicator 3, stratum 0, the
+  reference id `INIT` and a reference timestamp of 0, its receive and transmit timestamps the
+  world's and nothing else different from a synchronised one; after `ntp.synchronised()` every
+  answer carries leap indicator 0, stratum 1 and `ESPT` again. Each change logs one line and a
+  repeated call none. A silent server answers neither way, and `resume` brings back the last of the
+  two. Each exchange's `synchronised` is `True` or `False` for how it was answered and `None` for
+  one not answered.
+  `tests/test_net_services.py::test_ntp_answers_unsynchronised_with_leap_3_stratum_0_and_the_worlds_time`,
+  `tests/test_net_services.py::test_ntp_switches_between_synchronised_and_unsynchronised_answers`,
+  `tests/test_net_services.py::test_ntp_go_silent_wins_over_unsynchronised`,
+  `tests/test_net_services.py::test_ntp_exchanges_say_which_answers_were_unsynchronised`
 
 ## The link's changes
 

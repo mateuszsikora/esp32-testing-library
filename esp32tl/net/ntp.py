@@ -16,14 +16,17 @@ DEFAULT_UTC = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
 @dataclass(frozen=True)
 class NtpExchange:
-    """One NTP request the device sent, at the board's time, and whether it was answered.
+    """One NTP request the device sent, at the board's time, whether it was answered and how.
 
     `at` is when the request reached the server, when it came off the path up: without a path,
     when the link carried it. `answered` is `False` for a request that came while the server was
-    silent."""
+    silent. `synchronised` is `True` for an answer as a synchronised stratum-1 server, `False` for
+    one with leap indicator 3 and stratum 0, after `Ntp.unsynchronised`, and `None` for a request
+    not answered."""
 
     at: Duration
     answered: bool
+    synchronised: bool | None
 
 
 class Ntp:
@@ -43,6 +46,7 @@ class Ntp:
         self._log = log
         self._exchanges: list[NtpExchange] = []
         self._silent = False
+        self._synchronised = True
 
     @property
     def exchanges(self) -> Sequence[NtpExchange]:
@@ -83,6 +87,21 @@ class Ntp:
             self._silent = False
             self._log("ntp: resumed")
 
+    def unsynchronised(self) -> None:
+        """Answer new requests as a server that has no reference (yet): leap indicator 3 (alarm),
+        stratum 0, the reference id `INIT` and a reference timestamp of 0, as a server never
+        synchronised sends; the receive and transmit timestamps are still the world's. `go_silent`
+        wins: a silent server answers nothing either way."""
+        if self._synchronised:
+            self._synchronised = False
+            self._log("ntp: unsynchronised")
+
+    def synchronised(self) -> None:
+        """Answer new requests as a synchronised stratum-1 server again, the default."""
+        if not self._synchronised:
+            self._synchronised = True
+            self._log("ntp: synchronised")
+
     def _stamp(self) -> bytes:
         delta = self._world() - NTP_EPOCH
         ns = (
@@ -96,10 +115,17 @@ class Ntp:
     def on_datagram(self, data: bytes) -> bytes | None:
         if len(data) < 48 or data[0] & 7 != 3 or (data[0] >> 3) & 7 not in (3, 4):
             return None
-        self._exchanges.append(NtpExchange(Duration(self._now()), not self._silent))
+        at = Duration(self._now())
         if self._silent:
+            self._exchanges.append(NtpExchange(at, answered=False, synchronised=None))
             return None
+        synchronised = self._synchronised
+        self._exchanges.append(NtpExchange(at, answered=True, synchronised=synchronised))
         stamp = self._stamp()
-        header = struct.pack(">BBbbII4s", (0 << 6) | (4 << 3) | 4, 1, 0, -20, 0, 0x10, b"ESPT")
-        self._log("ntp: answered")
-        return header + stamp + data[40:48] + stamp + stamp
+        leap, stratum, reference = (0, 1, b"ESPT") if synchronised else (3, 0, b"INIT")
+        header = struct.pack(
+            ">BBbbII4s", (leap << 6) | (4 << 3) | 4, stratum, 0, -20, 0, 0x10, reference
+        )
+        self._log("ntp: answered" if synchronised else "ntp: answered unsynchronised")
+        reference_stamp = stamp if synchronised else bytes(8)
+        return header + reference_stamp + data[40:48] + stamp + stamp

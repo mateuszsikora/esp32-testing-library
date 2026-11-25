@@ -1661,6 +1661,38 @@ scheduled for delivery. Transitions appear as `ntp: silent` and `ntp: resumed` i
 transcript; repeating either call in the same state adds no event. What the device asked either
 service, and when, is [below](#when-the-device-asked-for-the-time-and-for-a-name).
 
+By default every answer comes from a synchronised server: leap indicator 0, version 4, stratum 1 and
+the reference id `ESPT`. `network.ntp.unsynchronised()` makes new answers those of a server that has
+no reference (yet) (RFC 5905, 7.3 and 7.4): leap indicator 3 (alarm), stratum 0, the reference id
+`INIT`, the kiss code of a server that has not synchronised, and a reference timestamp of 0. The
+receive and transmit timestamps are still the world's, so a firmware that took the time from such an
+answer would get the right time, and a test checks that it sets no clock from it.
+`network.ntp.synchronised()` goes back to the default. Like `go_silent`, both work before power-on
+and during a run, log `ntp: unsynchronised` and `ntp: synchronised` once per change, and touch
+neither the clock nor a reply already on its way. An answer sent unsynchronised appears as
+`ntp: answered unsynchronised` in the transcript, a synchronised one as `ntp: answered`.
+`go_silent` wins over either: a silent server answers nothing, and after `resume` it answers in
+whichever of the two it was last set to.
+
+```python
+network.ntp.unsynchronised()
+board.power_on(utc=WORLD)
+exchange = board.wait_until(network.ntp.next_exchange(answered=True), within=seconds(30))
+assert exchange.synchronised is False
+```
+
+ESP-IDF's lwIP takes any answer with stratum 0 for a Kiss-o'-Death, whatever its leap indicator: it
+drops the answer before the application sees it, so the synchronisation callback does not run,
+`sntp_get_sync_status()` stays `SNTP_SYNC_STATUS_RESET` and no time is set. With one server, the
+default `CONFIG_LWIP_SNTP_MAX_SERVERS=1`, it asks the same server again later; with several
+configured, it marks this one (`sntp_getkodreceived(idx)` says so) and moves to the next one not
+marked; when none is left, it asks the same server again, as with one. Setting a server again clears
+its mark. A test of such a firmware therefore checks what it does without the time, such as a
+console line or the absence of a time-stamped report, not that it read the leap indicator.
+TODO(owner): measure on the position tracker how far apart lwIP's requests come after a
+Kiss-o'-Death; its receive timeout is still running when the answer comes, so the intervals differ
+from those while the server is silent.
+
 PPP honors the device's negotiated maximum receive unit (MRU), default 1500 bytes, for the whole
 outgoing IPv4 packet. TCP segmentation also respects the peer's MSS and receive window. The
 smallest supported MRU is 68 bytes; a smaller request gets a Configure-Nak proposing 68.
@@ -1800,8 +1832,10 @@ neither service and is not recorded.
 
 | Attribute or method | What it holds |
 |---|---|
-| `network.ntp.exchanges` | Every NTP v3 or v4 client request, each an `NtpExchange` with `at` (a `Duration`) and `answered`, `False` for one that came while the server was silent; `True` says the server answered, not that the answer reached the device, which the end of the link can drop on the path |
-| `network.ntp.requests` | How many of `exchanges` were answered |
+| `network.ntp.exchanges` | Every NTP v3 or v4 client request, each an `NtpExchange` with `at` (a `Duration`), `answered` and `synchronised`. `answered` is `False` for one that came while the server was silent; `True` says the server answered, not that the answer reached the device, which the end of the link can drop on the path. `synchronised` is `True` for an answer with leap indicator 0 and stratum 1, `False` for one sent after `unsynchronised()`, with leap indicator 3 and stratum 0, and `None` for a request not answered |
+| `network.ntp.requests` | How many of `exchanges` were answered, synchronised or not |
+| `network.ntp.unsynchronised()` | From now on, answer with leap indicator 3, stratum 0, the reference id `INIT` and a reference timestamp of 0, the receive and transmit timestamps still the world's |
+| `network.ntp.synchronised()` | From now on, answer as a synchronised stratum-1 server again, the default |
 | `network.ntp.next_exchange(*, answered=None)` | Condition returning the first request recorded after the call; with `answered=True` or `False`, the first answered or the first not |
 | `network.dns.questions` | Every question the server parsed, each a `DnsQuestion` with `at` (a `Duration`), `name` and `qtype` (1 for A, 28 for AAAA); every one is answered |
 | `network.dns.asked` | The names of `questions`, in order |
