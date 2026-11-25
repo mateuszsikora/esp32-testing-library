@@ -808,8 +808,9 @@ class Internet:
             self._at = None
 
     def arrive(self, now: int) -> None:
-        """Take in what has come up the path by `now`, then run the broker's deadlines and the
-        test's SYN timers due by it and hand over what bridged services sent, before the test
+        """Take in what has come up the path by `now`, then run the broker's deadlines, the
+        test's SYN timers and the TCP's retransmission timers due by it and hand over what bridged
+        services sent, before the test
         looks at the turn at `now`: a record stamped `now`, a PUBACK, an expiry or a SYN sent
         again at `now`, is there when `board.now` says it. What this answers goes out in `poll`.
         With the link down the broker's deadlines run all the same, and `poll` has nothing to
@@ -861,10 +862,10 @@ class Internet:
 
     def quiet_until(self) -> int | None:
         """The earliest of the broker's deadlines, the next SYN timer of a connection the test
-        opened, the path's next datagram, either way, and the next whole millisecond while a
-        bridged connection is open; with the link down, the
-        broker's and the bridges', as its keepalive still ends the connections the link's end
-        left open, and a bridged service may still send or close."""
+        opened, the next retransmission timer of a TCP connection, the path's next datagram,
+        either way, and the next whole millisecond while a bridged connection is open; with the
+        link down, the broker's and the bridges', as its keepalive still ends the connections the
+        link's end left open, and a bridged service may still send or close."""
         bridged = (bridge.quiet_until(self._now()) for bridge in self.bridges.values())
         # A retry is due whether the link is up or not: one that finds it down says so.
         retries = (accepting.due() for accepting in self._accepting)

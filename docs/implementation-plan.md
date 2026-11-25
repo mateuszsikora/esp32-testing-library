@@ -720,7 +720,7 @@ planned test needs a container; Docker is for building firmware only.
 | HCI transport never lands upstream | Bluetooth stays on the patch branch; everything else ships without it |
 | Fat-LTO release builds in CI are slow | Measured in #8: a cold build takes 44 s on the self-hosted runner and 20 s on macos-latest; the runner binary is cached by revision, and a `dev` profile skips the 10 s fat-LTO re-link when iterating locally |
 | No Docker on GitHub-hosted macOS runners | Firmware built on the self-hosted Linux runner and shared through the Actions cache. No planned test needs a container since section 11 |
-| A minimal TCP in Python misses what a device's stack does | The link reorders nothing and loses a byte only when the firmware leaves its receive FIFO full, which the runner reports as `rxfifo_ovf` and which then fails the run; checked against lwIP in two images (section 11) |
+| A minimal TCP in Python misses what a device's stack does | The link reorders nothing and loses a byte only when the firmware leaves its receive FIFO full, which the runner reports as `rxfifo_ovf` and which then fails the run; checked against lwIP in two images (section 11). The device's stack still drops segments it has no room for (lwIP's `refused_data`, #335), so the network's TCP sends again on an RFC 6298 RTO what the device does not acknowledge |
 | Wall-time to emulated-time stamping for `real` has no upstream design | Own design in M5, written before code; `clock: wall` recordings never compared with emulated ones |
 | A real board shares a USB port with other sessions | `serial` tests off by default, selected with `--esp32tl-backend serial` |
 | Timing of emulator recordings misread as wire timing | `clock` header field, refused on cross-clock comparison |

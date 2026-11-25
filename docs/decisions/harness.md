@@ -988,6 +988,10 @@ because it ties a test to the firmware's internals and cannot work on a real boa
 
 Status: decided (#64)
 
+*Superseded in part by [the network's TCP sends again what the device does not acknowledge](#the-networks-tcp-sends-again-what-the-device-does-not-acknowledge-on-its-rto)
+(#335): for retransmission only. The link loses nothing, but the device's stack does. The rest of
+this decision stands.*
+
 When a modem model is dialled, the harness ends the link itself: PPP (LCP and IPCP, handing the
 device an address and a DNS server), IPv4, UDP, and a TCP that accepts and, since #196, opens
 connections too ([the test opens TCP connections to the
@@ -1029,7 +1033,8 @@ broker such as mosquitto as the default, which brings wall time back.
 Status: decided (#196)
 
 *Superseded in part by [the test's TCP sends a SYN the device does not answer again](#the-tests-tcp-sends-a-syn-the-device-does-not-answer-again-on-the-boards-clock)
-(#289): for the SYN only. The rest of this decision stands.*
+(#289), for the SYN, and by [the network's TCP sends again what the device does not
+acknowledge](#the-networks-tcp-sends-again-what-the-device-does-not-acknowledge-on-its-rto) (#335), for data segments and FINs. The rest of this decision stands.*
 
 Firmware that serves HTTP, WebSocket or a protocol of its own is tested from its client's side:
 `network.connect(port, *, address=None)` opens a connection to the device behind the modem and
@@ -1133,8 +1138,9 @@ conditions that times out says so, as `the SYNs at 1 s and 2 s got no answer (no
 and the SYN at 4 s has just gone`: a SYN sent again says that the one before got no answer in its
 RTO, while the last one has only had no answer so far, and may have just gone. The waits of the HTTP
 client say so too, through the `waiting` of `Condition`, and the run report lists every connection
-the test opened with its state. Data segments, FINs and the device's own connections keep #196's
-rules: nothing sends them again.
+the test opened with its state. Data segments, FINs and the device's own connections kept #196's
+rules, nothing sending them again, until #335 gave them [a retransmission timer of their
+own](#the-networks-tcp-sends-again-what-the-device-does-not-acknowledge-on-its-rto).
 
 **Rejected:** a shorter limit than Linux's, because a test bounds its own wait with `within=`, and
 a limit of the test's TCP that ends a connection sooner than a real client would only make a
@@ -2839,11 +2845,11 @@ test sees a step late, against the rule that a record is there when `board.now` 
 
 Status: postponed (#130)
 
-The path loses nothing. Losing downlink datagrams needs retransmission timers in
-`esp32tl/net/ip.py`, whose TCP sends nothing again but the test's SYN (#289) because the link never
-loses a byte, and losing
-uplink only would be half a model: the firmware's retransmission would be exercised and the network's
-never. It waits for a test that needs it.
+The path loses nothing. Losing downlink datagrams needed retransmission timers in
+`esp32tl/net/ip.py`, whose TCP sent nothing again but the test's SYN (#289); since #335 it sends again
+on its RTO what the device does not acknowledge ([the network's TCP sends again](#the-networks-tcp-sends-again-what-the-device-does-not-acknowledge-on-its-rto)), so that
+part is there. Losing uplink only would still be half a model, and loss on the path still waits for a
+test that needs it.
 
 ## MQTT CONNECT policy runs before accepted session state is installed
 
@@ -5336,6 +5342,10 @@ access point's side; it comes with a test that needs it.
 
 Status: decided (#277)
 
+*Superseded in part by [the network's TCP sends again what the device does not acknowledge](#the-networks-tcp-sends-again-what-the-device-does-not-acknowledge-on-its-rto)
+(#335): for the rejection of a retransmission timer. The hold, the probe at its end and the rest of
+this decision stand.*
+
 `network.set_path(drop=True)` makes the path drop every IPv4 datagram that enters it, either way,
 and `set_path()`, or a call with an RTT or rates, restores it. A black hole is one more value of the
 path, so it follows the rule the path already has: each call states the whole path, and what it
@@ -5370,7 +5380,10 @@ come from, are not blocked.
 
 **Rejected:** a retransmission timer in the network's TCP, because the black hole and a dropped
 port are the only losses, and their end is known: a probe at that instant does what the timer
-would, with no timer to schedule, keep deterministic and show in `quiet_until`. Also rejected:
+would, with no timer to schedule, keep deterministic and show in `quiet_until`. #335 showed that the
+premise does not hold, since lwIP drops segments of its own, and [added the
+timer](#the-networks-tcp-sends-again-what-the-device-does-not-acknowledge-on-its-rto); what waits for the black hole and the dropped port still waits, and the timer
+stops for it. Also rejected:
 `network.black_hole()` and `network.restore()`, because they would be path state that
 `set_path` does not state: a later `set_path(rtt=…)` would either keep the black hole, against the
 rule that each call states the whole path, or lift it unasked. Also rejected: sending the network's
@@ -5604,3 +5617,89 @@ would come while the firmware is still sending, before a real receiver could ans
 **Rejected:** handing the answer to the runner as soon as the frame is found. The runner does not
 drop what is queued on an RX line at a power cut, so an answer meant for one boot could reach the
 next one, and one queued before `go_silent` would still go out.
+
+## The network's TCP sends again what the device does not acknowledge, on its RTO
+
+Status: decided (#335)
+
+The decisions of #64, #196 and #277 held that the network's TCP needs no retransmission because the
+link to the device loses nothing. The link does not, but the device's stack does. In ESP-IDF v5.3.6
+(lwIP `392707e`), `recv_tcp` returns `ERR_MEM` when the netconn's `recvmbox`, 6 deep
+(`CONFIG_LWIP_TCP_RECVMBOX_SIZE`), is full; `tcp_input` keeps that pbuf as `refused_data` and,
+while it is there, drops every further segment with data, with no ACK unless the window is zero.
+`pppos_input_tcpip` and `tcpip_inpkt` drop before TCP when a pbuf or the tcpip mailbox has no room.
+A consumer saw esp-mqtt, given a burst of 16 queued QoS 1 messages and a retained one on
+reconnecting, leave the end of the burst unacknowledged and close the connection at its next
+keepalive: with nothing sent again, the hole was never filled. It did not reproduce on
+`firmware/mqtt_session` behind the modem: without the timer, bursts of 16, 32, 64 and 128 queued
+QoS 1 messages of 200, 500 and 900 bytes were all delivered once and acknowledged, and with it so
+were 128 of 200 to 900 bytes and 256 of 900, at the same times, the timer sending nothing again.
+The modem's UART at 115200 baud takes about 11.5 kB/s to the device, more slowly than that
+firmware reads and prints, so its `recvmbox` never filled; the consumer's
+firmware ran TLS on top. The test keeps a burst of 128 messages of 200 bytes, and the unit tests
+check the timer, since the drops quoted above are lwIP's whatever the route.
+
+So the network's TCP keeps what it sent until the device acknowledges it, and sends it again when
+an RFC 6298 RTO runs out, on the board's clock: 1 s before the first RTT sample, then SRTT + 4
+RTTVAR from one segment timed at a time and never one sent again (Karn), at least 1 s and at most
+120 s (Linux's `TCP_RTO_MAX`), doubling with each retransmission; 3 s when the handshake's SYN or
+SYN-ACK went again and it measured nothing (5.7). At the RTO it sends one segment from `snd_una`,
+and each ACK that moves `snd_una` adds a segment to what of the rest may go again, as slow start
+does after an RTO (RFC 5681, 3.1), so what was unacknowledged comes back doubling per round trip:
+what lwIP dropped behind a hole comes back in a few round trips. When the ACKs are only late, as
+over a slow path, what was unacknowledged at the RTO still goes again, but paced by the device's
+ACKs, and an RTO that runs out again behind those duplicates sends one segment, not the window.
+The FIN goes behind the data. The 15 count RTOs; an ACK of a zero window that moves nothing, the
+device's answer to the RTO's byte, counts them from 0 again, as Linux's persist state does. After 15 retransmissions unacknowledged (Linux's `tcp_retries2`), the
+RTO after the last, 1207 s after the first transmission, ends the connection: `timed out: 15
+retransmissions unacknowledged` for the device's, `lost` with `its 15 retransmissions went
+unacknowledged` for one the test opened. Each retransmission is a line in the transcript, so a stall
+can be read there; the bytes are not recorded again, and a client's `on_sent` is not called again.
+Everything is a function of the board's clock and the segments, so two runs stay the same.
+
+While a flow is held, by the black hole, a port blocked with `drop` or a link that carries no IP,
+its timer stops, and it starts again at the end of the hold with the RTO it had; what the hold kept
+goes at its end with the probe of #277, as before. The probe counts as no retransmission. A flow
+whose device stack is gone (orphaned) keeps no timer: no stack that holds it would acknowledge, and
+a RST of the new stack or the service's own deadline ends it, as #196 decided.
+
+**Rejected:** Linux's lower bound of 200 ms (`TCP_RTO_MIN`), because lwIP's delayed ACK waits for
+its fast timer, every 250 ms (`TCP_TMR_INTERVAL`), so a segment the device acknowledges late would
+go again at every small RTT; RFC 6298's 1 s (2.4) sends nothing again that lwIP acknowledges on
+time, and the path's `rtt` still counts once it is long. Also rejected: fast retransmit,
+congestion control and SACK, because lwIP sends no duplicate ACK for the segments it drops in
+`tcp_input`, so no duplicate ACK triggers fast retransmit, and SACK would tell nothing the recovery
+does not find: lwIP keeps nothing behind its hole while `refused_data` is there. Also rejected:
+sending everything unacknowledged again at the RTO, as far as the window allows (go-back-N),
+because over a slow path, `set_path(downlink=kbit_s(8))` among them, the first ACK can come after
+the RTO while the window is still on its way: the whole window would go into the path's queue, which
+has no limit, at once behind it, and each RTO that runs out behind that queue would add the window
+again, a cascade. Also rejected: sending one segment per RTO, because what follows the hole would
+then come one RTO at a time; and F-RTO (RFC 5682), which after a spurious RTO would send nothing
+again but the first segment, because no test needs it yet: the spurious RTOs measured, on `mqtt_session` at
+`rtt=ms(600)`, cost one PUBACK twice.
+
+**Rejected:** holding what the service writes until the recovery ends, as Linux's `cwnd` of one
+segment does, because this TCP has no congestion to avoid, and a recovery after a late ACK, not a
+loss, would delay it: on `mqtt_session` at `rtt=ms(600)` lwIP acknowledged a PUBACK after more
+than 1 s, behind Nagle, and the next PUBACK, held, came 112 ms late, measured. The recovery's `cwnd`
+limits only what goes again.
+
+**Rejected:** letting the RTO run in the black hole and on a dropped port, sending into it and
+backing off as a real network does, because what the hold keeps already goes at its end with a
+probe, the test chose the hold's end, and a backoff run up in the hold would delay the recovery
+after it by up to 120 s for nothing the test asked for; and counting retransmissions there would
+end connections the test only meant to cut off for a while. Also rejected: sending again on an
+orphaned flow, because the decision of #196 leaves those connections open and silent until their
+service ends them, and a retransmission drawing the new stack's RST would end them at a time that
+depends on what happened to be unacknowledged at the reset.
+
+## Keeping a gapped connection behind a virtual station for its RTO is postponed
+
+Status: postponed (#335)
+
+Behind a virtual station the device keeps its stack when the station leaves, and `lose_link` drops
+a connection with bytes or a FIN the device had not acknowledged as `gapped`, because what was on
+the path or in the air is gone. Since #335 the [retransmission timer](#the-networks-tcp-sends-again-what-the-device-does-not-acknowledge-on-its-rto)
+could send it again after the station's return instead. That changes what a test of the station
+sees when it leaves, which no test needs yet, and it waits for one.

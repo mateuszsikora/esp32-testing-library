@@ -3,7 +3,7 @@
 import struct
 from collections.abc import Callable
 
-from esp32tl.net.ip import Network
+from esp32tl.net.ip import ISN, Network
 
 SRC, DST = b"\x0a\x40\0\x02", b"\xcb\0\x71\x99"
 
@@ -154,4 +154,358 @@ def test_modem_link_loss_leaves_tcp_open_and_the_will_to_the_keepalive() -> None
     lines = [str(e["event"]) for e in net.events if "event" in e]
     assert any(
         line.endswith("1883 closed by its service with no device to answer") for line in lines
+    )
+
+
+# Retransmission: what the device's stack drops goes again on the RTO, on the board's clock.
+
+S = 1_000_000_000
+MSS_1400 = b"\x02\x04\x05\x78"
+
+
+class Device:
+    """A device on port 4000 connected to a `Network`'s `Echo` on 1883 at `now` 0, the clock and
+    what the network sent in the test's hands."""
+
+    def __init__(self, *, carries: bool = True) -> None:
+        self.now = 0
+        self.sent: list[bytes] = []
+        self.lines: list[str] = []
+        self.carries = carries
+        self.net = Network(
+            self.sent.append,
+            self.lines.append,
+            now=lambda: self.now,
+            carries=lambda: self.carries,
+        )
+        self.echo = Echo()
+        self.net.tcp[1883] = self.echo
+        self.net.receive(tcp(0, 0, 2, options=MSS_1400))
+        self.seq = 1  # the device's next sequence number
+
+    def established(self, at: int = 0) -> "Device":
+        self.now = at
+        self.net.receive(tcp(1, ISN + 1, 0x10))
+        return self
+
+    def ack(self, ack: int, window: int = 8192) -> None:
+        self.net.receive(tcp(self.seq, ack, 0x10, window=window))
+
+    def segments(self, start: int = 0) -> list[tuple[int, int, bytes]]:
+        """The sequence number, the flags and the data of each segment sent from `start` on."""
+        return [
+            (int.from_bytes(d[24:28], "big"), d[33], d[20 + (d[32] >> 4) * 4 :])
+            for d in self.sent[start:]
+        ]
+
+    def poll(self, at: int) -> list[tuple[int, int, bytes]]:
+        self.now = at
+        start = len(self.sent)
+        self.net.poll()
+        return self.segments(start)
+
+
+def test_a_segment_the_device_drops_goes_again_one_rto_later_and_the_stream_goes_on() -> None:
+    device = Device().established()
+    device.echo.write(b"first")
+    device.ack(ISN + 1 + 5)
+    device.now = 10_000_000
+    device.echo.write(b"second")  # the device drops it, as lwIP does with refused_data
+    device.echo.write(b"third")  # and this one, behind the hole
+    assert device.net.quiet_until() == 10_000_000 + S
+    assert device.poll(10_000_000 + S - 1) == []
+    again = device.poll(10_000_000 + S)
+    # From snd_una, as much as the window and the MSS allow: both, in one segment.
+    assert again == [(ISN + 6, 0x18, b"secondthird")]
+    assert device.lines[-1] == (
+        f"net: TCP 203.0.113.153:1883 → 10.64.0.2:4000: sent again 11 bytes from sequence"
+        f" {ISN + 6}, the 1st time, after an RTO of 1 s"
+    )
+    device.ack(ISN + 6 + 11)
+    assert device.net.quiet_until() is None
+    start = len(device.sent)
+    device.echo.write(b"fourth")
+    assert device.segments(start) == [(ISN + 17, 0x18, b"fourth")]
+
+
+def test_an_ack_of_everything_stops_the_timer_and_nothing_goes_again() -> None:
+    device = Device().established()
+    device.echo.write(b"hello")
+    assert device.net.quiet_until() == S
+    device.now = 5_000_000
+    device.ack(ISN + 6)
+    assert device.net.quiet_until() is None
+    assert device.poll(1000 * S) == []
+    assert not [line for line in device.lines if "sent again" in line]
+
+
+def test_an_ack_of_part_restarts_the_timer_from_the_ack() -> None:
+    device = Device().established()
+    device.echo.write(b"one")
+    device.echo.write(b"two")
+    device.now = 300_000_000
+    device.ack(ISN + 4)  # "one" only
+    assert device.net.quiet_until() == 300_000_000 + S
+    assert device.poll(300_000_000 + S) == [(ISN + 4, 0x18, b"two")]
+
+
+def test_the_rto_doubles_with_each_retransmission_up_to_its_limit() -> None:
+    device = Device().established()
+    device.echo.write(b"x" * 10)
+    at, deadlines = 0, []
+    for _ in range(9):
+        due = device.net.quiet_until()
+        assert due is not None
+        deadlines.append(due - at)
+        at = due
+        assert device.poll(due) == [(ISN + 1, 0x18, b"x" * 10)]
+    assert deadlines == [S, 2 * S, 4 * S, 8 * S, 16 * S, 32 * S, 64 * S, 120 * S, 120 * S]
+    again = [line for line in device.lines if "sent again" in line]
+    assert again[1].endswith("the 2nd time, after an RTO of 2 s")
+    assert again[2].endswith("the 3rd time, after an RTO of 4 s")
+    assert again[8].endswith("the 9th time, after an RTO of 120 s")
+
+
+def test_a_device_that_never_acknowledges_times_out_after_the_last_retransmission() -> None:
+    device = Device().established()
+    device.echo.write(b"unheard")
+    retransmissions = 0
+    while (due := device.net.quiet_until()) is not None:
+        retransmissions += len(device.poll(due))
+    assert retransmissions == 15
+    # 1 + 2 + ... + 64 s, then eight RTOs of 120 s, and the one after the 15th.
+    assert device.now == (127 + 9 * 120) * S
+    assert device.lines[-1] == (
+        "net: TCP 10.64.0.2:4000 → 203.0.113.153:1883 timed out: 15 retransmissions unacknowledged"
+    )
+    assert device.echo.closed == 1 and not device.net._flows
+
+
+def test_a_fin_unacknowledged_goes_again_behind_the_data() -> None:
+    device = Device().established()
+    device.echo.write(b"bye")
+    device.echo.close()
+    assert device.segments()[-2:] == [(ISN + 1, 0x18, b"bye"), (ISN + 4, 0x11, b"")]
+    assert device.poll(S) == [(ISN + 1, 0x18, b"bye"), (ISN + 4, 0x11, b"")]
+    assert "sent again 3 bytes and its FIN from sequence" in device.lines[-1]
+    device.ack(ISN + 4)  # the data, not the FIN
+    assert device.poll(S + 2 * S) == [(ISN + 4, 0x11, b"")]
+    assert "sent again its FIN from sequence" in device.lines[-1]
+
+
+def test_the_rto_follows_the_measured_rtt_and_a_retransmission_is_not_measured() -> None:
+    # The handshake's ACK 3 s after the SYN-ACK: SRTT 3 s, RTTVAR 1.5 s, RTO 3 + 4 x 1.5 s.
+    device = Device().established(at=3 * S)
+    device.echo.write(b"a")
+    assert device.net.quiet_until() == 3 * S + 9 * S
+    device.now = 3 * S + 100_000_000
+    device.ack(ISN + 2)  # R = 0.1 s: RTTVAR 1.85 s, SRTT 2.6375 s
+    device.echo.write(b"b")
+    assert device.net.quiet_until() == device.now + 2_637_500_000 + 4 * 1_850_000_000
+    # Sent again: its ACK, whichever it answers, is no sample, and the RTO stays doubled.
+    first = device.net.quiet_until()
+    assert first is not None
+    device.poll(first)
+    device.now = first + 50_000_000
+    device.ack(ISN + 3)
+    device.echo.write(b"c")
+    assert device.net.quiet_until() == device.now + 2 * (2_637_500_000 + 4 * 1_850_000_000)
+
+
+def test_a_held_flow_retransmits_nothing_and_its_timer_starts_again_at_the_release() -> None:
+    device = Device().established()
+    device.echo.write(b"held")
+    device.net.block(1883, "drop")
+    assert device.net.quiet_until() is None
+    assert device.poll(10 * S) == []
+    start = len(device.sent)
+    device.net.unblock(1883)
+    # The probe, which is no retransmission, and the timer from the release.
+    assert device.segments(start) == [(ISN + 4, 0x10, b"")]
+    assert device.net.quiet_until() == 11 * S
+    assert device.poll(11 * S) == [(ISN + 1, 0x18, b"held")]
+    assert device.lines[-1].endswith("the 1st time, after an RTO of 1 s")
+
+
+def test_a_black_hole_stops_the_timer_until_the_link_carries_again() -> None:
+    device = Device().established()
+    device.echo.write(b"held")
+    device.carries = False
+    device.echo.write(b" too")  # waits for the link
+    assert device.net.quiet_until() is None
+    assert device.poll(30 * S) == []
+    start = len(device.sent)
+    device.carries = True
+    device.net.resume(probe=True)
+    assert device.segments(start) == [(ISN + 5, 0x18, b" too"), (ISN + 8, 0x10, b"")]
+    assert device.net.quiet_until() == 31 * S
+    assert device.poll(31 * S) == [(ISN + 1, 0x18, b"held too")]
+
+
+def test_an_orphaned_flow_keeps_no_timer() -> None:
+    device = Device().established()
+    device.echo.write(b"gone")
+    device.net.forget_device("the device reset")
+    assert device.net.quiet_until() is None
+    assert device.poll(100 * S) == []
+
+
+class Client:
+    def __init__(self) -> None:
+        self.sent: list[bytes] = []
+        self.ends: list[tuple[str, str | None]] = []
+
+    def on_syn(self) -> None: ...
+
+    def on_established(self) -> None: ...
+
+    def on_sent(self, data: bytes) -> None:
+        self.sent.append(data)
+
+    def on_data(self, data: bytes) -> None: ...
+
+    def on_close(self) -> None: ...
+
+    def on_end(self, kind: str, why: str | None) -> None:
+        self.ends.append((kind, why))
+
+
+def test_a_connection_the_test_opened_goes_again_once_and_is_lost_when_never_acknowledged() -> None:
+    now = [0]
+    lines: list[str] = []
+    net = Network(lambda datagram: None, lines.append, now=lambda: now[0])
+    client = Client()
+    local, write, _ = net.connect("10.64.0.2", 1883, "203.0.113.153", client)
+    segment = struct.pack(">HHIIBBHHH", 1883, local, 0, ISN + 1, 0x60, 0x12, 8192, 0, 0) + MSS_1400
+    pseudo = SRC + DST + struct.pack(">BBH", 0, 6, len(segment))
+    net.receive(packet(6, segment[:16] + struct.pack(">H", check(pseudo + segment)) + segment[18:]))
+    write(b"request")
+    while (due := net.quiet_until()) is not None:
+        now[0] = due
+        net.poll()
+    # Told once of what it wrote, however many times it went.
+    assert client.sent == [b"request"]
+    assert client.ends == [("lost", "its 15 retransmissions went unacknowledged")]
+    assert lines[-1] == (
+        f"net: TCP 203.0.113.153:{local} → 10.64.0.2:1883 lost: its 15 retransmissions went"
+        " unacknowledged"
+    )
+
+
+def test_two_runs_retransmit_the_same_segments_at_the_same_times() -> None:
+    def run() -> tuple[list[bytes], list[str], list[int]]:
+        device = Device().established(at=2_000_000)
+        times = []
+        device.echo.write(b"a" * 3000)
+        device.now = 50_000_000
+        device.ack(ISN + 1 + 1400)
+        for _ in range(3):
+            due = device.net.quiet_until()
+            assert due is not None
+            times.append(due)
+            device.poll(due)
+        return device.sent, device.lines, times
+
+    assert run() == run()
+
+
+def test_after_an_rto_each_ack_lets_go_what_it_acknowledged_and_a_segment_more() -> None:
+    device = Device().established()
+    device.echo.write(b"a" * 1400 + b"b" * 1400 + b"c" * 1400)
+    device.echo.write(b"new")  # behind them, in the window
+    # Slow start (RFC 5681, 3.1): one segment at the RTO, not the window.
+    assert device.poll(S) == [(ISN + 1, 0x18, b"a" * 1400)]
+    device.now = S + 10_000_000
+    start = len(device.sent)
+    device.ack(ISN + 1 + 1400)
+    assert device.segments(start) == [
+        (ISN + 1401, 0x18, b"b" * 1400),
+        (ISN + 2801, 0x18, b"c" * 1400),
+    ]
+    start = len(device.sent)
+    device.ack(ISN + 2801)
+    assert device.segments(start) == [(ISN + 4201, 0x18, b"new")]
+    assert device.lines[-1] == (
+        "net: TCP 203.0.113.153:1883 → 10.64.0.2:4000: sent again 3 bytes from sequence"
+        f" {ISN + 4201}, after the device's ACK of sequence {ISN + 2801}"
+    )
+    start = len(device.sent)
+    device.ack(ISN + 4204)
+    assert device.net.quiet_until() is None
+    device.echo.write(b"next")
+    assert device.segments(start) == [(ISN + 4204, 0x18, b"next")]
+
+
+def test_what_the_service_writes_in_a_recovery_goes_at_once_and_is_not_sent_again_in_it() -> None:
+    device = Device().established()
+    device.echo.write(b"a" * 1400 + b"b" * 1400)
+    device.poll(S)
+    start = len(device.sent)
+    device.echo.write(b"later")
+    assert device.segments(start) == [(ISN + 2801, 0x18, b"later")]
+    start = len(device.sent)
+    device.ack(ISN + 1 + 1400)  # one more goes again: what was unacknowledged at the RTO only
+    assert device.segments(start) == [(ISN + 1401, 0x18, b"b" * 1400)]
+    device.ack(ISN + 2801)
+    assert device.net._flows[next(iter(device.net._flows))].cwnd is None
+
+
+def test_an_rto_on_a_zero_window_sends_one_byte() -> None:
+    device = Device().established()
+    device.echo.write(b"abcd")
+    device.ack(ISN + 1, window=0)
+    assert device.poll(S) == [(ISN + 1, 0x18, b"a")]
+
+
+def test_a_fin_goes_again_only_once_every_byte_before_it_has() -> None:
+    device = Device().established()
+    device.echo.write(b"x" * 3000)
+    device.echo.close()
+    assert device.poll(S) == [(ISN + 1, 0x18, b"x" * 1400)]
+    start = len(device.sent)
+    device.ack(ISN + 1401)
+    assert device.segments(start) == [
+        (ISN + 1401, 0x18, b"x" * 1400),
+        (ISN + 2801, 0x18, b"x" * 200),
+        (ISN + 3001, 0x11, b""),
+    ]
+    assert "sent again 1600 bytes and its FIN from sequence" in device.lines[-1]
+
+
+def test_data_starts_with_an_rto_of_3_s_when_the_handshake_went_twice() -> None:
+    # RFC 6298, 5.7: no sample, as the SYN went again.
+    now = [0]
+    net = Network(lambda datagram: None, now=lambda: now[0])
+    client = Client()
+    local, write, _ = net.connect("10.64.0.2", 1883, "203.0.113.153", client)
+    now[0] = S
+    net.poll()  # the SYN again
+    now[0] = 1_500_000_000
+    segment = struct.pack(">HHIIBBHHH", 1883, local, 0, ISN + 1, 0x60, 0x12, 8192, 0, 0) + MSS_1400
+    pseudo = SRC + DST + struct.pack(">BBH", 0, 6, len(segment))
+    net.receive(packet(6, segment[:16] + struct.pack(">H", check(pseudo + segment)) + segment[18:]))
+    write(b"request")
+    assert net.quiet_until() == 1_500_000_000 + 3 * S
+    # The device's SYN again, whose SYN-ACK went again: the same.
+    device = Device()
+    device.now = S
+    device.net.receive(tcp(0, 0, 2, options=MSS_1400))
+    device.established(at=1_500_000_000)
+    device.echo.write(b"hello")
+    assert device.net.quiet_until() == 1_500_000_000 + 3 * S
+
+
+def test_a_device_that_answers_each_rto_with_a_zero_window_keeps_its_connection() -> None:
+    device = Device().established()
+    device.echo.write(b"abcd")
+    device.ack(ISN + 1, window=0)
+    for _ in range(20):
+        due = device.net.quiet_until()
+        assert due is not None
+        assert device.poll(due) == [(ISN + 1, 0x18, b"a")]
+        device.ack(ISN + 1, window=0)  # lwIP's answer to a byte outside its window
+    assert device.net._flows and device.echo.closed == 0
+    assert device.lines[-1] == (
+        "net: TCP 203.0.113.153:1883 → 10.64.0.2:4000: sent again 1 byte from sequence"
+        f" {ISN + 1}, the 20th probe of a zero window, after an RTO of 120 s"
     )

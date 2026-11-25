@@ -376,6 +376,8 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [Public history properties return live read-only sequences](harness.md#public-history-properties-return-live-read-only-sequences) | `harness.md` | decided (#321) |
 | [The broker records complete control packets received from its clients](harness.md#the-broker-records-complete-control-packets-received-from-its-clients) | `harness.md` | decided (#322) |
 | [The GNSS receiver answers every CASIC frame and acts on none](harness.md#the-gnss-receiver-answers-every-casic-frame-and-acts-on-none) | `harness.md` | decided (#333) |
+| [The network's TCP sends again what the device does not acknowledge, on its RTO](harness.md#the-networks-tcp-sends-again-what-the-device-does-not-acknowledge-on-its-rto) | `harness.md` | decided (#335) |
+| [Keeping a gapped connection behind a virtual station for its RTO is postponed](harness.md#keeping-a-gapped-connection-behind-a-virtual-station-for-its-rto-is-postponed) | `harness.md` | postponed (#335) |
 
 ## The runner crate and esp32sim
 
