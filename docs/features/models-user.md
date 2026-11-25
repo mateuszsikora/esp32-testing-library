@@ -98,9 +98,10 @@ class Echo(Model):
   anywhere, so a model finds a request by its protocol's terminator or by the silence after it
   ([`uart_tx`](../protocol.md#52-uart_tx)). Behind an SPP channel, `at` is the instant `data`
   arrived.
-- On a UART, what it sends goes in at the route's `baud` from the board profile, one character
-  time per byte, queued behind what went in on that pin before it: an answer stamped at `at` starts
-  at `at`, or once the bytes before it have gone in, whichever is later. Nothing on the line is
+- On a UART, what it sends goes in at the route's `baud` from the board profile, or at the rate
+  an output gives ([below](#a-model-that-changes-its-line-rate)), one character time per byte,
+  queued behind what went in on that pin before it: an answer stamped at `at` starts at `at`, or
+  once the bytes before it have gone in, whichever is later. Nothing on the line is
   dropped, so a model that sends more in its period than the line carries in that time falls
   later with every period, and the bytes of answers already due that are still queued when the
   run ends are counted as `rx_bytes_not_paced` in the link's report
@@ -113,7 +114,12 @@ class Echo(Model):
   `board.utc_at(...)`, `board.lines.level(...)` and `board.now`, and must not call anything that
   waits or changes the run
   ([what a model may read](pytest-plugin-user.md#a-uarts-own-model)).
-- A `supply(on)` method puts it on the board's supply, as for any source.
+- A `supply(on)` method puts it on the board's supply, as for any source. On a UART,
+  `transmitted`, `configured` and `frame_errors` tell it the firmware's rates and the frame errors
+  its bytes met, and an answer may be an `(instant, bytes, baud)` triple, `TimedAtRate`, that goes
+  in at its own rate ([a model that changes its line rate](#a-model-that-changes-its-line-rate)).
+  Behind an SPP channel there is no line rate: a triple fails the air with `bench: source.receive
+  returned (seconds(0), b'text', 9600), not a (Duration, bytes) pair`.
 - The route and the peer call it in nanoseconds, converting at the edge: it puts the same bytes on
   the wire at the same instants as the same model written with `int` nanoseconds, which both
   accept as well, and is checked the same way, with the messages in `Duration`s, as
@@ -251,7 +257,8 @@ class Slave(IdleFramedModel):
   firmware writes in pieces less than a character time apart, but over more than `gap` in all, ends
   `gap` after its first byte: the link reports such bytes as one piece, at the first one's instant,
   so the model sees the pieces, not the line. `gap` is a `Duration` the test computes from the
-  route's baud: the model is not told the baud. 3.5 characters are `ms(3.65)` at 9600 baud with 10
+  route's baud: the model is told the firmware's rate only if it asks, with `configured`
+  ([below](#a-model-that-changes-its-line-rate)). 3.5 characters are `ms(3.65)` at 9600 baud with 10
   bits a character, as 8N1, and `ms(4.02)` with the 11 bits (parity, or two stop bits) the Modbus
   specification asks for.
 - `latency()` is `gap`, so that the board stops when a frame may have ended, and `quiet_until()`
@@ -262,6 +269,74 @@ class Slave(IdleFramedModel):
   it, `gap` after its last piece, as any other. A model of a part that loses what it heard with its
   power calls `drop()` from its `supply(on)` when `on` is false: the frame heard so far is
   forgotten, and `on_frame` never gets it.
+
+### A model that changes its line rate
+
+A modem told `AT+IPR=115200`, a GNSS receiver told `$PCAS01,5` or u-blox `CFG-PRT`, a bootloader
+that switches rate: the part answers the command at the old rate and sends everything after at the
+new one. A model does the same by giving each answer its rate, `(at, bytes, baud)`; a pair goes in
+at the profile's `baud`. Shortened from `tests/rate_switching.py`, the part
+`firmware/uart_rate_switch` is tested against
+([validation firmware](validation-firmware-user.md#uart_rate_switch)):
+
+```python
+from esp32tl import ReactiveModel
+from esp32tl.units import ms
+
+
+class RateSwitchingModem(ReactiveModel):
+    answer_after = ms(1)
+
+    def __init__(self):
+        self.rate = 9600
+        self.dropped = []
+        self._heard_at = None
+        self._line = b""
+
+    def transmitted(self, at, baud):
+        self._heard_at = baud  # the rate of what receive gets next
+
+    def receive(self, at, data):
+        echo = [(at + self.answer_after, data, self.rate)]
+        if self._heard_at is None or abs(self._heard_at - self.rate) > self.rate * 0.03:
+            return echo  # garbage at this rate: echoed, and no command
+        self._line += data
+        while b"\r\n" in self._line:
+            line, _, self._line = self._line.partition(b"\r\n")
+            echo.append((at + self.answer_after, b"\r\nOK\r\n", self.rate))
+            if line.startswith(b"AT+IPR="):
+                self.rate = int(line.removeprefix(b"AT+IPR="))  # from the next output on
+        return echo
+
+    def frame_errors(self, at, count, baud):
+        self.dropped.append((at, count, baud))  # the firmware listened at another rate
+
+    def supply(self, on):
+        if not on:
+            self.rate = 9600  # a power loss puts the part back at its default
+```
+
+- Each output goes in at its own rate, after what is already on the line: the `OK` to `AT+IPR`
+  goes in at 9600, and the next answer at 115200, however close together they are.
+- `transmitted(at, baud)` comes before each `receive`, with the rate the firmware's UART
+  transmitted at, `None` with none set. A model listening at 9600 tells from it that a command
+  came at 115200. The runner takes a byte as read at the right rate within 3 % of it, and a model
+  that compares rates does the same: the firmware's rate comes from its UART's clock divider, so it
+  need not be the round number the firmware asked for.
+- `configured(at, baud, transmits, receives)` comes at each change of the firmware's routes on the
+  wire, for a model that follows the rate the firmware receives at. Following it is the model's
+  choice: a pair goes in at the profile's `baud` whatever the firmware sets, so that a firmware
+  that sets the wrong rate meets the frame errors it would meet on a board.
+- `frame_errors(at, count, baud)` takes the frame errors the model's bytes met, and the run goes
+  on: here a firmware back from a power loss tries 115200 first, gets no answer, and falls back to
+  9600. Without the method, the first frame error fails the run with `uart.aux sends at 9600 baud
+  on GPIO 27, and the firmware's UART1 receives there at 115201 baud: 4 bytes dropped as frame
+  errors (frm_err)`: 115201 is what the ESP32's UART clock divider makes of 115200, and what the
+  runner reports.
+- Return types: a model that returns triples declares `receive` and `poll` as returning
+  `Iterable[Timed | TimedAtRate]`, which is what `Model` declares. A tap of the route records the
+  bytes without their rates, so a replay of that recording sends everything at the profile's `baud`
+  ([taps](run-report-user.md#what-a-tap-writes)).
 
 ## The GNSS receiver
 
@@ -349,7 +424,9 @@ $GPGGA,120001.00,,,,,0,00,99.99,,,,,,*64
   firmware needs a configuration to take effect (another sentence set, other talkers, another
   rate), or that depends on what a real receiver's full output does to the line, writes its own
   `Model` on `uart.gnss` ([a model of the test's](#a-model-of-the-tests-in-durations)), dated with
-  `board.utc_at(...)` ([a model that dates what it sends](#a-model-that-dates-what-it-sends)).
+  `board.utc_at(...)` ([a model that dates what it sends](#a-model-that-dates-what-it-sends)), and
+  for another line rate sending at the rate it was told
+  ([a model that changes its line rate](#a-model-that-changes-its-line-rate)).
 
 ## When the test gets it wrong
 

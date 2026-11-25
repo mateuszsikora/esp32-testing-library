@@ -416,7 +416,7 @@ A test imports from three modules, and from no other:
 
 | Module | What it holds |
 |---|---|
-| `esp32tl` | Every class, exception and constant a test names: the board (`Board`, `Boot`, `UptimeZero`, `Sleep`, `POWERON_RESET`, `DEEPSLEEP_RESET`, `RESET_REASONS`, `Condition`, `condition`), its profile (`BoardProfile`, `UartRoute`, `LineRoute`, `SdCardRoute`), the interfaces and what they return (`Console`, `ConsoleLine`, `Uart`, `Gnss`, `Modem`, `Lines`, `OutputLine`, `LineEvent`, `SdCard`, `CardImage`, `Wifi`, `EmulatedMacs` and `emulated_macs`, `Bluetooth`, `Tap`, ...), the sources and models (`Replay`, `Real`, `Model`, `ReactiveModel`, `IdleFramedModel`, `Timed`, `GnssReceiver`, `ModemModel`, `ModemCommand`, `ModemRestart`, `ModemPower`, `ModeChange`, `Protocol`, `AT`, `PMTK`, `UBX`, `GNSS`), the build and the flash (`Build`, `FlashSnapshot`, `Namespaces`, `Typed`, `u8` to `i64`), the network and its services (`Internet`, `LinkChange`, `Broker`, `Message`, `MqttClient`, `ConnectionEnd`, `TEST_CLIENT`, `Publication`, `HttpServer`, `HttpRequest`, `NtpExchange`, `DnsQuestion`, `TcpConnection`, `CertificateAuthority`, ...), Bluetooth (`Air`, `SppPeer`, `BluetoothDevice`, `ChannelEvent`, `WrittenLine`, `Refusal`, `Pairing`, `BlePeripheral`, `BleCentral`, `BleDevice`, `GattService`, `GattCharacteristic`, `Advertisement`, `LeConnection`, `Disconnection`, `GattRead`, `GattWrite`, `Notification`, `Subscription`, `LePairing`, `Discovery`, `DiscoveredService`, `DiscoveredCharacteristic`, `LeEvent`, ...) and the exceptions (`NeverHappened`, `RunEnded`, `BoardOff`, `SourceError`, `BackendError`, `PeerError`, `AirError`, `BleError`, `ConnectionEnded`, `NotReachable`, ...). `esp32tl.__all__` lists them all |
+| `esp32tl` | Every class, exception and constant a test names: the board (`Board`, `Boot`, `UptimeZero`, `Sleep`, `POWERON_RESET`, `DEEPSLEEP_RESET`, `RESET_REASONS`, `Condition`, `condition`), its profile (`BoardProfile`, `UartRoute`, `LineRoute`, `SdCardRoute`), the interfaces and what they return (`Console`, `ConsoleLine`, `Uart`, `Gnss`, `Modem`, `Lines`, `OutputLine`, `LineEvent`, `SdCard`, `CardImage`, `Wifi`, `EmulatedMacs` and `emulated_macs`, `Bluetooth`, `Tap`, ...), the sources and models (`Replay`, `Real`, `Model`, `ReactiveModel`, `IdleFramedModel`, `Timed`, `TimedAtRate`, `GnssReceiver`, `ModemModel`, `ModemCommand`, `ModemRestart`, `ModemPower`, `ModeChange`, `Protocol`, `AT`, `PMTK`, `UBX`, `GNSS`), the build and the flash (`Build`, `FlashSnapshot`, `Namespaces`, `Typed`, `u8` to `i64`), the network and its services (`Internet`, `LinkChange`, `Broker`, `Message`, `MqttClient`, `ConnectionEnd`, `TEST_CLIENT`, `Publication`, `HttpServer`, `HttpRequest`, `NtpExchange`, `DnsQuestion`, `TcpConnection`, `CertificateAuthority`, ...), Bluetooth (`Air`, `SppPeer`, `BluetoothDevice`, `ChannelEvent`, `WrittenLine`, `Refusal`, `Pairing`, `BlePeripheral`, `BleCentral`, `BleDevice`, `GattService`, `GattCharacteristic`, `Advertisement`, `LeConnection`, `Disconnection`, `GattRead`, `GattWrite`, `Notification`, `Subscription`, `LePairing`, `Discovery`, `DiscoveredService`, `DiscoveredCharacteristic`, `LeEvent`, ...) and the exceptions (`NeverHappened`, `RunEnded`, `BoardOff`, `SourceError`, `BackendError`, `PeerError`, `AirError`, `BleError`, `ConnectionEnded`, `NotReachable`, ...). `esp32tl.__all__` lists them all |
 | `esp32tl.units` | The units: `Duration`, `Speed`, `Distance`, `Rate`, `Heading`, `Position`, their constructors (`ms`, `seconds`, `km_h`, `m`, ...), the compass points and `about` ([units](models-user.md#units)) |
 | `esp32tl.recording` | The recording format: reading and writing a recording, and its `Recording`, `Header`, `Event` and `ClockSwitch` ([the recording format](../recording-format.md)) |
 
@@ -1590,11 +1590,28 @@ def test_the_firmware_talks_to_the_test_s_model_on_its_own_uart(board):
   stamped sooner than its latency, or something sent before the `quiet_until()` it gave, ends the
   run, with the link's error in the table below. A model that answers nothing returns `[]` from
   `receive`, and `None` from `latency()`.
-- A model with a fifth method, `supply(on)`, of either kind, is a part on the board's supply, as
-  the GNSS receiver and the modem are: `board.power_off()` calls `supply(False)`, and the
-  `power_on()` after it `supply(True)`, at the board's time. It starts with power: the first
-  `power_on()` calls nothing. A model without it keeps going through a power cycle; what it sends
-  while the chip is off is lost.
+- What a model sends goes into the chip at the profile's `baud` for the route. An output may give
+  its own line rate as a third item, `(at, bytes, baud)` (a `TimedAtRate`, `(Duration, bytes,
+  int)`; `(t, bytes, baud)` in nanoseconds), with `baud` a positive `int`, and goes in at that rate.
+  Each output has its own rate, so a model can answer a rate command such as `AT+IPR=115200` at the
+  old rate and send its next output at the new one: the runner sends each `uart_rx` at its own
+  rate, after what is already on the line. A model's rate is never the firmware's unless it says
+  so: a pair always goes in at the profile's `baud`, so a firmware that sets the wrong rate still
+  meets the frame errors it would meet on a board. Declare `receive` and `poll` as returning
+  `Iterable[Timed | TimedAtRate]` when they return triples.
+- A model may define any of these optional methods, of either kind; each is called only when the
+  model has it, as `supply` is. A `Model` gets `Duration`s, a source in nanoseconds `int`s:
+
+  | Method | Called | What it is for |
+  |---|---|---|
+  | `supply(on)` | `board.power_off()` calls `supply(False)`, and the `power_on()` after it `supply(True)`, at the board's time. It starts with power: the first `power_on()` calls nothing | A part on the board's supply, as the GNSS receiver and the modem are. A model without it keeps going through a power cycle; what it sends while the chip is off is lost |
+  | `transmitted(at, baud)` | Before each `receive` on a UART, with the rate of the transmission whose bytes `receive` gets: the firmware's UART's rate, `None` while it has none set | A part that listens at one rate and must tell that a command came at another, to ignore it or take it as garbage |
+  | `configured(at, baud, transmits, receives)` | When the firmware's routes on the wire change: `transmits` whether a UART's TX reaches the route's `tx`, `receives` whether a UART's RX listens on its `rx`, `baud` the route's rate, `None` while unset; the receiving route's when two ports share the wire | A part that follows the rate the firmware receives at |
+  | `frame_errors(at, count, baud)` | When `count` bytes the model sent were dropped as frame errors on the route's RX pin (the runner's `frm_err` warning, merged), `at` the first drop; `baud` is the firmware's rate there, `None` with none set | A part, or a test, that searches for the firmware's rate, or a firmware that searches for the part's. In the chip each dropped byte raises the UART's frame-error interrupt and never reaches the FIFO, which is how the firmware sees the wrong rate. Without this method a `frm_err` fails the run (below) |
+
+  Raising in any of them fails the run, as raising in `receive` does. The warning goes into the
+  test report either way. A model that changes its rate in `tests/test_uart_rates.py`:
+  [models](models-user.md#a-model-that-changes-its-line-rate).
 - The model is called from the link's thread, inside the test's waits, while the runner waits for
   its answer: it must not block, and must not wait on the wall clock.
 - What a model may read from the board inside its calls, given the board in its constructor:
@@ -1633,7 +1650,9 @@ def test_the_firmware_talks_to_the_test_s_model_on_its_own_uart(board):
   |---|---|---|
   | Raises in a method | `uart.aux.receive raised ValueError: ...`, and so for `poll`, `quiet_until` and `latency` | The same |
   | Is a `Model` behind a proxy, which is called in nanoseconds | — | `uart.aux.receive raised TypeError: unsupported operand type(s) for +: 'int' and 'Duration'`, or whatever the model's arithmetic on an `int` raises: give the route the `Model` itself, or a proxy whose `__class__` is the model's, which `isinstance` sees |
-  | Returns from `receive` or `poll` something that is not a `(t, bytes)` pair | `uart.aux.receive returned (2000500, b'OK'), not a (Duration, bytes) pair` | `uart.aux.receive returned [1, 2], not a (t_ns, bytes) pair`, `t` not an `int` |
+  | Returns from `receive` or `poll` something that is not a `(t, bytes)` pair or a `(t, bytes, baud)` triple, `baud` a positive `int` | `uart.aux.receive returned (2000500, b'OK'), not a (Duration, bytes) pair or a (Duration, bytes, baud) triple`; `uart.aux.poll returned (seconds(0.001), b'OK', 0), not a (Duration, bytes) pair or a (Duration, bytes, baud) triple` | `uart.aux.receive returned [1, 2], not a (t_ns, bytes) pair or a (t_ns, bytes, baud) triple`, `t` not an `int` |
+  | Sends bytes the firmware's UART drops as frame errors, and has no `frame_errors` | `uart.aux sends at 9600 baud on GPIO 27, and the firmware's UART1 receives there at 115201 baud: 4 bytes dropped as frame errors (frm_err)`: of the rates the model's bytes went in at by then, the last the firmware's does not read (more than 3 % off), or the last of all; the firmware's as its UART's clock divider gives it. A warning without its count of bytes ends the run so even for a model with `frame_errors` | The same |
+  | Raises in `frame_errors`, `transmitted` or `configured` | `uart.aux.frame_errors raised ValueError: 4 bytes lost`, and so for the other two | The same |
   | Stamps an answer sooner than its `latency()`, or sends before the `quiet_until()` it gave | `uart.aux sent bytes stamped 0.0020005 s in the turn at 0.0030005 s: it answered sooner than its latency, or sent past its quiet_until` | `uart.aux sent bytes stamped {t} ns in the turn at {now} ns: ...`, the rest the same |
   | Returns from `quiet_until()` what is not of its kind | `uart.aux.quiet_until returned 1.5, not a Duration` | `uart.aux.quiet_until returned 1.5, not nanoseconds` |
   | Returns from `quiet_until()` a time not after the turn | `uart.aux is quiet until 0.002 s, not after the turn at 0.002 s: what it sends by then belongs in this turn` | `uart.aux is quiet until {t} ns, not after the turn at {now} ns: ...`, the rest the same |

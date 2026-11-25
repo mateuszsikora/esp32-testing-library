@@ -132,7 +132,7 @@ the containers, and once inside each, which builds. With `IDF_LOCAL=1` it runs o
      ([`http_request`](#http_request)), `pppos_client` what `firmware/pppos_client/prepare.py`
      prints ([Pinned esp-protocols source](#pinned-esp-protocols-source)), `nmea_reader` is `$PWD/firmware/nmea_reader`,
      `gpio_echo` `$PWD/firmware/gpio_echo`, `sd_remount` `$PWD/firmware/sd_remount`, `modem_at`
-     `$PWD/firmware/modem_at`, `modem_recovery` `$PWD/firmware/modem_recovery`, and `nvs_reader` `$PWD/firmware/nvs_reader`, the working directory being the repository's
+     `$PWD/firmware/modem_at`, `modem_recovery` `$PWD/firmware/modem_recovery`, `nvs_reader` `$PWD/firmware/nvs_reader`, and `uart_rate_switch` `$PWD/firmware/uart_rate_switch`, the working directory being the repository's
      root: in
      the container `/project/firmware/nmea_reader`, in a local build the checkout's own path), the
      build directory `$out/IMAGE/build`, or `$out/IMAGE/build-CHIP` for `IMAGE@CHIP`, whose
@@ -174,8 +174,7 @@ next build is still incremental; the marker, removed first, is what says it fini
 
 The Makefile's `firmware` target runs `FIRMWARE_OUT= firmware/build.sh`; the pattern rule
 `firmware/%/build/esp32tl-built` runs `FIRMWARE_OUT= firmware/build.sh $*`, and `test` depends on
-`$(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)` with `FIRMWARE_IMAGES := hello_world
-nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake reset_reasons deep_sleep bt_spp_initiator bt_spp_initiator_psram`. `determinism` depends on
+`$(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)` with `FIRMWARE_IMAGES := hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake reset_reasons deep_sleep bt_spp_initiator bt_spp_initiator_psram hello_world_8mb uart_rate_switch`. `determinism` depends on
 the markers of `nmea_reader`, `pppos_client`, `mqtt_session`, `http_request` and `bt_spp_initiator`,
 and of the `position_tracker` example. The rule has no prerequisites, so make rebuilds
 an image only when its marker is missing: an edit to `firmware/nmea_reader/` needs `make firmware`, or
@@ -191,7 +190,7 @@ takes the rule whose pattern matches: `firmware/%/build/esp32tl-built` never mat
 `build-CHIP` directory, nor the reverse. `make firmware` runs `firmware/build.sh --chips` between
 the classic chip's images and the PlatformIO ones.
 
-`nmea_reader`, `gpio_echo`, `sd_remount`, `modem_at`, `mqtt_session` and `nvs_reader` are built from the read-only `/project`
+`nmea_reader`, `gpio_echo`, `sd_remount`, `modem_at`, `mqtt_session`, `nvs_reader` and `uart_rate_switch` are built from the read-only `/project`
 mount like any other project. They take no components from the component manager, and with `sdkconfig` and the
 build in the build directory ESP-IDF v5.3.6 writes nothing into their directories.
 
@@ -385,6 +384,31 @@ dialogue without that UART startup wait. It sends no PPP data. `tests/test_modem
 checks its dialogue, GPIO power cycle, changes made on the test clock and identical taps from two
 runs. The command subset is the one this firmware sends; new firmware commands should extend that
 validation and the model's documented answers together.
+
+## `uart_rate_switch`
+
+`firmware/uart_rate_switch/` is an ESP-IDF project with `esp_driver_uart` and `nvs_flash`.
+`project_of` maps `uart_rate_switch` to `$PWD/firmware/uart_rate_switch`; its build produces
+`uart_rate_switch.bin` and `uart_rate_switch.elf`, and `make test` includes its completion marker
+among `FIRMWARE_IMAGES`.
+
+`app_main` calls `nvs_flash_init`, opens the namespace `rate_switch` with `NVS_READWRITE` and reads
+the `u32` `baud`, absent on a fresh flash. It configures UART1 at 9600 baud, 8N1, on TX 26 and
+RX 27, and installs the driver with a 1024-byte RX buffer and no TX buffer. The rates it tries are
+the stored one, when there is one other than 9600, then 9600. For each it calls `set_rate`:
+`uart_wait_tx_done` (100 ms), `uart_set_baudrate` and `uart_flush_input`, so that what was being
+sent goes out at the rate before. `command(text)` flushes the input, writes `text` and CR LF, and
+reads one byte at a time until the reply holds `\r\nOK\r\n` or 500 ms (`ANSWER_MS`) have passed
+since the write, a deadline from `xTaskGetTickCount`, so bytes that keep coming do not extend
+it. The reply buffer holds 127 bytes, enough for the echo and the `OK`. After `AT+IPR=115200` and
+its `OK` it switches to 115200 and sends `AT`; once that is answered it writes 115200 to `baud`
+and commits. Each step is a console line with `fflush(stdout)`; `idle` prints the last one and
+waits in one-second delays for ever.
+
+The firmware does not check the rate esp32sim gives the UART: `uart_set_baudrate(115200)` gives a
+divider of 694 7/16 at the 80 MHz APB clock, which the runner reports as 115201 baud, within the
+3 % that `matches_baud` allows. `tests/test_uart_rates.py` checks the switch, the search after a
+power loss, and the run that fails on its frame errors without `frame_errors`.
 
 ## `nvs_reader`
 
@@ -878,7 +902,7 @@ top of each build directory, `config/sdkconfig.json`, and the `.bin` and `.elf` 
 |---|---|---|---|
 | `IDF_VERSION` | script constant | `v5.3.6` | the ESP-IDF tag of the container |
 | `CONTAINER` | script constant | `espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070` | the image the build runs in, pinned by digest (a multi-arch index) |
-| `IMAGES` | script constant | `hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep bt_spp_initiator bt_spp_initiator_psram` | the images, in build order; `project_of` maps each to its project |
+| `IMAGES` | script constant | `hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake reset_reasons deep_sleep bt_spp_initiator bt_spp_initiator_psram hello_world_8mb uart_rate_switch` | the images, in build order; `project_of` maps each to its project |
 | `FIRMWARE_OUT` | environment | `firmware/` | where `IMAGE/build/` goes; empty means the default; `/out` inside the container |
 | `IDF_LOCAL` | environment | unset | `1` builds with the ESP-IDF of the calling shell |
 | `ESP32TL_CONTAINER` | environment, set by the host side | unset | marks the container side and names the image it records |
@@ -904,7 +928,7 @@ of PlatformIO's core directory hashes the same lines. Changing any of them, or a
 
 | Message | Cause |
 |---|---|
-| `unknown image 'NAME'; the images are: hello_world nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request persistence ota_state timer_wake deep_sleep bt_spp_initiator bt_spp_initiator_psram` | an argument not in `IMAGES`; nothing written |
+| `unknown image 'NAME'; the images are: hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake reset_reasons deep_sleep bt_spp_initiator bt_spp_initiator_psram hello_world_8mb uart_rate_switch` | an argument not in `IMAGES`; nothing written |
 | `ESP32TL_CONTAINER is set outside a container; unset it` | `ESP32TL_CONTAINER` set and no `/.dockerenv`; nothing written |
 | `IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first` | `IDF_LOCAL=1` without `idf.py` on `PATH` or without `IDF_PATH`; nothing written |
 | `needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF` | no `docker` on `PATH`; nothing written |

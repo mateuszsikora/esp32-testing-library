@@ -11,7 +11,15 @@ from typing import Protocol, TypeVar, runtime_checkable
 from esp32tl import recording
 from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import SourceError
-from esp32tl.link.boardlink import Direction, Interface, LinkError, Output, Wire
+from esp32tl.link.boardlink import (
+    Direction,
+    Interface,
+    LinkError,
+    Output,
+    OutputAtRate,
+    Wire,
+    is_baud,
+)
 from esp32tl.matching import Protocol as ReplayProtocol
 from esp32tl.report import RunLog
 from esp32tl.sources.model import InNanoseconds, Model, in_nanoseconds
@@ -23,11 +31,12 @@ from esp32tl.units import Duration
 
 class Source(Protocol):
     """What drives a UART from its far end: a replay, a model or a real device. The methods are
-    those of the link's `Interface`, without the wire."""
+    those of the link's `Interface`, without the wire. An output is a `(t, bytes)` pair, which
+    goes in at the route's `baud`, or a `(t, bytes, baud)` triple, which goes in at its own."""
 
-    def receive(self, t: int, data: bytes) -> Iterable[Output]: ...
+    def receive(self, t: int, data: bytes) -> Iterable[Output | OutputAtRate]: ...
 
-    def poll(self, now: int) -> Iterable[Output]: ...
+    def poll(self, now: int) -> Iterable[Output | OutputAtRate]: ...
 
     def quiet_until(self) -> int | None: ...
 
@@ -58,11 +67,33 @@ class Arriving(Protocol):
 
 @runtime_checkable
 class RateBound(Protocol):
-    """A source that cannot take what the firmware transmits at any rate: a real device, behind a
-    port whose rate is fixed for the run."""
+    """A source told the rate of each transmission before it hears it: a real device, behind a
+    port whose rate is fixed for the run, which refuses another; or a model of the test's that
+    listens at one rate, and can tell what came at another."""
 
     def transmitted(self, t: int, baud: int | None) -> None:
-        """The firmware transmits at `baud` next, `None` with none set. Raises to fail the run."""
+        """The firmware transmits at `baud` next, the bytes of the next `receive`, `None` with
+        none set. Raises to fail the run."""
+        ...
+
+
+@runtime_checkable
+class Configured(Protocol):
+    """A source told each change of the firmware's routes on its wire, as the link is."""
+
+    def configured(self, t: int, baud: int | None, transmits: bool, receives: bool) -> None:
+        """The routes changed at `t`: `Interface.configured`. Raises to fail the run."""
+        ...
+
+
+@runtime_checkable
+class TakesFrameErrors(Protocol):
+    """A source whose bytes may be dropped as frame errors without failing the run: one that
+    searches for the firmware's rate, or follows a firmware that searches for its own."""
+
+    def frame_errors(self, t: int, count: int, baud: int | None) -> None:
+        """`count` bytes it sent from `t` on were dropped as frame errors on its RX pin: the
+        firmware's UART receives there at `baud`, `None` with none set. Raises to fail the run."""
         ...
 
 
@@ -154,9 +185,12 @@ class Uart(Interface):
     def model(self, source: S) -> S:
         """Puts `source`, a model the test wrote, at the far end: what the firmware transmits
         goes to its `receive`, and what it returns, or sends from `poll`, goes into the chip at
-        its own time. One that is `Supplied` loses its power with the board's supply, and gets it
-        back. A `Model` states its times in `Duration`s, and the link's errors about them are in
-        `Duration`s too (`instant`); any other source in nanoseconds. Returns `source`."""
+        its own time, at the route's `baud` or at the rate an output gives. One that is
+        `Supplied` loses its power with the board's supply, and gets it back; one that is
+        `RateBound` or `Configured` is told the firmware's rates, and one that
+        `TakesFrameErrors` gets them, and the run goes on. A `Model` states its times in
+        `Duration`s, and the link's errors about them are in `Duration`s too (`instant`); any
+        other source in nanoseconds. Returns `source`."""
         missing = [m for m in SOURCE_METHODS if not callable(getattr(source, m, None))]
         if missing:
             raise TypeError(
@@ -257,7 +291,7 @@ class Uart(Interface):
         if not isinstance(source, Model):
             return source
         if self._adapter is None or self._adapter.model is not source:
-            self._adapter = in_nanoseconds(source, self.name, LinkError)
+            self._adapter = in_nanoseconds(source, self.name, LinkError, rates=True)
         return self._adapter
 
     def instant(self, t: int) -> str:
@@ -265,7 +299,7 @@ class Uart(Interface):
         states its times so; nanoseconds otherwise."""
         return str(Duration(t)) if isinstance(self.source, Model) else super().instant(t)
 
-    def receive(self, t: int, direction: Direction, data: bytes) -> Iterable[Output]:
+    def receive(self, t: int, direction: Direction, data: bytes) -> Iterable[Output | OutputAtRate]:
         self._crossed(t, "out", data)
         if self._driving is None:
             return ()
@@ -281,26 +315,40 @@ class Uart(Interface):
                 self._crossed(t, "out", data)
                 raise
 
+    def configured(self, t: int, baud: int | None, transmits: bool, receives: bool) -> None:
+        if isinstance(self._driving, Configured):
+            self._driving.configured(t, baud, transmits, receives)
+
+    @property
+    def takes_frame_errors(self) -> bool:
+        return isinstance(self._driving, TakesFrameErrors)
+
+    def frame_errors(self, t: int, count: int, baud: int | None) -> None:
+        if isinstance(self._driving, TakesFrameErrors):
+            self._driving.frame_errors(t, count, baud)
+
     def arrive(self, now: int) -> None:
         if isinstance(self._driving, Arriving):
             self._driving.arrive(now)
 
-    def poll(self, now: int) -> Iterable[Output]:
+    def poll(self, now: int) -> Iterable[Output | OutputAtRate]:
         return () if self._driving is None else self._sent(self._driving.poll(now))
 
-    def _sent(self, outputs: Iterable[Output]) -> list[Output]:
-        """`outputs`, read, each that is a `(t, bytes)` pair, `t` nanoseconds from 0, recorded as
-        what the far end gave: the link refuses the others, and fails the run. The link may
-        refuse a pair too, one stamped before its turn, and that fails the run as well."""
+    def _sent(self, outputs: Iterable[Output | OutputAtRate]) -> list[Output | OutputAtRate]:
+        """`outputs`, read, each that is a `(t, bytes)` pair or a `(t, bytes, baud)` triple, `t`
+        nanoseconds from 0, recorded as what the far end gave, without its rate: the link refuses
+        the others, and fails the run. The link may refuse a good one too, one stamped before its
+        turn, and that fails the run as well."""
         outputs = list(outputs)
         for output in outputs:
-            if isinstance(output, tuple) and len(output) == 2:
-                t, data = output
+            if isinstance(output, tuple) and len(output) in (2, 3):
+                t, data = output[0], output[1]
                 if (
                     isinstance(t, int)
                     and not isinstance(t, bool)
                     and t >= 0
                     and isinstance(data, bytes)
+                    and (len(output) == 2 or is_baud(output[2]))
                 ):
                     self._crossed(t, "in", data)
         return outputs

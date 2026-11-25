@@ -1,0 +1,11 @@
+# uart_rate_switch's wires: UART1 on GPIO 26 and 27, modem_at's, named `aux` so that no model
+# esp32tl ships is behind it, at 9600 baud, the rate the part behind it starts at.
+name = "aux-uart-9600"
+chip = "esp32"
+flash_mb = 4
+
+[uart.aux]
+port = 1
+tx = 26
+rx = 27
+baud = 9600

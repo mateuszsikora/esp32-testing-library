@@ -564,7 +564,7 @@ the same instants; when to prefer nanoseconds is said there.
 | Method | Called | Returns |
 |---|---|---|
 | `receive(at, data)` | When the device writes `data` on the channel, at `at`, the instant it arrives | The answers, `(at, bytes)` pairs, each at `at` or later |
-| `poll(now)` | At every instant the air stops at, and possibly more than once at one | What it sends unprompted: `(at, bytes)` pairs, each at `now` or later |
+| `poll(now)` | At every instant the air stops at, and possibly more than once at one | What it sends unprompted: `(at, bytes)` pairs, each at `now` or later. A channel has no line rate: the `(at, bytes, baud)` triple a UART's source may give is refused, as anything else that is not a pair is ([below](#when-something-goes-wrong)) |
 | `quiet_until()` | Whenever the air looks for its next instant | The next time it has something to send unprompted, later than `now`; `None` for nothing |
 | `latency()` | Never, by the peer | The shortest time in which it answers, as a UART's source says it |
 
@@ -638,7 +638,7 @@ On the air:
 | `bench: source.receive raised KeyError: 'model bug'` | `AirError`, from `PeerError`, from the source's exception | The source raised, in `receive`, `poll`, `quiet_until` or `supply` |
 | `bench: source.receive sent b'too early' at -0.000000001 s, and the air is at 0 s: it cannot send into the past` | `AirError`, from `PeerError` | The source returned a time before the instant it was asked at |
 | `bench: source.receive returned (0, 'text'), not a (t_ns, bytes) pair` | `AirError`, from `PeerError` | The source returned something else |
-| `bench: source.receive returned (seconds(0), 'text'), not a (Duration, bytes) pair` | `AirError`, from `PeerError` | A `Model` returned something else |
+| `bench: source.receive returned (seconds(0), 'text'), not a (Duration, bytes) pair` | `AirError`, from `PeerError` | A `Model` returned something else, a triple with a line rate among them: `bench: source.receive returned (seconds(0), b'text', 9600), not a (Duration, bytes) pair` |
 | `bench: source.quiet_until returned 1.5, not nanoseconds` | `AirError`, from `PeerError` | `quiet_until` returned something other than an `int` or `None` |
 | `bench: source.quiet_until returned 1.5, not a Duration` | `AirError`, from `PeerError` | A `Model`'s `quiet_until` returned something other than a `Duration` or `None` |
 | `bench: source.quiet_until returned 0 s, not after the air's 0 s: what it sends by then belongs in the poll at 0 s` | `AirError`, from `PeerError` | `quiet_until` returned a time not after the air's |

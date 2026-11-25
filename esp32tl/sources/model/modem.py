@@ -15,7 +15,7 @@ from esp32tl.boards import LineRoute
 from esp32tl.interfaces import SourceError
 from esp32tl.interfaces.history import History
 from esp32tl.interfaces.uart import Source
-from esp32tl.link.boardlink import Output
+from esp32tl.link.boardlink import Output, OutputAtRate
 from esp32tl.net import Internet, LinkCause
 from esp32tl.net.ntp import DEFAULT_UTC
 from esp32tl.units import Duration, minutes, number, shown
@@ -405,7 +405,7 @@ class Modem:
                     payload.clear()
                     self._data_received.append((Duration(t), chunk))
                     if self.data is not None:
-                        outputs.extend(self.data.receive(t, chunk))
+                        outputs.extend(_at_modem_rate(self.data.receive(t, chunk)))
 
             for byte in data:
                 if self._skip_lf:
@@ -556,7 +556,11 @@ class Modem:
             if self._escape_at is not None and now >= self._escape_at:
                 self._end_data("escape", now)
                 return [*queued, (now, b"\r\nOK\r\n")]
-            polled = self.data.poll(now) if self.data is not None and self._polled() else ()
+            polled = (
+                _at_modem_rate(self.data.poll(now))
+                if self.data is not None and self._polled()
+                else []
+            )
             return [*queued, *polled]
 
     def quiet_until(self) -> int | None:
@@ -585,3 +589,17 @@ class Modem:
         self._escape_at = None
         if isinstance(self.data, Internet):
             self.data.stop(at, link or LINK_CAUSES[cause])
+
+
+def _at_modem_rate(outputs: Iterable[Output | OutputAtRate]) -> list[Output]:
+    """What the data peer sends, read: it goes into the chip through the modem's data mode, at
+    the modem's rate, so an output that gives a rate of its own is refused."""
+    pairs: list[Output] = []
+    for output in outputs:
+        if isinstance(output, tuple) and len(output) == 3:
+            raise TypeError(
+                f"the modem's data peer returned {output!r:.80}: what it sends goes in at the"
+                " modem's rate, and has no line rate of its own"
+            )
+        pairs.append(output)
+    return pairs

@@ -636,12 +636,19 @@ def test_run_keeps_reading_when_the_runner_has_closed_its_reading_end() -> None:
     assert runner.link.error is None
 
 
+NOT_AN_OUTPUT = "not a (t_ns, bytes) pair or a (t_ns, bytes, baud) triple"
+
+
 @pytest.mark.parametrize(
     ("answer", "error"),
     [
-        (b"OK", "gnss.receive returned b'OK', not a (t_ns, bytes) pair"),
-        ((1.5, b"OK"), "gnss.receive returned (1.5, b'OK'), not a (t_ns, bytes) pair"),
-        ((10, "OK"), "gnss.receive returned (10, 'OK'), not a (t_ns, bytes) pair"),
+        (b"OK", f"gnss.receive returned b'OK', {NOT_AN_OUTPUT}"),
+        ((1.5, b"OK"), f"gnss.receive returned (1.5, b'OK'), {NOT_AN_OUTPUT}"),
+        ((10, "OK"), f"gnss.receive returned (10, 'OK'), {NOT_AN_OUTPUT}"),
+        ((10, b"OK", 0), f"gnss.receive returned (10, b'OK', 0), {NOT_AN_OUTPUT}"),
+        ((10, b"OK", True), f"gnss.receive returned (10, b'OK', True), {NOT_AN_OUTPUT}"),
+        ((10, b"OK", 9600.0), f"gnss.receive returned (10, b'OK', 9600.0), {NOT_AN_OUTPUT}"),
+        ((10, b"OK", 9600, 1), f"gnss.receive returned (10, b'OK', 9600, 1), {NOT_AN_OUTPUT}"),
     ],
 )
 def test_an_answer_that_is_not_a_time_and_bytes_names_the_interface(

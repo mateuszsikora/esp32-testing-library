@@ -354,6 +354,9 @@ class Faulty(Echo):
             raise KeyError("model bug")
         if self.how == "pair":
             return [(t, "text")]  # type: ignore[list-item]
+        if self.how == "rated":
+            # a channel has no line rate: what a UART takes is refused
+            return [(t, b"text", 9600)]  # type: ignore[list-item]
         if self.how == "empty":
             return [(t, b""), (t, b"done\r")]
         return super().receive(t, data)
@@ -386,6 +389,11 @@ def write_hello(air: Air, esp32: Initiator, name: str = "peer") -> None:
         ),
         ("raises", "bench: source.receive raised KeyError: 'model bug'", KeyError),
         ("pair", "bench: source.receive returned (0, 'text'), not a (t_ns, bytes) pair", None),
+        (
+            "rated",
+            "bench: source.receive returned (0, b'text', 9600), not a (t_ns, bytes) pair",
+            None,
+        ),
     ],
 )
 def test_a_source_that_gets_its_answer_wrong_fails_the_air_naming_the_peer(

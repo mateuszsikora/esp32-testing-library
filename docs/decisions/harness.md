@@ -3150,26 +3150,41 @@ that names both rates.
 **Postponed:** firmware that negotiates its device's rate, as a GNSS driver that switches a
 receiver to 115200 baud does, until an example needs it.
 
-## A model answers at the profile's baud, not at the rate the firmware set
+## A model gives each output its own line rate, and changes rate only when it says so
 
-Status: postponed (#198)
+Status: decided (#334)
 
-A model on a route, esp32tl's or the test's, hears whatever the firmware transmits, at any rate, and
-answers at the board profile's `baud` (`Wire.baud`); a firmware that receives at another rate, more
-than 3 % off, loses the answers as frame errors, and the run fails on them
-([what a profile's baud does](../features/board-profiles-user.md#what-a-routes-baud-does)). A
-firmware that takes its rate from NVS is tested at a rate the test has a profile for: one local
-profile per rate. That is the way round until a consumer needs a model to follow the firmware's
-rate. The link already learns the firmware's receiving rate from `uart_cfg`
-([protocol 5.3](../protocol.md#53-uart_cfg-ext)), so a model's route could put its bytes in at
-that rate instead of the wire's; left to decide then is whether the model or the profile asks for
-it, and what a model that times its frames by a silence worked out for one rate does at another. A
-replay and a real device keep the profile's rate: a recording carries none, and the port runs at
-it.
+A model on a route hears whatever the firmware transmits, at any rate, and what it sends goes in at
+the board profile's `baud` (`Wire.baud`) unless an output gives its own: `(t, bytes, baud)`, a
+`TimedAtRate` for a `Model`. The rate is per output, so a model answers a rate command such as
+`AT+IPR=115200` at the old rate and sends its next output at the new one; the runner already paces
+each `uart_rx` at its own rate, after what is on the line ([protocol 5.10](../protocol.md#510-uart_rx)).
+A model learns the firmware's rates only if it asks, with optional methods the link calls when the
+model has them: `transmitted(at, baud)`, the rate of each transmission it hears, and
+`configured(at, baud, transmits, receives)`, each change of the routes on its wire. A
+`frm_err` on the route's RX pin fails the run, as before, unless the model has
+`frame_errors(at, count, baud)`, which takes it, and the run goes on: a model that searches for the
+firmware's rate, or a firmware that searches for the part's after a power loss, meets frame errors
+as part of what is tested ([what a profile's baud does](../features/board-profiles-user.md#what-a-routes-baud-does)).
+The change is in the harness only: the wire, the runner and esp32sim stay as they were. esp32tl's
+own GNSS receiver and modem keep the profile's rate; teaching them a rate command is a follow-up.
+A replay and a real device keep the profile's rate too: a recording carries none, and the port runs
+at it.
 
-**Rejected:** making it the default for every model, because a model that answers at whatever rate
-the firmware set would hide a firmware that sets the wrong one, which the device it stands for
-would not understand and the frame errors now catch.
+The adapter that turns a `Model` into a source in nanoseconds has each optional method only when
+the model has it, from a class made once for each set of methods, because the route finds them with
+`isinstance` on `runtime_checkable` protocols, which ask only whether a method is there.
+
+**Rejected:** following the firmware's rate by default, for every model, because a model that
+answers at whatever rate the firmware set would hide a firmware that sets the wrong one, which the
+device it stands for would not understand and the frame errors now catch. Also rejected: one
+`line_rate()` per source, asked at every turn, because a model could not then send an answer at the
+old rate and the next output at the new one in one turn; sixteen subclasses of the adapter written
+out by hand, one for each combination of the four optional methods, because each new method would
+double them; flags on the adapter in place of `isinstance`, because the route and the peer already
+find `supply` that way, and a second mechanism beside it would be one more to keep in step; and
+frame errors that never fail the run, because a mismatch would then show up later as a timeout
+with no explanation.
 
 ## A real source keeps at most 50 ms of bytes waiting on its line, and drops the oldest
 

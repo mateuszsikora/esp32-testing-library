@@ -279,7 +279,8 @@ by a real device:
 | At the far end | What it sends goes in at | The firmware transmits at another rate |
 |---|---|---|
 | Nothing | It sends nothing | Heard, and answered by nothing |
-| A model: esp32tl's GNSS receiver or modem, or the test's own ([a UART's own model](pytest-plugin-user.md#a-uarts-own-model)) | The profile's `baud` | Heard: a model is not told the rate, and gets the bytes as they are |
+| esp32tl's GNSS receiver or modem | The profile's `baud` | Heard: the model gets the bytes as they are |
+| A model of the test's ([a UART's own model](pytest-plugin-user.md#a-uarts-own-model)) | The profile's `baud`, unless an output gives its own, `(at, bytes, baud)` | Heard. The model is told the rate when it asks: `transmitted(at, baud)` before each `receive`, and `configured(...)` at each route change |
 | A replay ([replay](replay-user.md)) | The profile's `baud`: a recording carries no baud | Heard, and matched against the recording |
 | A real device ([real source](real-source-user.md)) | The profile's `baud`: the host port runs at it | Fails the run at that byte: `uart.gnss.transmitted raised SourceError: uart.gnss: the firmware transmits at {baud} baud, and the serial port {port} runs at {rate} baud` |
 
@@ -287,11 +288,17 @@ A firmware that receives at another rate than the profile's, more than 3 % off, 
 end sends as frame errors, and the run fails at the first of them, whatever the far end is:
 `the link failed: uart.aux sends at 115200 baud on GPIO 27, and the firmware's UART1 receives
 there at 9600 baud: 6 bytes dropped as frame errors (frm_err)`
-([protocol 5.8](../protocol.md#58-warn-ext)). So the profile's `baud` must be the rate the
+([protocol 5.8](../protocol.md#58-warn-ext)): the far end's rate is the last one its bytes went in
+at that the firmware's does not read, when a model gave its outputs rates of their own.
+So, with a replay, a real device or esp32tl's models, the profile's `baud` must be the rate the
 firmware sets in the test: a firmware that takes its rate from NVS, and a test that writes another
 one there with `board.nvs(...)`, needs a profile with that rate, one local profile per rate it
-tests. A model that answers at the rate the firmware set, whatever it is, is not there yet
-([decision](../decisions/harness.md#a-model-answers-at-the-profiles-baud-not-at-the-rate-the-firmware-set)).
+tests. A model of the test's can do what a part that changes rate does: answer a rate command at
+the old rate and send what follows at the new one, follow the rate the firmware receives at, and
+take its frame errors with `frame_errors(at, count, baud)`, so that the run goes on while the
+firmware searches for the part's rate
+([a model that changes its line rate](models-user.md#a-model-that-changes-its-line-rate),
+[decision](../decisions/harness.md#a-model-gives-each-output-its-own-line-rate-and-changes-rate-only-when-it-says-so)).
 
 Relative paths always start at the **test file's directory**, including markers inherited from
 a class or module, or a `pytestmark` that a test module imports from a conftest. They do not start

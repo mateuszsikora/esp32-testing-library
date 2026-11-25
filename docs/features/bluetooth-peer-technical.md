@@ -688,8 +688,8 @@ None. `bumble` is a dependency of esp32tl, pinned exactly in `pyproject.toml`
 | `{kind}: address is {address!r}, not a Bluetooth address, as 00:00:00:00:5B:01` | `PeerError` | `_address`: not a `str` of six colon-separated pairs of hex digits |
 | `{kind}: address {address} is another device's on the air: give each its own` | `PeerError` | A controller on the link has that public address |
 | `{name}: source.{method} raised {type}: {error}` | `PeerError`, from the source's exception, raised on the air | `_call`, for `receive`, `poll`, `quiet_until` and `supply` |
-| `{name}: source.{method} returned {output!r:.80}, not a (t_ns, bytes) pair` | `PeerError`, raised on the air | `_queue` |
-| `{name}: source.{method} returned {output!r:.80}, not a (Duration, bytes) pair` | `_Misreturned`, a `PeerError`, raised on the air | `InNanoseconds._outputs`, for a `Model` |
+| `{name}: source.{method} returned {output!r:.80}, not a (t_ns, bytes) pair` | `PeerError`, raised on the air | `_queue`, which takes pairs only: a `(t, bytes, baud)` triple, which a UART's source may give, is refused too, since a channel has no line rate |
+| `{name}: source.{method} returned {output!r:.80}, not a (Duration, bytes) pair` | `_Misreturned`, a `PeerError`, raised on the air | `InNanoseconds._outputs`, for a `Model`: the peer's adapter is made without `rates`, so a `TimedAtRate` is refused as well |
 | `{name}: source.{method} sent {data!r:.80} at {t}, and the air is at {now}: it cannot send into the past` | `PeerError`, raised on the air | `_queue` |
 | `{name}: source.quiet_until returned {bound!r}, not nanoseconds` | `PeerError`, raised on the air | `quiet_until`: not an `int`, or a `bool` |
 | `{name}: source.quiet_until returned {bound!r}, not a Duration` | `_Misreturned`, a `PeerError`, raised on the air | `InNanoseconds.quiet_until`, for a `Model` |

@@ -201,7 +201,11 @@ class Wrong(Model):
 @pytest.mark.parametrize(
     ("how", "message"),
     [
-        ("pair", "uart.aux.receive returned (2000500, b'OK'), not a (Duration, bytes) pair"),
+        (
+            "pair",
+            "uart.aux.receive returned (2000500, b'OK'), not a (Duration, bytes) pair or a"
+            " (Duration, bytes, baud) triple",
+        ),
         ("raises", "uart.aux.receive raised KeyError: 'model bug'"),
         ("quiet-raises", "uart.aux.quiet_until raised KeyError: 'model bug'"),
         ("latency-raises", "uart.aux.latency raised KeyError: 'model bug'"),
@@ -365,6 +369,9 @@ class WrongOnTheAir(EchoInDurations):
     def receive(self, at: Duration, data: bytes) -> Iterable[Timed]:
         if self.how == "pair":
             return [(at, "text")]  # type: ignore[list-item]
+        if self.how == "rated":
+            # a channel has no line rate: what a UART takes is refused
+            return [(at, b"text", 9600)]  # type: ignore[list-item]
         if self.how == "past":
             return [(at - Duration(1), b"too early")]
         if self.how == "raises":
@@ -385,6 +392,11 @@ class WrongOnTheAir(EchoInDurations):
         (
             "pair",
             "bench: source.receive returned (seconds(0), 'text'), not a (Duration, bytes) pair",
+        ),
+        (
+            "rated",
+            "bench: source.receive returned (seconds(0), b'text', 9600), not a (Duration, bytes)"
+            " pair",
         ),
         (
             "past",

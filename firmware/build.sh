@@ -43,7 +43,7 @@ P4_CONTAINER=espressif/idf:$P4_IDF_VERSION@sha256:b9f2d6ea1c19e0c9f7959bdb74a9e3
 # The ESP32-S31 is a target of ESP-IDF v6.1 on, as a preview.
 S31_IDF_VERSION=v6.1
 S31_CONTAINER=espressif/idf:$S31_IDF_VERSION@sha256:81893c71bb5e570088901f21def8684c25cd2a9020281bd01b843a7655edb18c
-IMAGES="hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake reset_reasons deep_sleep bt_spp_initiator bt_spp_initiator_psram hello_world_8mb"
+IMAGES="hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake reset_reasons deep_sleep bt_spp_initiator bt_spp_initiator_psram hello_world_8mb uart_rate_switch"
 # The images of the other chips: what their tests in tests/test_chips.py run.
 CHIP_IMAGES=
 for chip in esp32s3 esp32c3 esp32c6; do
@@ -170,6 +170,7 @@ project_of() {
 	reset_reasons) echo "$PWD/firmware/reset_reasons" ;;
 	sd_remount) echo "$PWD/firmware/sd_remount" ;;
 	http_server) echo "$PWD/firmware/http_server" ;;
+	uart_rate_switch) echo "$PWD/firmware/uart_rate_switch" ;;
 	esac
 }
 
