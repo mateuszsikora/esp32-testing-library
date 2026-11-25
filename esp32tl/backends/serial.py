@@ -327,6 +327,11 @@ class Serial(Board):
     def utc(self) -> datetime:
         return self._utc + timedelta(microseconds=self.now.ns // 1000)
 
+    def utc_at(self, at: Duration) -> datetime:
+        """The host's UTC at `power_on`, plus `at`."""
+        self._on()
+        return self._utc + timedelta(microseconds=nanoseconds(at, "board.utc_at") // 1000)
+
     def power_on(self, utc: datetime | None = None) -> None:
         if self.powered or self._closed:
             raise BoardOff("the board is on already: power it on once")

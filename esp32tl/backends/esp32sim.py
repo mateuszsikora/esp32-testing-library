@@ -1268,9 +1268,16 @@ class Esp32Sim(Board):
 
     @property
     def utc(self) -> datetime:
-        """The world's time: the UTC instant at the first power-on, plus the board's time
-        since."""
+        """The world's time now: `utc_at(now)`, the UTC instant at the first power-on plus the
+        board's time since."""
         return self._utc + timedelta(microseconds=self._on().now // 1000)
+
+    def utc_at(self, at: Duration) -> datetime:
+        """The world's time at the board's instant `at`: the UTC instant at the first power-on,
+        plus `at`, which may be later than `now`. A model calls it from its `poll` or `receive`
+        to date what it sends."""
+        self._on()
+        return self._utc + timedelta(microseconds=nanoseconds(at, "board.utc_at") // 1000)
 
     def wait(self, duration: Duration) -> None:
         """Lets the board run for `duration` of its own time."""

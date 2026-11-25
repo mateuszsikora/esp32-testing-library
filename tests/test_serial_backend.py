@@ -102,6 +102,7 @@ def test_console_reset_clock_tap_and_autoflash(
         ),
     )
     pytester.makepyfile(f"""
+        import datetime
         import time
         import pytest
         import esp32tl
@@ -120,6 +121,8 @@ def test_console_reset_clock_tap_and_autoflash(
             assert board.dut.serial.resets == 1
             with pytest.raises(BoardOff):
                 console.expect("Hello", timeout=0)
+            with pytest.raises(BoardOff, match="call board.power_on"):
+                board.utc_at(seconds(0))
             with pytest.raises(ValueError, match="cannot set"):
                 board.power_on(utc="not a clock to set")
             with pytest.raises(SourceError, match="recording of app_recording"):
@@ -143,6 +146,9 @@ def test_console_reset_clock_tap_and_autoflash(
             board.wait(seconds(.02))
             assert board.now >= before + seconds(.02)
             assert console.lines("Hello")[0].at <= board.now
+            start = board.utc_at(seconds(0))
+            assert board.utc_at(seconds(1.5)) - start == datetime.timedelta(seconds=1.5)
+            assert start <= board.utc <= board.utc_at(board.now + seconds(1))
             condition = console.line("next")
             console.sendline("next line")
             assert board.wait_until(condition, within=seconds(1)).text == "next line"

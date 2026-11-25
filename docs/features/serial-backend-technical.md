@@ -153,6 +153,7 @@ run log: the tap, power-on and wait steps, and received console lines.
 | `name`, `clock`, `report_section`, `report_property` | `serial`, `wall`, `serial console`, `serial_console` |
 | `power_on(utc=None)` | Reset and begin capture; rejects a supplied UTC and repeated successful power-on |
 | `powered`, `started`, `now`, `utc` | Successful power-on (both), monotonic `Duration` since reset request, host-origin UTC plus elapsed time |
+| `utc_at(at)` | The host's UTC at `power_on` plus `at`, to the microsecond; `BoardOff` before `power_on`, and `nanoseconds(at, "board.utc_at")`'s `TypeError` and `ValueError` for an `at` that is not a `Duration` of 0 or more |
 | `reset()` | After power-on, `dut.serial.hard_reset()` again with the reader running; logs `board.reset(): hard reset` at `now`. After `close()`, `BoardOff: serial: the board is closed: the port is pytest-embedded's again`, and the port is not touched |
 | `power_off()`, `boots`, `wait_for_wake()` | Skip: `serial: the backend cannot switch the board's power`, `serial: the backend does not see the chip's resets` (both for `boots` and `wait_for_wake`) |
 | `sleeps` | Skip: `serial: the backend does not see the chip's deep sleeps`; `next_sleep()`, `Board`'s, reads it and skips the same way |

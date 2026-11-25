@@ -98,11 +98,85 @@ class Echo(Model):
   anywhere, so a model finds a request by its protocol's terminator or by the silence after it
   ([`uart_tx`](../protocol.md#52-uart_tx)). Behind an SPP channel, `at` is the instant `data`
   arrived.
+- On a UART, what it sends goes in at the route's `baud` from the board profile, one character
+  time per byte, queued behind what went in on that pin before it: an answer stamped at `at` starts
+  at `at`, or once the bytes before it have gone in, whichever is later. Nothing on the line is
+  dropped, so a model that sends more in its period than the line carries in that time falls
+  later with every period, and the bytes of answers already due that are still queued when the
+  run ends are counted as `rx_bytes_not_paced` in the link's report
+  ([the link's report](esp32sim-backend-user.md#the-links-report),
+  [`stats`](../protocol.md#59-stats-ext)). A model of a part whose output overruns its line, a
+  receiver with more sentences than its baud carries, decides itself what it drops or defers, as
+  the part does. What the firmware does not read in time overflows the chip's 128-byte RX FIFO,
+  as on a real chip, and is the firmware's to handle.
+- It may read the board from inside its calls, given the board in its constructor:
+  `board.utc_at(...)`, `board.lines.level(...)` and `board.now`, and must not call anything that
+  waits or changes the run
+  ([what a model may read](pytest-plugin-user.md#a-uarts-own-model)).
 - A `supply(on)` method puts it on the board's supply, as for any source.
 - The route and the peer call it in nanoseconds, converting at the edge: it puts the same bytes on
   the wire at the same instants as the same model written with `int` nanoseconds, which both
   accept as well, and is checked the same way, with the messages in `Duration`s, as
   `uart.aux.quiet_until returned 1.5, not a Duration`.
+
+### A model that dates what it sends
+
+A part that reports wall-clock time, an RTC chip, a modem that answers `AT+CCLK?`, a GNSS receiver
+of the test's own, dates what it sends by the world's time. The model takes the board in its
+constructor and asks `board.utc_at(at)` for the instant its answer goes in at, or
+`board.utc_at(now)` in `poll`. Shortened from `tests/test_uart_model.py`, where `modem_at` asks
+`uart.aux` for `AT+CCLK?` and prints the answer
+([validation firmware](validation-firmware-user.md#modem_at)):
+
+```python
+from datetime import UTC, datetime
+
+import pytest
+
+from esp32tl import ReactiveModel
+from esp32tl.units import ms, seconds
+
+
+class RealTimeClock(ReactiveModel):
+    """+CCLK: with the world's time to AT+CCLK?, OK to every command line."""
+
+    answer_after = ms(1)
+
+    def __init__(self, board):
+        self.board = board
+        self._heard = b""
+
+    def receive(self, at, data):
+        self._heard += data
+        answers = []
+        while b"\r\n" in self._heard:
+            line, _, self._heard = self._heard.partition(b"\r\n")
+            answer, clock = at + self.answer_after, b""
+            if line == b"AT+CCLK?":
+                utc = self.board.utc_at(answer)
+                clock = f'\r\n+CCLK: "{utc:%y/%m/%d,%H:%M:%S}+00"\r\n'.encode()
+            answers.append((answer, clock + b"\r\nOK\r\n"))
+        return answers
+
+
+@pytest.mark.app_path("../firmware/modem_at")
+@pytest.mark.board_profile(path="boards/aux-uart.toml")
+def test_a_model_dates_what_it_sends(board):
+    board.uart("aux").model(RealTimeClock(board))
+    board.power_on(utc=datetime(2031, 7, 4, 9, 30, tzinfo=UTC))
+    line = board.wait_until(board.console.line(r'\+CCLK: "'), within=seconds(5))
+    assert '+CCLK: "31/07/04,09:30:' in line.text
+```
+
+- `board.utc_at(at)` is the UTC instant at the first power-on plus `at`: the test's
+  `board.power_on(utc=...)`, or `2026-01-01T12:00:00Z` without one. It is the same world's time
+  the GNSS receiver and the modem date their output by.
+- The model is made before `board.power_on()`, when the board has no world's time yet: it keeps
+  the board and asks in its calls, which all come after the power-on. Asked before it,
+  `board.utc_at` raises `BoardOff: the board is off; call board.power_on() first`.
+- `at` may be later than `board.now`: an answer stamped `answer_after` ahead is dated at its own
+  instant. In `receive`, `board.now` is the instant of the link's last turn, earlier than `at`, so
+  `board.utc` there is not the time of the answer.
 
 ### A model that only answers
 
@@ -270,7 +344,12 @@ $GPGGA,120001.00,,,,,0,00,99.99,,,,,,*64
   when the power comes back. `board.reset()` does not touch it
   ([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)).
 - It hears what the firmware sends it and answers nothing: a firmware that configures its
-  receiver gets no acknowledgement.
+  receiver gets no acknowledgement. It does not act on what it hears either: its output stays an
+  RMC and a GGA from talker `GP`, one epoch a second, whatever the firmware asks for. A test whose
+  firmware needs a configuration to take effect (another sentence set, other talkers, another
+  rate), or that depends on what a real receiver's full output does to the line, writes its own
+  `Model` on `uart.gnss` ([a model of the test's](#a-model-of-the-tests-in-durations)), dated with
+  `board.utc_at(...)` ([a model that dates what it sends](#a-model-that-dates-what-it-sends)).
 
 ## When the test gets it wrong
 

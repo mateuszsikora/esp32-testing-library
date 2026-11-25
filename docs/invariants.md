@@ -584,6 +584,15 @@ that references to its number keep their meaning.
     `tests/test_duration_model.py::test_what_a_model_in_durations_gets_wrong_on_a_uart_ends_the_run_in_durations`,
     `tests/test_duration_model.py::test_what_a_model_in_durations_answers_wrong_fails_the_air_in_durations`,
     `tests/test_duration_model.py::test_with_two_faults_in_one_turn_both_kinds_report_the_same_one`
+- **301.** `board.utc_at(at)` is the world's time at the board's instant `at`: the UTC instant at
+    the first power-on, `board.power_on(utc=...)`'s when the test gives one, plus `at`, so
+    `board.utc_at(board.now) == board.utc`; it raises `BoardOff` before the first power-on and
+    answers after a `power_off`. A model of the test's that dates its answer with it sends the
+    world's time the test gave, and a model's `poll(now)` reads with `board.lines.level` the level
+    the firmware drove up to `now`.
+    `tests/test_power.py::test_utc_at_is_the_world_s_time_at_an_instant_from_the_first_power_on_through_a_power_off`,
+    `tests/test_uart_model.py::test_a_model_dates_what_it_sends_by_the_world_s_time_the_test_gave`,
+    `tests/test_uart_model.py::test_a_model_s_poll_reads_the_levels_the_firmware_drove_up_to_now`
 
 ## Bluetooth peer
 

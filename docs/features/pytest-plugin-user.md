@@ -493,9 +493,18 @@ On esp32sim, the boot and sleep histories (`board.boots`, `board.sleeps`) and th
 - `board.now` is the board's time since the first power-on, a `Duration`; `board.utc` the
   world's time, the UTC instant at the first power-on plus `board.now`. Neither restarts at a
   reset or a power cycle.
-- Waiting, or reading `board.now`, `board.utc` or `board.boots`, before the first
-  `board.power_on()` raises `BoardOff: the board is off; call board.power_on() first`. A board
-  switched off by `board.power_off()` can be waited on.
+- `board.utc_at(at)` is the world's time at the board's instant `at`, a `Duration`: the UTC
+  instant at the first power-on plus `at`, so `board.utc_at(board.now) == board.utc`. `at` may be
+  later than `board.now`, for a [model](#a-uarts-own-model) that dates what it sends ahead of the
+  board. Like `board.now` and `board.utc`, it does not restart at a reset or a power cycle, and it
+  answers after `board.power_off()` too, since the world's time runs on. It refuses an
+  `at` that is not a `Duration` with
+  `TypeError: board.utc_at takes a Duration, as seconds(5), not …`, as
+  `board.utc_at takes a Duration, as seconds(2), not 2` for `2`, and one below 0 with
+  `ValueError: board.utc_at takes a Duration of 0 or more, not -1 s`.
+- Waiting, or reading `board.now`, `board.utc`, `board.utc_at(...)` or `board.boots`, before the
+  first `board.power_on()` raises `BoardOff: the board is off; call board.power_on() first`. A
+  board switched off by `board.power_off()` can be waited on.
 - When the run ends while the test waits, because the runner exited or the harness found the link
   wrong, the wait raises `RunEnded`, which says when, as far as the harness knows, and why
   ([when the run ends](#what-a-failure-looks-like)).
@@ -1588,6 +1597,22 @@ def test_the_firmware_talks_to_the_test_s_model_on_its_own_uart(board):
   while the chip is off is lost.
 - The model is called from the link's thread, inside the test's waits, while the runner waits for
   its answer: it must not block, and must not wait on the wall clock.
+- What a model may read from the board inside its calls, given the board in its constructor:
+  - `board.utc_at(at)`, the world's time at an instant: `board.utc_at(now)` in `poll(now)`, and
+    `board.utc_at(at)`, or the instant of the answer, in `receive(at, data)`. This is how a model of
+    a part that reports wall-clock time (a GNSS receiver of its own, an RTC chip, a modem
+    answering `AT+CCLK?`) dates what it sends, and it is right under `board.power_on(utc=...)`
+    ([a model that dates what it sends](models-user.md#a-model-that-dates-what-it-sends)).
+  - `board.lines.level(line)`, what the firmware drives the line to: in `poll(now)`, the level
+    the firmware drove up to `now`.
+  - `board.now`, the instant of the link's last turn: in `poll(now)` it is `now`; in
+    `receive(at, data)`, which runs between two turns, it is the turn before, earlier than `at`.
+    Date by `at` and `now`, not by `board.now`.
+
+  It must not call anything that waits, `board.wait`, `board.wait_until`, `board.wait_for_wake`
+  or `console.expect`, nor anything that changes the run, `board.power_on`, `board.power_off` or
+  `board.reset`: the board stands still while the model runs, and the link is the thread that
+  would move it.
 - What it refuses, at the call: an object without one of the methods, or with one that cannot be
   called, with
   `TypeError: uart.aux.model: <...> is not a Source: it has no poll, quiet_until, latency`; a

@@ -107,7 +107,12 @@ hemisphere's letter, `negative` for a value below 0.
 
 None: the receiver's rate, talker, sentences and altitude are constants of the module. The
 world's time at power-on is `board.power_on(utc=...)`'s, `POWER_ON_UTC` in
-`esp32tl/backends/esp32sim.py` by default.
+`esp32tl/backends/esp32sim.py` by default. The built-in receiver gets it from the backend as
+`world`, `lambda: self._utc`; a `Model` of the test's has no such argument, and asks the board
+it was given for `Board.utc_at(at)`, `_utc` plus `at` to the microsecond, in its own calls
+([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)). Neither the receiver
+nor the adapter `InNanoseconds` passes the world's time to a model's methods: they take board
+instants only, and a model that needs the world's time keeps the board.
 
 ## Failure modes
 
