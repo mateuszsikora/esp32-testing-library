@@ -330,7 +330,10 @@ class GnssReceiver:
                     answer = "nak" if not valid or (cls, id) in self._refused else "ack"
                     reply = ACK_ACK if answer == "ack" else ACK_NAK
                     frame = casic(ACK, reply, bytes((cls, id, 0, 0)))
-                    self._answers.append((at + self._answer_after, frame))
+                    # An output's time is when its first byte is complete (protocol 5.10): the
+                    # answer starts `answer_after` after the frame, one character before that.
+                    first = at + self._answer_after + _char_ns(1, self._baud)
+                    self._answers.append((first, frame))
                 self._arriving.append(CasicFrame(Duration(at), cls, id, payload, answer))
             # What is left is the start of the next frame: silenced if the bytes before it stay,
             # or if it came now, silent.

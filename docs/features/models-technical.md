@@ -65,7 +65,10 @@ receiver its clock in
    held turn left: none while `talking` is false; else ACK-NAK for a checksum that does not hold
    or a `(cls, id)` in `_refused`, ACK-ACK for any other. The answer,
    `casic(ACK, ACK_ACK or ACK_NAK, bytes((cls, id, 0, 0)))`, goes into `_answers` at
-   `at + _answer_after`. Without the supply, `receive` returns at once: the receiver hears
+   `at + _answer_after + _char_ns(1, baud)`: `_answer_after` is when the answer starts on the
+   line, as the L76K was measured, and an output's time is when its first byte is complete in the
+   RX FIFO (protocol 5.10), a character later; do not take that character off `ACK_AFTER` again.
+   Without the supply, `receive` returns at once: the receiver hears
    nothing.
    **`arrive(now)`**, which `Uart.arrive` calls at the start of every turn, before the test's
    hold (the receiver is `Arriving`, `esp32tl/interfaces/uart.py`), moves the frames of

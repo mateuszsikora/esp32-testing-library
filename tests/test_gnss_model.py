@@ -495,6 +495,10 @@ def ephemeris() -> bytes:
     return frame(*GPS_EPH, bytes(range(72)))
 
 
+# The answer's first byte is complete one character after it starts (protocol 5.10).
+ANSWER_NS = ACK_AFTER_NS + 10 * S // BAUD
+
+
 def on_line(count: int) -> int:
     """How long `count` characters of 10 bits take at `BAUD`, in nanoseconds, rounded down."""
     return count * 10 * S // BAUD
@@ -529,13 +533,13 @@ def test_casic_frames_and_answers_are_those_of_quectel_s_specification() -> None
     board = Board()
     write(board, 0, query)
     assert answers(board, S // 2) == [
-        (on_line(10) + ACK_AFTER_NS, bytes.fromhex("BACE04000501060000000A000501"))
+        (on_line(10) + ANSWER_NS, bytes.fromhex("BACE04000501060000000A000501"))
     ]
     # The ACK-NAK an AT6558 receiver gave for a GPS ephemeris (JosephHewitt/wardriver_rev3#175).
     board.receiver.refuse(*GPS_EPH)
     write(board, S // 2, ephemeris())
     assert answers(board, S - 1) == [
-        (S // 2 + on_line(82) + ACK_AFTER_NS, bytes.fromhex("BACE04000500080700000C070500"))
+        (S // 2 + on_line(82) + ANSWER_NS, bytes.fromhex("BACE04000500080700000C070500"))
     ]
 
 
@@ -553,14 +557,14 @@ def test_casic_frames_get_ack_ack_naming_them_answer_after_their_last_byte() -> 
     # A frame still on the line is not heard yet.
     assert board.receiver.casic_frames == []
     assert answers(board, t + S // 2) == [
-        (first + ACK_AFTER_NS, ack(*AID_INI)),
-        (second + ACK_AFTER_NS, ack(*GPS_EPH)),
+        (first + ANSWER_NS, ack(*AID_INI)),
+        (second + ANSWER_NS, ack(*GPS_EPH)),
     ]
     board.receiver.answer_after(ms(250))
     assert board.receiver.latency() == 250_000_000
     write(board, 2 * S + 1, frame(*CFG_MSG, bytes(4)))
     third = 2 * S + 1 + on_line(14)
-    assert answers(board, 3 * S - 1) == [(third + 250_000_000, ack(*CFG_MSG))]
+    assert answers(board, 3 * S - 1) == [(third + 250_000_000 + on_line(1), ack(*CFG_MSG))]
     frames = board.receiver.casic_frames
     assert [(f.at, f.cls, f.id, f.answer) for f in frames] == [
         (Duration(first), *AID_INI, "ack"),
@@ -578,7 +582,7 @@ def test_a_frame_cut_over_several_pieces_is_heard_when_its_last_byte_arrives() -
         write(board, i * 1000, piece)
     # Written faster than the line takes them, the pieces go out one after another.
     end = sum(on_line(len(piece)) for piece in pieces)
-    assert answers(board, S // 2) == [(end + ACK_AFTER_NS, ack(*AID_INI))]
+    assert answers(board, S // 2) == [(end + ANSWER_NS, ack(*AID_INI))]
     [heard] = board.receiver.casic_frames
     assert heard.at == Duration(end) and heard.payload == data[6:-4]
 
@@ -587,8 +591,8 @@ def test_two_frames_in_one_piece_and_frames_between_nmea_and_noise() -> None:
     board = Board()
     write(board, 5, aid_ini() + ephemeris())
     assert answers(board, S // 4) == [
-        (5 + on_line(66) + ACK_AFTER_NS, ack(*AID_INI)),
-        (5 + on_line(66 + 82) + ACK_AFTER_NS, ack(*GPS_EPH)),
+        (5 + on_line(66) + ANSWER_NS, ack(*AID_INI)),
+        (5 + on_line(66 + 82) + ANSWER_NS, ack(*GPS_EPH)),
     ]
     cfg = frame(*CFG_MSG, bytes(4))
     mixed = (
@@ -606,13 +610,13 @@ def test_two_frames_in_one_piece_and_frames_between_nmea_and_noise() -> None:
     t = S // 4
     write(board, t, mixed)
     assert answers(board, S // 2) == [
-        (t + on_line(mixed.index(cfg) + len(cfg)) + ACK_AFTER_NS, ack(*CFG_MSG)),
-        (t + on_line(len(mixed) - 1) + ACK_AFTER_NS, ack(*GPS_EPH)),
+        (t + on_line(mixed.index(cfg) + len(cfg)) + ANSWER_NS, ack(*CFG_MSG)),
+        (t + on_line(len(mixed) - 1) + ANSWER_NS, ack(*GPS_EPH)),
     ]
     # The last 0xBA may start a header: it does.
     rest = frame(*CFG_MSG, bytes(8))[1:]
     write(board, S // 2, rest)
-    assert answers(board, S - 1) == [(S // 2 + on_line(len(rest)) + ACK_AFTER_NS, ack(*CFG_MSG))]
+    assert answers(board, S - 1) == [(S // 2 + on_line(len(rest)) + ANSWER_NS, ack(*CFG_MSG))]
     assert [(f.cls, f.id) for f in board.receiver.casic_frames] == [
         AID_INI,
         GPS_EPH,
@@ -628,8 +632,8 @@ def test_a_frame_with_a_bad_checksum_gets_ack_nak() -> None:
     bad = frame(*AID_INI, good[6:-4], checksum=int.from_bytes(good[-4:], "little") ^ 1)
     write(board, 1000, bad + ephemeris())
     assert answers(board, S // 2) == [
-        (1000 + on_line(66) + ACK_AFTER_NS, ack(*AID_INI, nak=True)),
-        (1000 + on_line(66 + 82) + ACK_AFTER_NS, ack(*GPS_EPH)),
+        (1000 + on_line(66) + ANSWER_NS, ack(*AID_INI, nak=True)),
+        (1000 + on_line(66 + 82) + ANSWER_NS, ack(*GPS_EPH)),
     ]
     assert [(f.cls, f.id, f.answer) for f in board.receiver.casic_frames] == [
         (*AID_INI, "nak"),
@@ -657,12 +661,12 @@ def test_the_answers_are_those_an_l76k_gave() -> None:
 def test_a_refused_class_and_id_gets_ack_nak_from_then_on() -> None:
     board = Board()
     write(board, 1, aid_ini())
-    assert answers(board, S // 4) == [(1 + on_line(66) + ACK_AFTER_NS, ack(*AID_INI))]
+    assert answers(board, S // 4) == [(1 + on_line(66) + ANSWER_NS, ack(*AID_INI))]
     board.receiver.refuse(*AID_INI)
     write(board, S // 4, aid_ini() + ephemeris())
     assert answers(board, S // 2) == [
-        (S // 4 + on_line(66) + ACK_AFTER_NS, ack(*AID_INI, nak=True)),
-        (S // 4 + on_line(66 + 82) + ACK_AFTER_NS, ack(*GPS_EPH)),
+        (S // 4 + on_line(66) + ANSWER_NS, ack(*AID_INI, nak=True)),
+        (S // 4 + on_line(66 + 82) + ANSWER_NS, ack(*GPS_EPH)),
     ]
     assert [f.answer for f in board.receiver.casic_frames] == ["ack", "nak", "ack"]
     with pytest.raises(ModelError, match=r"^gnss.refuse: cls is 256, not from 0 to 255$"):
@@ -689,7 +693,7 @@ def test_a_power_cycle_loses_a_frame_half_heard_and_the_answers_not_sent() -> No
     assert answers(board, S // 2) == []
     assert board.receiver.casic_frames == []
     write(board, S // 2, data)
-    assert answers(board, S - 1) == [(S // 2 + on_line(66) + ACK_AFTER_NS, ack(*AID_INI))]
+    assert answers(board, S - 1) == [(S // 2 + on_line(66) + ANSWER_NS, ack(*AID_INI))]
     # A frame heard, whose answer is not sent yet when the power goes, is never answered.
     write(board, S + S // 4, data)
     heard = S + S // 4 + on_line(66)
@@ -713,7 +717,7 @@ def test_a_silent_receiver_hears_the_frames_and_answers_none() -> None:
     board.receiver.resume()
     assert board.receiver.latency() == ACK_AFTER_NS
     write(board, S // 4, data)
-    assert answers(board, S // 2) == [(S // 4 + on_line(66) + ACK_AFTER_NS, ack(*AID_INI))]
+    assert answers(board, S // 2) == [(S // 4 + on_line(66) + ANSWER_NS, ack(*AID_INI))]
     # Silenced while a frame is on the line: it is heard silent.
     write(board, S // 2, data)
     board.receiver.go_silent()
@@ -742,8 +746,8 @@ def test_a_header_in_noise_takes_the_frames_its_length_covers() -> None:
     noise = b"\xba\xce\x0c\x00\x77\x66" + query + bytes(6)
     write(board, 0, noise + query)
     assert answers(board, S // 2) == [
-        (on_line(22) + ACK_AFTER_NS, ack(0x77, 0x66, nak=True)),
-        (on_line(32) + ACK_AFTER_NS, ack(0x06, 0x00)),
+        (on_line(22) + ANSWER_NS, ack(0x77, 0x66, nak=True)),
+        (on_line(32) + ANSWER_NS, ack(0x06, 0x00)),
     ]
     assert [(f.cls, f.id, f.answer) for f in board.receiver.casic_frames] == [
         (0x77, 0x66, "nak"),
@@ -766,7 +770,7 @@ def test_a_frame_written_in_part_while_silent_is_heard_silent() -> None:
     write(board, S // 4 + 1, query[3:])
     # The next frame, all of it written while the receiver talks, gets its answer.
     write(board, S // 2, query)
-    assert answers(board, S - 1) == [(S // 2 + on_line(10) + ACK_AFTER_NS, ack(0x06, 0x00))]
+    assert answers(board, S - 1) == [(S // 2 + on_line(10) + ANSWER_NS, ack(0x06, 0x00))]
     assert [f.answer for f in board.receiver.casic_frames] == [None, None, "ack"]
 
 
@@ -796,6 +800,7 @@ def test_the_route_s_casic_calls_are_steps_and_its_frames_need_a_receiver() -> N
     route.arrive(heard)
     assert [f.answer for f in frames] == ["nak"]
     assert list(route.poll(heard)) == []
-    assert route.quiet_until() == heard + 5_000_000
-    t[0] = heard + 5_000_000
-    assert list(route.poll(heard + 5_000_000)) == [(heard + 5_000_000, ack(*CFG_MSG, nak=True))]
+    first = heard + 5_000_000 + on_line(1)
+    assert route.quiet_until() == first
+    t[0] = first
+    assert list(route.poll(first)) == [(first, ack(*CFG_MSG, nak=True))]

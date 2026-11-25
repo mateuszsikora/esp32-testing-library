@@ -446,10 +446,13 @@ receiver answers each CASIC frame the firmware sends it, as an L76K did
 
 The answer carries the frame's class and id, then two zero bytes, and starts `answer_after` after
 the frame's last byte reached the receiver: `ms(1.5)` unless the test says otherwise with
-`gnss.answer_after(...)`, as the L76K started its answers 1.53 to 1.59 ms after the frame at 9600 baud.
-The firmware writes a frame into its UART's FIFO at about one instant, and the bytes leave at the
-route's baud, one after another, after those it wrote before: at the profile's 9600 baud an AID-INI
-frame, 66 bytes, takes 68.75 ms on the line, so its answer starts 70.25 ms after the write. The
+`gnss.answer_after(...)`, as the L76K started its answers 1.53 to 1.59 ms after the frame at 9600
+baud. The answer's first byte is in the firmware's UART a character later, 1.04 ms at 9600 baud,
+2.54 ms after the frame, as the L76K's first bytes came 2.58 to 2.63 ms after it. The firmware
+writes a frame into its UART's FIFO at about one instant, and the bytes leave at the route's baud,
+one after another, after those it wrote before: at the profile's 9600 baud an AID-INI frame, 66
+bytes, takes 68.75 ms on the line, so its answer starts 70.25 ms after the write, and its first
+byte is in at 71.29 ms. The
 answer goes out after the bytes the receiver was sending, so it never splits an epoch's sentences;
 the L76K, too, held its answers until the end of the epoch it was sending. A firmware that sends
 AID-INI again when the receiver refuses it, up to three times:

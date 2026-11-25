@@ -324,8 +324,8 @@ PROBE boot=3 reset=5 wake=4 STATE0=0x00000000 SLEEP_EN=0 DIG_PWC=0xc0020000 DG_W
 On 2026-11-25, `tools/casic_probe` ran on a LilyGO T-A7670G R2 (ESP32 rev. 3.1) and the L76K on
 its `uart.gnss` route (UART2, 9600 8N1), whose `$PCAS06,0` gave `SW=URANUS5,V5.3.0.0`, indoors
 and without a fix. It wrote CASIC frames to the receiver and stamped what came back, a byte at a
-time, against the end of each write (`uart_wait_tx_done`); the console, without its NMEA, is in
-`tools/casic_probe/l76k.txt`. What esp32tl's GNSS receiver model answers follows from it
+time, against the end of each write (`uart_wait_tx_done`); the console is in
+`tools/casic_probe/l76k.txt`, without its NMEA but for the epoch of the example below. What esp32tl's GNSS receiver model answers follows from it
 ([models](features/models-user.md#what-it-hears)).
 
 | Frames written | Answer, every time | First byte of the answer after the write's end |
@@ -455,7 +455,8 @@ all but the NMEA; the run ends with `casic_probe: done` after about 100 s. Power
 afterwards, to drop the AID-INI the receiver was given.
 
 ```sh
-docker run --rm -v "$PWD":/project -w /project/tools/casic_probe <image> \
+docker run --rm -v "$PWD":/project -w /project/tools/casic_probe \
+  espressif/idf:v5.3.6@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070 \
   idf.py -B build-probe -D SDKCONFIG=build-probe/sdkconfig set-target esp32 build
 (cd tools/casic_probe/build-probe &&
   ../../../.venv/bin/python -m esptool --chip esp32 --port "$PORT" -b 460800 write-flash @flash_args)
