@@ -9,12 +9,18 @@ hears into frames at each silence, as Modbus RTU does."""
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
-from typing import Any
+from typing import Any, cast
 
+from esp32tl.link.boardlink import is_baud
 from esp32tl.units import Duration
 
-# What a `Model` sends: the bytes, and the board's instant they go in at.
+# What a `Model` sends: the bytes, and the board's instant they go in at; on a UART, at the
+# route's `baud`.
 Timed = tuple[Duration, bytes]
+# The same at a line rate of its own, in baud, a positive int: on a UART only, where it goes in at
+# that rate. Each output has its own, so that a model answers a rate command at the old rate and
+# sends what comes after at the new one.
+TimedAtRate = tuple[Duration, bytes, int]
 
 
 class Model(ABC):
@@ -22,10 +28,17 @@ class Model(ABC):
     UART, or what answers an `SppPeer`'s channel. A subclass defines all four methods, as a source
     in nanoseconds does: one that lacks one, or misspells it, cannot be made. `ReactiveModel` and
     `IdleFramedModel` define all but one. One with a `supply(on)` method is a part on the board's
-    supply, as a source in nanoseconds with one is."""
+    supply, as a source in nanoseconds with one is.
+
+    On a UART, an output may be a `TimedAtRate`, which goes in at its own rate, and the model may
+    define, each found by its name as `supply` is: `transmitted(at, baud)`, the rate of the
+    transmission the next `receive` gets, `None` with none set; `configured(at, baud, transmits,
+    receives)`, each change of the firmware's routes on the wire; and `frame_errors(at, count,
+    baud)`, which takes the frame errors its bytes met on the chip's RX pin, so that they do not
+    fail the run."""
 
     @abstractmethod
-    def receive(self, at: Duration, data: bytes) -> Iterable[Timed]:
+    def receive(self, at: Duration, data: bytes) -> Iterable[Timed | TimedAtRate]:
         """The firmware sent `data`, a piece of what it sends cut anywhere. On a UART, `at` is
         the instant it wrote the first byte of `data` into the TX FIFO, and each byte after came
         within one character time of the one before; esp32sim does not pace the transmission at
@@ -34,7 +47,7 @@ class Model(ABC):
         or more after `at`."""
 
     @abstractmethod
-    def poll(self, now: Duration) -> Iterable[Timed]:
+    def poll(self, now: Duration) -> Iterable[Timed | TimedAtRate]:
         """What the model sends unprompted, asked at every turn; none before `now`."""
 
     @abstractmethod
@@ -47,21 +60,29 @@ class Model(ABC):
         """The shortest time in which the model answers; `None` when it answers nothing."""
 
 
+# What `InNanoseconds` returns: a `Timed` or a `TimedAtRate` in nanoseconds.
+Output = tuple[int, bytes] | tuple[int, bytes, int]
+
+
 class InNanoseconds:
     """`model`, a `Model`, as a source whose times are nanoseconds: what the route or the peer
     calls. It refuses what the model returns that is not of its kind with `fail(message)`, which
     names it `name`, as `uart.aux.receive returned 5, not a (Duration, bytes) pair`; what the
-    model raises goes through as it is, for the caller to name."""
+    model raises goes through as it is, for the caller to name. With `rates`, on a UART, an output
+    may be a `TimedAtRate` too. `in_nanoseconds` makes one with the model's optional methods."""
 
-    def __init__(self, model: Model, name: str, fail: Callable[[str], Exception]) -> None:
+    def __init__(
+        self, model: Model, name: str, fail: Callable[[str], Exception], *, rates: bool = False
+    ) -> None:
         self.model = model
         self.name = name
         self.fail = fail
+        self.rates = rates
 
-    def receive(self, t: int, data: bytes) -> list[tuple[int, bytes]]:
+    def receive(self, t: int, data: bytes) -> list[Output]:
         return self._outputs("receive", self.model.receive(Duration(t), data))
 
-    def poll(self, now: int) -> list[tuple[int, bytes]]:
+    def poll(self, now: int) -> list[Output]:
         return self._outputs("poll", self.model.poll(Duration(now)))
 
     def quiet_until(self) -> int | None:
@@ -82,33 +103,80 @@ class InNanoseconds:
             raise self.fail(f"{self.name} declares a latency of {bound}")
         return bound.ns
 
-    def _outputs(self, method: str, values: Iterable[Timed]) -> list[tuple[int, bytes]]:
-        outputs = []
+    def _outputs(self, method: str, values: Iterable[Timed | TimedAtRate]) -> list[Output]:
+        outputs: list[Output] = []
         for value in values:
             if not (
                 isinstance(value, tuple)
-                and len(value) == 2
+                and len(value) in ((2, 3) if self.rates else (2,))
                 and isinstance(value[0], Duration)
                 and isinstance(value[1], bytes)
+                and (len(value) == 2 or is_baud(value[2]))
             ):
-                raise self.fail(
-                    f"{self.name}.{method} returned {value!r:.80}, not a (Duration, bytes) pair"
+                kinds = (
+                    "a (Duration, bytes) pair or a (Duration, bytes, baud) triple"
+                    if self.rates
+                    else "a (Duration, bytes) pair"
                 )
-            outputs.append((value[0].ns, value[1]))
+                raise self.fail(f"{self.name}.{method} returned {value!r:.80}, not {kinds}")
+            if len(value) == 3:
+                outputs.append((value[0].ns, value[1], value[2]))
+            else:
+                outputs.append((value[0].ns, value[1]))
         return outputs
 
 
-class _Supplied(InNanoseconds):
-    """`InNanoseconds` of a model with `supply(on)`, which the route and the peer find by it."""
+# The optional methods of a `Model`, each forwarded by an adapter class of its own, with its times
+# as `Duration`s: the route and the peer find them on the adapter by `isinstance`, so that an
+# adapter has a method only when its model has it.
 
+
+class _Supply(InNanoseconds):
     def supply(self, on: bool) -> None:
         self.model.supply(on)  # type: ignore[attr-defined]
 
 
-def in_nanoseconds(model: Model, name: str, fail: Callable[[str], Exception]) -> InNanoseconds:
-    """`model` as a source in nanoseconds, `Supplied` when it has a `supply` method."""
-    kind = _Supplied if callable(getattr(model, "supply", None)) else InNanoseconds
-    return kind(model, name, fail)
+class _Transmitted(InNanoseconds):
+    def transmitted(self, t: int, baud: int | None) -> None:
+        self.model.transmitted(Duration(t), baud)  # type: ignore[attr-defined]
+
+
+class _Configured(InNanoseconds):
+    def configured(self, t: int, baud: int | None, transmits: bool, receives: bool) -> None:
+        self.model.configured(Duration(t), baud, transmits, receives)  # type: ignore[attr-defined]
+
+
+class _FrameErrors(InNanoseconds):
+    def frame_errors(self, t: int, count: int, baud: int | None) -> None:
+        self.model.frame_errors(Duration(t), count, baud)  # type: ignore[attr-defined]
+
+
+OPTIONAL_METHODS: dict[str, type[InNanoseconds]] = {
+    "supply": _Supply,
+    "transmitted": _Transmitted,
+    "configured": _Configured,
+    "frame_errors": _FrameErrors,
+}
+
+# The adapter class of each set of optional methods, made once.
+_KINDS: dict[tuple[str, ...], type[InNanoseconds]] = {(): InNanoseconds}
+
+
+def in_nanoseconds(
+    model: Model, name: str, fail: Callable[[str], Exception], *, rates: bool = False
+) -> InNanoseconds:
+    """`model` as a source in nanoseconds, with each of the `OPTIONAL_METHODS` the model has, as
+    a callable attribute: `Supplied` when it has a `supply` method, and so on. `rates` lets an
+    output give its own line rate, on a UART."""
+    methods = tuple(m for m in OPTIONAL_METHODS if callable(getattr(model, m, None)))
+    kind = _KINDS.get(methods)
+    if kind is None:
+        bases = tuple(OPTIONAL_METHODS[m] for m in methods)
+        kind = _KINDS[methods] = cast(
+            type[InNanoseconds],
+            type(f"InNanoseconds[{','.join(methods)}]", bases, {}),
+        )
+    return kind(model, name, fail, rates=rates)
 
 
 class ReactiveModel(Model):
@@ -120,7 +188,7 @@ class ReactiveModel(Model):
 
     answer_after: Duration | None
 
-    def poll(self, now: Duration) -> Iterable[Timed]:
+    def poll(self, now: Duration) -> Iterable[Timed | TimedAtRate]:
         return ()
 
     def quiet_until(self) -> Duration | None:
@@ -167,19 +235,19 @@ class IdleFramedModel(Model):
     _last: Duration | None = None
 
     @abstractmethod
-    def on_frame(self, at: Duration, frame: bytes) -> Iterable[Timed]:
+    def on_frame(self, at: Duration, frame: bytes) -> Iterable[Timed | TimedAtRate]:
         """`frame` ended: `gap` has passed since its last piece came, and `at` is the instant the
         model saw it. `frame_first_at` and `frame_last_at` say when its first and last pieces
         came. Returns the answers, each at `at` or later."""
 
-    def receive(self, at: Duration, data: bytes) -> Iterable[Timed]:
+    def receive(self, at: Duration, data: bytes) -> Iterable[Timed | TimedAtRate]:
         if not self._frame:
             self._first = at
         self._frame += data
         self._last = at
         return ()
 
-    def poll(self, now: Duration) -> Iterable[Timed]:
+    def poll(self, now: Duration) -> Iterable[Timed | TimedAtRate]:
         end = self._end()
         if end is None or now < end:
             return ()

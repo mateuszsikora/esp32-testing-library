@@ -120,7 +120,12 @@ The model's optional constructor `data: Source | None` accepts a data peer; `mod
 installs `esp32tl.net.Internet` before power-on. The `broker` fixture selects it automatically.
 In data mode `arrive` reaches an `Internet` before the test holds the turn
 ([the path](network-technical.md#the-path)), its payload reaches `data.receive`, and `poll`, `quiet_until` and `latency` delegate
-to that source (latency remains at most 1 ms). With no peer, payload is retained and unanswered.
+to that source (latency remains at most 1 ms). What the peer sends goes in at the modem route's
+rate: an output that gives a rate of its own, a `(t, bytes, baud)` triple, is refused by
+`_at_modem_rate` with `TypeError: the modem's data peer returned {output!r:.80}: what it sends goes
+in at the modem's rate, and has no line rate of its own`, which the link reports as
+`uart.modem.receive raised TypeError: …` (or `poll`). With no peer, payload is retained and
+unanswered.
 An `Internet` is reached by `arrive`, `poll` and `quiet_until` in command mode and with the modem
 off too (`_polled`): its broker's keepalive ends the connections a lost call left half-open, and
 nothing else would run that deadline; out of data mode its `poll` has nothing to send.

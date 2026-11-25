@@ -2662,3 +2662,40 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_pytest_plugin.py::test_the_report_of_a_failing_test_shows_the_run_on_the_board_s_clock`,
   `tests/test_serial_backend.py::test_the_serial_report_names_the_build_the_test_loaded`,
   `tests/test_run_report.py::test_the_build_line_names_each_kind_as_its_tool_does`
+
+## A UART's line rate
+
+- **299.** A source's output goes in at its own rate: a `(t, bytes, baud)` triple, `baud` a
+  positive `int`, goes into the chip as a `uart_rx` at `baud`, and a `(t, bytes)` pair at the
+  profile's `baud`, each output at its own, so that a model answers a rate command at the old rate
+  and what follows at the new one. A triple from an interface without a line (the network, the
+  Bluetooth controller, the console without pins), from an SPP channel's source or from the
+  modem's data peer is refused, and so is anything that is neither a pair nor a triple. A model
+  with `transmitted` or `configured` is told the firmware's rates, in `Duration`s, and one without
+  them is not taken for one; raising in either fails the run.
+  `tests/test_uart_rates.py::test_a_model_answers_a_rate_command_at_the_old_rate_and_what_follows_at_the_new_one`,
+  `tests/test_uart_rates.py::test_a_pair_goes_in_at_the_profile_s_rate_and_a_triple_at_its_own`,
+  `tests/test_uart_rates.py::test_a_model_s_output_that_is_neither_a_pair_nor_a_triple_is_refused`,
+  `tests/test_uart_rates.py::test_a_model_is_told_the_firmware_s_rates_in_durations`,
+  `tests/test_uart_rates.py::test_the_adapter_of_a_model_has_the_optional_methods_the_model_has`,
+  `tests/test_uart_rates.py::test_an_interface_without_a_line_refuses_an_output_at_a_rate`,
+  `tests/test_uart_rates.py::test_what_goes_through_the_modem_s_data_mode_has_no_rate_of_its_own`,
+  `tests/test_uart_rates.py::test_a_model_that_raises_on_the_firmware_s_rate_fails_the_run`,
+  `tests/test_spp_peer.py::test_a_source_that_gets_its_answer_wrong_fails_the_air_naming_the_peer`,
+  `tests/test_duration_model.py::test_what_a_model_in_durations_answers_wrong_fails_the_air_in_durations`,
+  `tests/test_uart_rates.py::test_the_firmware_switches_the_part_to_115200_and_follows_it`
+- **300.** A `frm_err` fails the run unless the source whose RX pin it is takes frame errors: a
+  source with `frame_errors(at, count, baud)` gets the warning's instant, its count and the
+  firmware's rate, the run goes on, and the warning stays in the report; without it, or for a
+  warning without its count, the run fails with the message that names, of the rates the
+  source's bytes went in at by the warning's `t`, the last the route does not read, or the last of
+  all when it reads each. On `uart_rate_switch`, a part back at 9600 after a power loss is found
+  again with `frame_errors`, and the same part without it fails the run.
+  `tests/test_uart_rates.py::test_a_model_that_takes_frame_errors_gets_them_and_the_run_goes_on`,
+  `tests/test_uart_rates.py::test_a_source_in_nanoseconds_takes_frame_errors_in_nanoseconds`,
+  `tests/test_uart_rates.py::test_without_frame_errors_a_frm_err_fails_the_run_as_before`,
+  `tests/test_uart_rates.py::test_a_frm_err_names_the_last_rate_the_source_sent_at_that_the_route_does_not_read`,
+  `tests/test_uart_rates.py::test_a_frm_err_without_its_count_fails_the_run_whatever_the_source`,
+  `tests/test_uart_rates.py::test_a_model_that_raises_on_its_frame_errors_fails_the_run`,
+  `tests/test_uart_rates.py::test_after_a_power_loss_the_firmware_searches_for_the_part_s_rate`,
+  `tests/test_uart_rates.py::test_the_same_part_without_frame_errors_fails_the_search`

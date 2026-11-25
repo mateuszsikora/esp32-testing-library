@@ -35,7 +35,7 @@ from esp32tl.bluetooth.controller import RSSI, SIX_DIGITS, Controller, Pairing, 
 from esp32tl.interfaces.condition import Condition, FirstFrom
 from esp32tl.interfaces.history import History
 from esp32tl.interfaces.uart import Source, Supplied
-from esp32tl.link.boardlink import Direction, Output
+from esp32tl.link.boardlink import Direction, Output, OutputAtRate
 from esp32tl.sources.model import InNanoseconds, Model, in_nanoseconds
 from esp32tl.units import Duration
 
@@ -920,8 +920,11 @@ class SppPeer(BluetoothDevice):
                 f"{self.name}: source.{method} raised {type(error).__name__}: {error}"
             ) from error
 
-    def _queue(self, now: int, method: str, call: Callable[[], Iterable[Output]]) -> None:
-        """What the source's `method` returns, read, checked and queued by time."""
+    def _queue(
+        self, now: int, method: str, call: Callable[[], Iterable[Output | OutputAtRate]]
+    ) -> None:
+        """What the source's `method` returns, read, checked and queued by time: `(t, bytes)`
+        pairs only, since a channel has no line rate."""
         outputs = self._call(method, lambda: list(call()))
         for output in outputs:
             if not (

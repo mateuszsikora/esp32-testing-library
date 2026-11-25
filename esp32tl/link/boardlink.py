@@ -47,7 +47,13 @@ on. Both go out after the board's inputs the turn holds so far, so that the runn
 Warnings and the run's `stats` are kept for the test report. What the harness finds wrong with
 the run is kept in `error`, the first cause only; the harness then ends the run with `stop` at the
 runner's next turn, and still reads to end of file. A `frm_err` warning is such an error: bytes
-sent at another baud than the guest's UART receives at would otherwise be lost in silence.
+sent at another baud than the guest's UART receives at would otherwise be lost in silence. It is
+none when the interface whose RX pin it is takes frame errors (`Interface.takes_frame_errors`):
+the link tells it of them (`frame_errors`), and the run goes on.
+
+A UART interface's output goes in at its wire's `baud`, or at the rate it gives as a third item,
+`(t, bytes, baud)`, each output at its own: the runner paces each `uart_rx` at its own rate, behind
+what is on the line already (6.1). An interface without a line has no rate to give.
 """
 
 import socket
@@ -111,6 +117,8 @@ Direction = Literal["in", "out"]
 
 # What an interface sends into the chip: from `t`, in nanoseconds, these bytes.
 Output = tuple[int, bytes]
+# The same at a line rate of its own, `baud`, a positive int: a UART interface's only.
+OutputAtRate = tuple[int, bytes, int]
 
 
 @dataclass(frozen=True)
@@ -118,7 +126,7 @@ class Wire:
     """A UART interface's pins, as the board profile gives them. `tx` is the ESP32's TX pin,
     where the guest's bytes come out; `rx` its RX pin, where the interface's go in; either may
     be missing (a GNSS receiver that takes no commands has no `tx`). `baud` is the interface's
-    own line rate, which its bytes go in at."""
+    own line rate, which its bytes go in at unless an output gives its own."""
 
     tx: int | None
     rx: int | None
@@ -132,7 +140,8 @@ class Wire:
 class Interface:
     """One wire of the board, as `BoardLink` drives it: a UART on `wire`, or GPIO lines.
 
-    A UART interface receives `(t_ns, direction, bytes)` and returns `(t_ns, bytes)` (plan §3);
+    A UART interface receives `(t_ns, direction, bytes)` and returns `(t_ns, bytes)` (plan §3),
+    or `(t_ns, bytes, baud)` for bytes that go in at `baud` rather than at the wire's;
     an interface without a `wire` has no UART, and sends GPIO levels through `inputs`. It sees
     times on the backend's clock and nothing else of the backend, so it cannot tell the emulator
     from a real board but through that clock. The defaults are an interface with nothing behind
@@ -196,7 +205,7 @@ class Interface:
         """The GPIOs the interface is wired to, which the link watches: its wire's."""
         return frozenset() if self.wire is None else self.wire.pins
 
-    def receive(self, t: int, direction: Direction, data: bytes) -> Iterable[Output]:
+    def receive(self, t: int, direction: Direction, data: bytes) -> Iterable[Output | OutputAtRate]:
         """`data` crossed the wire at `t`, `out` of the ESP32 (what the guest transmitted). The
         bytes of one wire come in order but cut anywhere: where one call ends carries no meaning
         but the `t` of the next (protocol 5.2), so requests are found by their terminator.
@@ -208,7 +217,7 @@ class Interface:
         turn, before the hold, so that the test holding this turn sees it. It sends nothing: what
         it makes goes out in `poll`, after the hold."""
 
-    def poll(self, now: int) -> Iterable[Output]:
+    def poll(self, now: int) -> Iterable[Output | OutputAtRate]:
         """What the interface sends unprompted, asked at every turn; none stamped before `now`.
         Its outputs may lie in the future: the runner queues them (protocol §8)."""
         return ()
@@ -238,8 +247,20 @@ class Interface:
         reaches `wire.tx`, `receives` whether a UART's RX listens on `wire.rx`, and `baud` the
         route's rate (`None` while unset, or when no route touches the wire), the receiving
         route's when two ports share the wire. The interface's bytes still go in at `wire.baud`,
-        its own line rate: a mismatch reaches the UART as the frame error it is (protocol 11.6),
-        and this is how a receive-only interface can tell one before the `frm_err` warning."""
+        its own line rate, or at the rate each output gives: a mismatch reaches the UART as the
+        frame error it is (protocol 11.6), and this is how a receive-only interface can tell one
+        before the `frm_err` warning."""
+
+    @property
+    def takes_frame_errors(self) -> bool:
+        """Whether a `frm_err` on this interface's RX pin goes to `frame_errors`, and the run goes
+        on, rather than failing the run."""
+        return False
+
+    def frame_errors(self, t: int, count: int, baud: int | None) -> None:
+        """`count` bytes this interface sent from `t` on were dropped as frame errors on its RX
+        pin (a `frm_err` warning, merged): the guest's UART receives there at `baud`, `None`
+        with none set. Called only when `takes_frame_errors`; raising fails the run."""
 
     def driven(self, t: int, changes: Sequence[tuple[int, int]], enabled: frozenset[int]) -> None:
         """The guest changed the output of this interface's pins at `t`: the `[pin, level]`
@@ -379,7 +400,10 @@ class BoardLink:
             self.interfaces
         )
         self._enabled: frozenset[int] = frozenset()
-        self._answers: list[tuple[Interface, int, bytes]] = []
+        self._answers: list[tuple[Interface, int, bytes, int | None]] = []
+        # Where each UART interface's line rate changed, `(t, baud)` in the order sent, an entry
+        # only when the rate is not the one before: what the frm_err message names.
+        self._rates: dict[Interface, list[tuple[int, int]]] = {}
 
     @property
     def clock(self) -> str | None:
@@ -515,7 +539,7 @@ class BoardLink:
             self._gpio_out(message)
         elif isinstance(message, Warn):
             if message.kind == "frm_err":
-                raise LinkError(self._frame_errors(message))
+                self._frame_errors(message)
             if message.kind == "rxfifo_ovf":
                 owner = next(
                     (
@@ -577,7 +601,7 @@ class BoardLink:
                     answers = _outputs(
                         interface.name, "receive", interface.receive(message.t, "out", message.data)
                     )
-                self._answers += [(interface, t, data) for t, data in answers]
+                self._answers += [(interface, *answer) for answer in answers]
 
     def _packet(self, message: EthTx | HciTx) -> None:
         """An Ethernet frame to the network behind the access point, or an H4 packet to the
@@ -589,7 +613,7 @@ class BoardLink:
                     answers = _outputs(
                         interface.name, "receive", interface.receive(message.t, "out", message.data)
                     )
-                self._answers += [(interface, t, data) for t, data in answers]
+                self._answers += [(interface, *answer) for answer in answers]
 
     def _sd_card_ack(self, message: SdCardAck) -> None:
         slot = next((i for i in self.interfaces if i.card_slot), None)
@@ -618,30 +642,50 @@ class BoardLink:
                 with calling(interface.name, "configured"):
                     interface.configured(message.t, *state)
 
-    def _frame_errors(self, warning: Warn) -> str:
-        """Why a `frm_err` warning fails the run: the bytes went in at another baud than the
-        guest's UART receives at, so the firmware lost them without a sign the test could see,
-        and whatever it should have done with them would fail later as a timeout (5.8)."""
-        rate = "with no baud set" if warning.baud is None else f"at {warning.baud} baud"
-        uart = "UART" if warning.port is None else f"UART{warning.port}"
-        dropped = "bytes" if warning.nbytes is None else counted(warning.nbytes, "byte")
+    def _frame_errors(self, warning: Warn) -> None:
+        """A `frm_err` warning goes to the interface whose RX pin it is, when it takes frame
+        errors, and the run goes on; otherwise it fails the run: the bytes went in at another
+        baud than the guest's UART receives at, so the firmware lost them without a sign the test
+        could see, and whatever it should have done with them would fail later as a timeout
+        (5.8). A warning without its count fails the run all the same."""
         pin = warning.pin
         owner = (
             None
             if pin is None
             else next((i for i in self.interfaces if i.wire is not None and i.wire.rx == pin), None)
         )
+        if owner is not None and warning.nbytes is not None and owner.takes_frame_errors:
+            with calling(owner.name, "frame_errors"):
+                owner.frame_errors(warning.t, warning.nbytes, warning.baud)
+            return
+        rate = "with no baud set" if warning.baud is None else f"at {warning.baud} baud"
+        uart = "UART" if warning.port is None else f"UART{warning.port}"
+        dropped = "bytes" if warning.nbytes is None else counted(warning.nbytes, "byte")
         if owner is not None:
             assert owner.wire is not None
-            sender = f"{owner.name} sends at {owner.wire.baud} baud on GPIO {pin}"
+            sender = (
+                f"{owner.name} sends at {self._dropped_rate(owner, warning)} baud on GPIO {pin}"
+            )
         elif pin is not None:
             sender = f"bytes on GPIO {pin}"
         else:
             sender = "bytes on a pin the runner did not name"
-        return (
+        raise LinkError(
             f"{sender}, and the firmware's {uart} receives there {rate}:"
             f" {dropped} dropped as frame errors (frm_err)"
         )
+
+    def _dropped_rate(self, owner: Interface, warning: Warn) -> int:
+        """The rate `owner`'s dropped bytes went in at, as well as the link can tell: the warning
+        comes after the outputs it is about, which may have gone in at several rates. Of the
+        rates it sent at by the warning's `t`, the last the guest's route does not read (more than
+        3 % off, as `matches_baud`), else the last; the wire's `baud` before any."""
+        assert owner.wire is not None
+        sent = [(t, baud) for t, baud in self._rates.get(owner, []) if t <= warning.t]
+        for _, baud in reversed(sent):
+            if not reads(warning.baud, baud):
+                return baud
+        return sent[-1][1] if sent else owner.wire.baud
 
     def _gpio_out(self, message: GpioOut) -> None:
         for interface in self.interfaces:
@@ -720,9 +764,9 @@ class BoardLink:
         for interface in self.interfaces:
             with calling(interface.name, "poll"):
                 polled = _outputs(interface.name, "poll", interface.poll(now))
-            outputs += [(interface, t, data) for t, data in polled]
+            outputs += [(interface, *output) for output in polled]
         inputs: list[tuple[Interface, Input]] = []
-        for interface, t, data in outputs:
+        for interface, t, data, baud in outputs:
             if not data:
                 continue
             if t < now:
@@ -730,6 +774,13 @@ class BoardLink:
                     f"{interface.name} sent bytes stamped {interface.instant(t)} in the turn at"
                     f" {interface.instant(now)}: it answered sooner than its latency, or sent past"
                     " its quiet_until"
+                )
+            if baud is not None and (
+                interface.ethernet or interface.bluetooth or interface.pinless_console
+            ):
+                raise LinkError(
+                    f"{interface.name} sent bytes at {baud} baud, and has no line rate to send"
+                    " them at: its outputs are (t_ns, bytes) pairs"
                 )
             if interface.ethernet:
                 inputs.append((interface, EthRx(t, data)))
@@ -743,7 +794,11 @@ class BoardLink:
             wire = interface.wire
             if wire is None or wire.rx is None:
                 raise LinkError(f"{interface.name} sent bytes, and has no RX pin to send them on")
-            inputs += [(interface, UartRx(t, wire.rx, wire.baud, chunk)) for chunk in _chunks(data)]
+            rate = wire.baud if baud is None else baud
+            changes = self._rates.setdefault(interface, [])
+            if not changes or changes[-1][1] != rate:
+                changes.append((t, rate))
+            inputs += [(interface, UartRx(t, wire.rx, rate, chunk)) for chunk in _chunks(data)]
         for interface in self.interfaces:
             with calling(interface.name, "inputs"):
                 inputs += [(interface, message) for message in interface.inputs(now)]
@@ -944,20 +999,38 @@ def calling(name: str, method: str) -> Iterator[None]:
         raise LinkError(f"{name}.{method} raised {_raised(error)}") from error
 
 
-def _outputs(name: str, method: str, values: Iterable[Output]) -> list[Output]:
-    """`values` read, each checked to be a `(t_ns, bytes)` pair."""
-    outputs = []
+def _outputs(
+    name: str, method: str, values: Iterable[Output | OutputAtRate]
+) -> list[tuple[int, bytes, int | None]]:
+    """`values` read, each checked to be a `(t_ns, bytes)` pair or a `(t_ns, bytes, baud)`
+    triple; a pair's rate is `None`, the wire's."""
+    outputs: list[tuple[int, bytes, int | None]] = []
     for value in values:
         if not (
             isinstance(value, tuple)
-            and len(value) == 2
+            and len(value) in (2, 3)
             and isinstance(value[0], int)
             and not isinstance(value[0], bool)
             and isinstance(value[1], bytes)
+            and (len(value) == 2 or is_baud(value[2]))
         ):
-            raise LinkError(f"{name}.{method} returned {value!r:.80}, not a (t_ns, bytes) pair")
-        outputs.append(value)
+            raise LinkError(
+                f"{name}.{method} returned {value!r:.80}, not a (t_ns, bytes) pair or a"
+                " (t_ns, bytes, baud) triple"
+            )
+        outputs.append((value[0], value[1], value[2] if len(value) == 3 else None))
     return outputs
+
+
+def reads(route: int | None, baud: int) -> bool:
+    """Whether a guest's UART at `route` reads bytes sent at `baud`: within 3 % of `baud`, as
+    the runner's `matches_baud`; never with no rate set."""
+    return route is not None and abs(route - baud) * 100 <= baud * 3
+
+
+def is_baud(value: object) -> bool:
+    """Whether `value` is a line rate an output may give: a positive `int`."""
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
 def in_ns(t: int) -> str:

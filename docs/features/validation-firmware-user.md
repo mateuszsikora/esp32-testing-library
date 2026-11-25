@@ -56,6 +56,7 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `bt_spp_initiator` | ESP-IDF's `examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator`, unmodified, with its own `sdkconfig.defaults`, for target `esp32`: finds a device named `ESP_SPP_ACCEPTOR` over Bluetooth Classic, pairs with it, opens SPP and writes to it without end ([below](#bt_spp_initiator)) |
 | `bt_spp_initiator_psram` | The same example, unmodified, with `firmware/bt_spp_initiator_psram/sdkconfig.defaults` after its own: PSRAM on, and Bluedroid's buffers taken from it first; on a profile with `psram_mb = 4` it does what the plain image does ([below](#bt_spp_initiator_psram)) |
 | `hello_world_8mb` | ESP-IDF's `hello_world`, unmodified, with `firmware/hello_world_8mb/sdkconfig.defaults`: `CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y`, so that its bootloader's and its application's image headers give 8 MB of flash. On a board profile with `flash_mb` 8 or 16 it boots; on one with 4 the esp32sim backend refuses it at setup ([the flash a run gets](board-profiles-user.md#the-flash-a-run-gets)) |
+| `uart_rate_switch` | `firmware/uart_rate_switch`: switches a part on UART1 from 9600 to 115200 baud with `AT+IPR=115200` and follows it, and after a power loss searches for the part's rate, 115200 first, then 9600 ([below](#uart_rate_switch)) |
 | `arduino_shell` | `firmware/arduino_shell`, a PlatformIO project on the Arduino-ESP32 core, `board = esp32dev`, built by `firmware/build-platformio.sh`: prints a banner on `Serial`, reads its settings with `Preferences`, runs a line-based command interpreter on `Serial`, and, when its settings name a network, joins it with `WiFi` and serves `GET /status` with `WebServer` ([below](#arduino_shell)) |
 
 ## The images of the other chips
@@ -178,6 +179,30 @@ clock and read those ordinary console messages. It does not use esp_modem or PPP
 the same pins is `uart.aux`, with RI pulled down and no modem model: the far end is a model the
 test writes, which answers `OK` to every command ([a UART's own
 model](pytest-plugin-user.md#a-uarts-own-model)).
+
+## `uart_rate_switch`
+
+`uart_rate_switch` changes a UART's line rate while it runs, as a firmware does that tells a modem
+`AT+IPR`. Build it with `firmware/build.sh uart_rate_switch`; `make firmware` and `make test`
+include it. It uses UART1 on TX 26 and RX 27, `modem_at`'s pins, fixed in
+`firmware/uart_rate_switch/main/main.c`, and expects a part there that starts at 9600 baud.
+
+NVS keeps the rate it last switched the part to. At every boot it tries that rate first, then
+9600: it prints `rate_switch: trying <rate>`, sends `AT`, and prints `rate_switch: found at
+<rate>` once the part answers `OK`, or `rate_switch: no answer at <rate>` after 500 ms. A part
+found at 9600 is sent `AT+IPR=115200`; after its `OK` the firmware prints `rate_switch:
+AT+IPR=115200 ok`, switches its own UART to 115200, sends `AT`, prints `rate_switch: 115200 ok`
+once it is answered, and writes 115200 into NVS. It ends with `rate_switch: done`. So the first
+boot on a fresh flash finds the part at 9600 and switches it. A reset that keeps the part powered
+finds it at 115200. A boot after a power loss, which puts the part back at 9600, gets no answer at
+115200 first, then finds it at 9600 and switches it again. When nothing answers it prints
+`rate_switch: no part found`; when a step after that is not answered, `rate_switch:
+AT+IPR=115200 not answered` or `rate_switch: no answer at 115200`. Either way it stops there.
+
+`tests/test_uart_rates.py` runs it on `tests/boards/aux-uart-9600.toml`, a profile whose UART1 on
+those pins is `uart.aux` at 9600 baud, against a model of the test's that changes its rate on
+`AT+IPR` and takes its frame errors
+([a model that changes its line rate](models-user.md#a-model-that-changes-its-line-rate)).
 
 ## `modem_recovery`
 

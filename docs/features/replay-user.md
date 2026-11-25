@@ -101,8 +101,14 @@ stream given a `protocol`, or nothing.
   The recording carries no baud: its bytes go in at the profile's, so the fix is in the profile
   or in the firmware's configuration. Bytes that reach a UART whose RX pin the firmware has set
   before its baud are frame errors too, and fail the test the same way. A firmware that should
-  detect a wrong baud, or find the right one by itself, cannot be tested through a replay at the
-  wrong baud yet: no marker or option lets a test expect frame errors.
+  detect a wrong baud, or find the right one by itself, is tested against a model of the test's
+  that changes its rate and takes its frame errors
+  ([a model that changes its line rate](models-user.md#a-model-that-changes-its-line-rate)), not
+  through a replay: a replay cannot take frame errors, and keeps the profile's rate.
+- A recording carries no rate. A tap of a run whose model changed its rate records the bytes
+  without their rates, so a replay of it puts everything in at the profile's `baud`: what the
+  model sent at another rate reaches a firmware that has switched to it as frame errors, and fails
+  the run. Changing the recording format to carry rates is not part of esp32tl yet.
 
 ## What a replay refuses
 

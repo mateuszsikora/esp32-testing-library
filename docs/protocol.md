@@ -511,10 +511,16 @@ warnings in the test report, and takes a `frm_err` as an error of the run: the b
 another baud than the guest's UART receives at, which would otherwise fail a test only later, by
 a timeout that does not say why. The `esp32sim` backend then ends the run at once (§9), and the
 error reads `uart.gnss sends at 115200 baud on GPIO 5, and the firmware's UART1 receives there at
-9600 baud: 72 bytes dropped as frame errors (frm_err)`, naming the interface whose RX pin it is,
-or `bytes on GPIO {pin}` for a pin no interface owns, or `bytes on a pin the runner did not name`
-for a `frm_err` without its `pin`; `receives there with no baud set` when the route's `baud` is
-`null`.
+9600 baud: 72 bytes dropped as frame errors (frm_err)`, naming the interface whose RX pin it is
+and, of the rates its bytes went in at by the warning's `t`, the last the route does not read
+(more than 3 % off), or the last of all when it reads each; or `bytes on GPIO {pin}` for a pin no
+interface owns, or
+`bytes on a pin the runner did not name` for a `frm_err` without its `pin`; `receives there with
+no baud set` when the route's `baud` is `null`. The one exception is an interface whose RX pin it
+is that takes frame errors (`Interface.takes_frame_errors`, a source with `frame_errors`, as a model
+of the test's that searches for a rate): the link gives it the `t`, the `bytes` and the route's
+`baud` of the warning, and the run goes on. A `frm_err` without `bytes` fails the run all the
+same. Nothing changes on the wire: the warning is the same, and stays in the report either way.
 
 ### 5.9 `stats` *ext*
 
@@ -580,9 +586,11 @@ No new message or protocol version is needed.
 ```
 
 Bytes the peer sends into the chip on GPIO `pin` at `baud`, its own line rate, a positive integer
-(`0` is a protocol error). Peers send whole messages with one time and never pace bytes; the
-runner does (rule 5). `t` is when the first byte is complete and enters the RX FIFO, unless the
-line is still busy with an earlier message.
+(`0` is a protocol error). `BoardLink` sends an interface's bytes at the route's `baud` from the
+board profile, or at the rate the interface gave the output, `(t, bytes, baud)`: a model of the
+test's that changes its line rate gives each output its own. Peers send whole messages with one
+time and never pace bytes; the runner does (rule 5). `t` is when the first byte is complete and
+enters the RX FIFO, unless the line is still busy with an earlier message.
 
 ### 5.11 `gpio_in` and `release` (M3)
 

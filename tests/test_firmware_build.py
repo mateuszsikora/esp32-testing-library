@@ -154,7 +154,7 @@ def test_build_refuses_an_unknown_image(tmp_path: Path) -> None:
         " modem_recovery nvs_reader"
         " pppos_client mqtt_session http_request http_server persistence ota_state timer_wake"
         " reset_reasons deep_sleep"
-        " bt_spp_initiator bt_spp_initiator_psram hello_world_8mb\n"
+        " bt_spp_initiator bt_spp_initiator_psram hello_world_8mb uart_rate_switch\n"
     )
     assert not (tmp_path / "out").exists()
 
@@ -286,6 +286,7 @@ def test_local_build_runs_idf_py_and_records_how(tmp_path: Path, local_idf: dict
         ),
         # ESP-IDF's hello_world, which has no sdkconfig.defaults: only the image's own
         "hello_world_8mb": f"{tmp_path}/idf/examples/get-started/hello_world",
+        "uart_rate_switch": str(ROOT / "firmware" / "uart_rate_switch"),
     }
     builds = {image: (tmp_path / "out" / image / "build").resolve() for image in projects}
     assert logged(tmp_path / "idf.log") == [

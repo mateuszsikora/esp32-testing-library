@@ -103,7 +103,10 @@ A recording, [version 1](../recording-format.md):
   names under `app`, or `firmware.bin` of a PlatformIO build ([builds](builds-user.md)); `tools` the esp32tl version and the esp32sim revision the runner reported;
   `created` when the file was written, in UTC.
 - An `out` event is bytes the firmware wrote to the route's UART, at the time it wrote them. An
-  `in` event is bytes the far end gave, at the time it stamped them in the current run. Unprompted
+  `in` event is bytes the far end gave, at the time it stamped them in the current run, without
+  the line rate they went in at: a model of the test's that gave an output its own rate
+  ([a model that changes its line rate](models-user.md#a-model-that-changes-its-line-rate)) is
+  recorded as if it had sent at the profile's `baud`, and a replay of the tap sends it so. Unprompted
   replay events keep their recorded absolute times on the first pass; `loop` shifts later passes
   by the recording's period. Matched answers keep their recorded bytes and delays relative to
   the current request's completion time, not their original absolute times. Repeated requests
