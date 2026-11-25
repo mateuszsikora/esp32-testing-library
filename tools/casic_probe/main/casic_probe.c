@@ -10,9 +10,9 @@
  *                                  frame within WINDOW_MS, or `none`; `busy` whether the receiver
  *                                  was sending NMEA at the end of the write
  *
- * It answers what esp32tl's GNSS receiver model leaves as TODO(owner) (issue #333): what a frame
- * with a bad checksum gets, how soon an answer comes after the frame, and whether AID-INI gets
- * one. It sends no command that saves the receiver's configuration: no CFG-CFG, no $PCAS00, no
+ * It answers what the specifications leave open for esp32tl's GNSS receiver model (issue #333):
+ * what a frame with a bad checksum gets, how soon an answer comes after the frame, and whether
+ * AID-INI gets one. It sends no command that saves the receiver's configuration: no CFG-CFG, no $PCAS00, no
  * CFG-RST. Power-cycle the board after a run to drop the assistance data it wrote. What it found
  * on an L76K is in l76k.txt and docs/stage0-findings.md. */
 #include <stdbool.h>
