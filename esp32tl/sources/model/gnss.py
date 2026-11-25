@@ -68,7 +68,7 @@ ACK = 0x05
 ACK_ACK = 0x01
 ACK_NAK = 0x00
 # How long after the frame's last byte the receiver starts its answer, unless the test says
-# otherwise: 1.53 ms on an L76K at 9600 baud (tools/casic_probe, docs/stage0-findings.md).
+# otherwise: 1.53 to 1.59 ms on an L76K at 9600 baud (tools/casic_probe, docs/stage0-findings.md).
 ACK_AFTER = ms(1.5)
 
 CasicAnswer = Literal["ack", "nak"]
@@ -162,6 +162,8 @@ class GnssReceiver:
         self._frames: list[CasicFrame] = []
         self._arriving: list[CasicFrame] = []
         self._answers: list[Output] = []
+        # Whether part of the frame at the start of `_heard` came while the receiver was silent.
+        self._silenced = False
         # When the last byte the firmware wrote to the receiver leaves the line.
         self._line_free = 0
 
@@ -223,10 +225,12 @@ class GnssReceiver:
 
     def go_silent(self) -> None:
         """Nothing sent from now on, until `resume`: no sentences, and no answer, not even one
-        still due to a frame heard before; a frame still arriving is heard silent."""
+        still due to a frame heard before; a frame still arriving, or still being written, is
+        heard silent."""
         with self._lock:
             now = self._now()
             self._answers.clear()
+            self._silenced = bool(self._heard)
             self._arriving = [
                 frame if frame.at.ns <= now else replace(frame, answer=None)
                 for frame in self._arriving
@@ -258,6 +262,7 @@ class GnssReceiver:
                 # sent, go with its power.
                 self._hear(now)
                 self._heard.clear()
+                self._silenced = False
                 self._arriving.clear()
                 self._answers.clear()
                 self._line_free = 0
@@ -316,15 +321,21 @@ class GnssReceiver:
             self._line_free = start + _char_ns(len(data), self._baud)
             before = len(self._heard)
             self._heard += data
-            for cls, id, payload, valid, end in self._frames_heard():
+            silenced = self._silenced
+            for cls, id, payload, valid, begin, end in self._frames_heard():
                 at = start + _char_ns(end - before, self._baud)
                 answer: CasicAnswer | None = None
-                if self._state.talking:
+                # A frame part of which came while the receiver was silent is heard silent.
+                if self._state.talking and not (silenced and begin == 0):
                     answer = "nak" if not valid or (cls, id) in self._refused else "ack"
                     reply = ACK_ACK if answer == "ack" else ACK_NAK
                     frame = casic(ACK, reply, bytes((cls, id, 0, 0)))
                     self._answers.append((at + self._answer_after, frame))
                 self._arriving.append(CasicFrame(Duration(at), cls, id, payload, answer))
+            # What is left is the start of the next frame: silenced if the bytes before it stay,
+            # or if it came now, silent.
+            kept = len(self._heard) == before + len(data)
+            self._silenced = bool(self._heard) and (not self._state.talking or (silenced and kept))
             return ()
 
     def arrive(self, now: int) -> None:
@@ -338,13 +349,13 @@ class GnssReceiver:
         while self._arriving and self._arriving[0].at.ns <= now:
             self._frames.append(self._arriving.pop(0))
 
-    def _frames_heard(self) -> list[tuple[int, int, bytes, bool, int]]:
+    def _frames_heard(self) -> list[tuple[int, int, bytes, bool, int, int]]:
         """The CASIC frames complete in what the receiver heard, each with whether its checksum
-        holds and where it ends, counted in bytes from the start of `_heard` before this call,
-        taken out of it; what lies before a frame's header is dropped, and so is a header whose
-        length is more than `CASIC_MAX_PAYLOAD`, up to the next `0xBA`."""
+        holds and where it begins and ends, counted in bytes from the start of `_heard` before
+        this call, taken out of it; what lies before a frame's header is dropped, and so is a
+        header whose length is more than `CASIC_MAX_PAYLOAD`, up to the next `0xBA`."""
         heard = self._heard
-        frames: list[tuple[int, int, bytes, bool, int]] = []
+        frames: list[tuple[int, int, bytes, bool, int, int]] = []
         dropped = 0
         while True:
             start = heard.find(CASIC_HEADER)
@@ -368,7 +379,7 @@ class GnssReceiver:
             payload = bytes(heard[CASIC_HEAD : CASIC_HEAD + length])
             checksum = int.from_bytes(heard[end - CASIC_CHECKSUM : end], "little")
             valid = checksum == casic_checksum(cls, id, payload)
-            frames.append((cls, id, payload, valid, dropped + end))
+            frames.append((cls, id, payload, valid, dropped, dropped + end))
             del heard[:end]
             dropped += end
 

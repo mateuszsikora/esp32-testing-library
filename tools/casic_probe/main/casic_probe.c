@@ -42,6 +42,7 @@ typedef struct {
 
 static QueueHandle_t answers;
 static volatile int64_t last_rx;    /* the time of the last byte the receiver sent */
+static volatile int64_t last_nmea;  /* the time of the last byte of an NMEA sentence */
 static volatile bool in_sentence;   /* between a `$` and its line ending */
 /* The UTC time and date of the last RMC, and when it came. */
 static volatile int rmc_hms = -1, rmc_dmy = -1;
@@ -98,32 +99,53 @@ static void sentence_done(const char *line, int64_t at)
     }
 }
 
+/* Bytes that are neither NMEA nor CASIC, printed once the buffer is full or something else
+ * comes. */
+static uint8_t raw[64];
+static int nraw;
+static int64_t raw_at;
+
+static void raw_flush(void)
+{
+    if (nraw == 0) return;
+    printf("RAW %lld ", raw_at);
+    hex(raw, nraw);
+    printf("\n");
+    nraw = 0;
+}
+
+static void raw_add(uint8_t c, int64_t at)
+{
+    if (nraw == 0) raw_at = at;
+    raw[nraw++] = c;
+    if (nraw == sizeof(raw)) raw_flush();
+}
+
 /* Reads the receiver a byte at a time, each stamped as it comes, and splits NMEA from CASIC. */
 static void reader(void *arg)
 {
     static uint8_t buf[6 + MAX_PAYLOAD + 4];
     static char line[128];
-    static uint8_t raw[64];
-    int n = 0, nline = 0, nraw = 0;
-    int64_t first = 0, line_at = 0, raw_at = 0;
+    int n = 0, nline = 0;
+    int64_t first = 0, line_at = 0;
     for (;;) {
         uint8_t c;
         if (uart_read_bytes(GNSS, &c, 1, portMAX_DELAY) != 1) continue;
         int64_t t = esp_timer_get_time();
         last_rx = t;
-        if (n == 0 && c == 0xba) {
-            first = t;
-            buf[n++] = c;
-            continue;
-        }
         if (n == 1) {
             if (c == 0xce) {
                 buf[n++] = c;
                 continue;
             }
+            /* A 0xBA that starts no header; this byte may start one. */
             n = 0;
-            raw[nraw++] = 0xba;
-            if (nraw == 1) raw_at = first;
+            raw_add(0xba, first);
+        }
+        if (n == 0 && c == 0xba) {
+            first = t;
+            buf[n++] = c;
+            continue;
         }
         if (n >= 2) {
             buf[n++] = c;
@@ -149,17 +171,13 @@ static void reader(void *arg)
             continue;
         }
         if (c == '$') {
-            if (nraw) {
-                printf("RAW %lld ", raw_at);
-                hex(raw, nraw);
-                printf("\n");
-                nraw = 0;
-            }
+            raw_flush();
             in_sentence = true;
             nline = 0;
             line_at = t;
         }
         if (in_sentence) {
+            last_nmea = t;
             if (c == '\r') continue;
             if (c == '\n' || nline == sizeof(line) - 1) {
                 line[nline] = 0;
@@ -170,14 +188,7 @@ static void reader(void *arg)
             line[nline++] = c;
             continue;
         }
-        if (nraw == 0) raw_at = t;
-        raw[nraw++] = c;
-        if (nraw == sizeof(raw)) {
-            printf("RAW %lld ", raw_at);
-            hex(raw, nraw);
-            printf("\n");
-            nraw = 0;
-        }
+        raw_add(c, t);
     }
 }
 
@@ -197,7 +208,9 @@ static void probe(const char *name, int i, const uint8_t *data, int len, uint8_t
     uart_write_bytes(GNSS, data, len);
     uart_wait_tx_done(GNSS, pdMS_TO_TICKS(1000));
     int64_t end = esp_timer_get_time();
-    bool busy = in_sentence || end - last_rx < 2000;
+    /* NMEA bytes only: a CASIC answer to the first of two frames comes while the second is
+     * still being written. */
+    bool busy = in_sentence || end - last_nmea < 2000;
     printf("TX %s %d %lld %lld ", name, i, start, end);
     hex(data, len);
     printf("\n");

@@ -330,19 +330,19 @@ time, against the end of each write (`uart_wait_tx_done`); the console, without 
 
 | Frames written | Answer, every time | First byte of the answer after the write's end |
 |---|---|---|
-| CFG-PRT query `BA CE 00 00 06 00 00 00 06 00`, 20 | Two CFG-PRT frames, then ACK-ACK `BA CE 04 00 05 01 06 00 00 00 0A 00 05 01` | 40.03 to 40.09 ms in the gap after an epoch's sentences; 110 to 239 ms when written during them |
-| The same with a bad checksum, 5 | ACK-NAK `BA CE 04 00 05 00 06 00 00 00 0A 00 05 00` | 2.586 to 2.632 ms |
-| CFG `0x06 0x7F`, which the specifications do not define, 3 | ACK-NAK | 2.587 to 2.656 ms |
+| CFG-PRT query `BA CE 00 00 06 00 00 00 06 00`, 20 | Two CFG-PRT frames, then ACK-ACK `BA CE 04 00 05 01 06 00 00 00 0A 00 05 01` | 40.03 to 40.28 ms in the gap after an epoch's sentences; 61 to 295 ms when written during them |
+| The same with a bad checksum, 5 | ACK-NAK `BA CE 04 00 05 00 06 00 00 00 0A 00 05 00` | 2.587 to 2.628 ms |
+| CFG `0x06 0x7F`, which the specifications do not define, 3 | ACK-NAK | 2.587 to 2.590 ms |
 | Two CFG-PRT queries in one write, 3 | Each its two CFG-PRT frames and ACK-ACK | |
-| AID-INI, 56 bytes, nothing valid, 5; with the receiver's own GPS time valid, 5 | ACK-ACK `BA CE 04 00 05 01 0B 01 00 00 0F 01 05 01` | 2.573 to 2.623 ms; once 374 ms, written during an epoch |
-| AID-INI with a bad checksum, 3 | ACK-NAK `BA CE 04 00 05 00 0B 01 00 00 0F 01 05 00` | 2.572 to 2.573 ms |
-| MSG-GPSEPH, 72 zero bytes, 3 | ACK-ACK `BA CE 04 00 05 01 08 07 00 00 0C 07 05 01` | 2.575 to 2.576 ms |
+| AID-INI, 56 bytes, nothing valid, 5; with the receiver's own GPS time valid, 5 | ACK-ACK `BA CE 04 00 05 01 0B 01 00 00 0F 01 05 01` | 2.576 to 2.579 ms; once 378 ms, written during an epoch |
+| AID-INI with a bad checksum, 3 | ACK-NAK `BA CE 04 00 05 00 0B 01 00 00 0F 01 05 00` | 2.576 to 2.577 ms |
+| MSG-GPSEPH, 72 zero bytes, 3 | ACK-ACK `BA CE 04 00 05 01 08 07 00 00 0C 07 05 01` | 2.579 to 2.580 ms |
 
 A byte is stamped once it has been received, 1.042 ms of line time after its start bit at 9600
-baud, so the answers started about 1.53 ms after the frame's last stop bit. Written while the
+baud, so the answers started 1.53 to 1.59 ms after the frame's last stop bit. Written while the
 receiver was sending an epoch's sentences, a frame was answered only after the last of them, the
-`$GPTXT` that ends the epoch: in the example at 28.23 s of the log, the query's write ended during
-`$GNZDA`, and the answer came after the `$GPTXT` that followed. Every frame was answered, and
+`$GPTXT` that ends the epoch: in the example at 28.54 s of the log, the query's write ended during
+`$GNRMC`, and the answer came after the `$GPTXT` three sentences later. Every frame was answered, and
 each answer named the frame's class and id, then two zero bytes. The probe sends no command that
 saves the receiver's configuration: no CFG-CFG, `$PCAS00` or CFG-RST.
 

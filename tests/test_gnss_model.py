@@ -734,6 +734,42 @@ def test_a_silent_receiver_hears_the_frames_and_answers_none() -> None:
     ]
 
 
+def test_a_header_in_noise_takes_the_frames_its_length_covers() -> None:
+    board = Board()
+    query = frame(0x06, 0x00, b"")
+    # A header for 12 bytes of payload, then a whole query and 6 bytes more: one frame, whose
+    # checksum does not hold, and no answer to the query.
+    noise = b"\xba\xce\x0c\x00\x77\x66" + query + bytes(6)
+    write(board, 0, noise + query)
+    assert answers(board, S // 2) == [
+        (on_line(22) + ACK_AFTER_NS, ack(0x77, 0x66, nak=True)),
+        (on_line(32) + ACK_AFTER_NS, ack(0x06, 0x00)),
+    ]
+    assert [(f.cls, f.id, f.answer) for f in board.receiver.casic_frames] == [
+        (0x77, 0x66, "nak"),
+        (0x06, 0x00, "ack"),
+    ]
+
+
+def test_a_frame_written_in_part_while_silent_is_heard_silent() -> None:
+    board = Board()
+    query = frame(0x06, 0x00, b"")
+    # Silenced in the middle of a frame, and resumed before its end.
+    write(board, 0, query[:6])
+    board.receiver.go_silent()
+    board.receiver.resume()
+    write(board, S // 8, query[6:])
+    # Begun while silent, and ended once resumed.
+    board.receiver.go_silent()
+    write(board, S // 4, query[:3])
+    board.receiver.resume()
+    write(board, S // 4 + 1, query[3:])
+    # The next frame, all of it written while the receiver talks, gets its answer.
+    write(board, S // 2, query)
+    assert answers(board, S - 1) == [(S // 2 + on_line(10) + ACK_AFTER_NS, ack(0x06, 0x00))]
+    assert [f.answer for f in board.receiver.casic_frames] == [None, None, "ack"]
+
+
 def test_the_route_s_casic_calls_are_steps_and_its_frames_need_a_receiver() -> None:
     t = [0]
     log = RunLog()

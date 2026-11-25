@@ -84,7 +84,10 @@ receiver its clock in
    turn, before the `Wait` that carries the new latency: so bytes the firmware writes after that
    `Wait` are answered with the new ones. `go_silent` empties `_answers` and takes the answer off
    each frame of `_arriving` whose `at` is after `now`; a frame heard by then keeps the answer it
-   was given, which never goes out.
+   was given, which never goes out. `_silenced` says that part of the frame at the start of
+   `_heard` came while the receiver was silent: `go_silent` sets it when `_heard` holds bytes, and
+   `receive` when bytes are left there while silent; the frame that begins there gets no answer
+   when it ends, and `_silenced` holds only while those bytes stay. `supply(False)` clears it.
 7. **`supply(on)`** is the board's supply, which the backend hands every UART's source that has
    the method (`Supplied`, `esp32tl/interfaces/uart.py`) at `board.power_off()` and at the
    `power_on()` after it. `_supplied` is apart from the state's `talking`: `poll` sends an epoch

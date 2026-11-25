@@ -446,7 +446,7 @@ receiver answers each CASIC frame the firmware sends it, as an L76K did
 
 The answer carries the frame's class and id, then two zero bytes, and starts `answer_after` after
 the frame's last byte reached the receiver: `ms(1.5)` unless the test says otherwise with
-`gnss.answer_after(...)`, as the L76K started its answers 1.53 ms after the frame at 9600 baud.
+`gnss.answer_after(...)`, as the L76K started its answers 1.53 to 1.59 ms after the frame at 9600 baud.
 The firmware writes a frame into its UART's FIFO at about one instant, and the bytes leave at the
 route's baud, one after another, after those it wrote before: at the profile's 9600 baud an AID-INI
 frame, 66 bytes, takes 68.75 ms on the line, so its answer starts 70.25 ms after the write. The
@@ -496,7 +496,8 @@ def test_retries_assistance_the_receiver_refuses(board):
   finishes writing after it, and can come before power-on or after.
 - Silent, after `go_silent`, the receiver sends nothing, answers included, even one due to a frame
   heard before: it hears the frames and records them with no answer, a frame still on the line
-  when it went silent too. Without the board's supply it hears nothing, and what it had heard of a
+  when it went silent too, and one the firmware was writing, or began to write, while it was
+  silent, though it ends once the receiver talks again. Without the board's supply it hears nothing, and what it had heard of a
   frame when the power went, a frame still on the line and the answers not sent yet are lost: a
   firmware that boots again gets no answer meant for the one before.
 - Each answer makes the board stop soon after every write to the receiver, NMEA included, so that
