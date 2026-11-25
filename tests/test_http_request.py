@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from esp32tl import recording
+from esp32tl import HttpRequest, HttpResponse, recording
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.interfaces import NeverHappened, SourceError
 from esp32tl.interfaces.console import Console
@@ -54,6 +54,64 @@ def test_fetches_over_a_path_behind_the_access_point(
     # The server answers when the request has come up the path, and the page goes back down it.
     assert answered.at - request.at >= ms(100)
     assert board.link.warnings == []
+
+
+def test_a_handler_answers_from_the_request_it_got(
+    board: Esp32Sim, wifi: Wifi, console: Console
+) -> None:
+    network = wifi.access_point(SSID, password=PASSWORD)
+    seen: list[HttpRequest] = []
+
+    def echo(request: HttpRequest) -> HttpResponse:
+        seen.append(request)
+        return HttpResponse(
+            body=f"{request.method} {request.path} by {request.header('User-Agent')}\n"
+        )
+
+    network.http.serve("/", echo)
+    printed = console.line(r"^GET / by esp-idf/1\.0 esp32$")
+    board.power_on()
+    line = board.wait_until(printed, within=seconds(30))
+    # The example fetches again 10 s later: the first fetch is the one printed.
+    request = seen[0]
+    assert request is network.http.requests[0] and line.at > request.at
+    assert "http: GET / → 200" in board.report()
+
+
+def test_a_response_with_after_arrives_no_earlier_than_after_past_the_request(
+    board: Esp32Sim, wifi: Wifi, console: Console
+) -> None:
+    network = wifi.access_point(SSID, password=PASSWORD)
+    # Under the 5 s the example waits for a reply (SO_RCVTIMEO).
+    network.http.serve("/", HttpResponse(body="slow server\n", after=seconds(2)))
+    printed = console.line(r"^slow server$")
+    board.power_on()
+    request = board.wait_until(network.http.next_request("/"), within=seconds(30))
+    line = board.wait_until(printed, within=seconds(5))
+    assert line.at - request.at >= seconds(2)
+    assert "http: GET / → 200, after 2 s" in board.report()
+
+
+def test_a_handler_that_waits_on_the_board_fails_the_test_and_the_device_gets_a_500(
+    board: Esp32Sim, wifi: Wifi, console: Console
+) -> None:
+    network = wifi.access_point(SSID, password=PASSWORD)
+
+    def waits(request: HttpRequest) -> HttpResponse:
+        board.wait(seconds(1))
+        return HttpResponse(body="never\n")
+
+    network.http.serve("/", waits)
+    refused = console.line(r"^HTTP/1\.1 500 Internal Server Error")
+    board.power_on()
+    with pytest.raises(RuntimeError) as raised:
+        board.wait_until(refused, within=seconds(30))
+    assert str(raised.value) == (
+        "board.wait: called from the HTTP server's handler for '/': a handler must not wait"
+    )
+    # The run goes on: the device got its 500.
+    board.wait_until(refused, within=seconds(5))
+    assert board.link.error is None
 
 
 def test_rejoins_once_the_access_point_is_back(

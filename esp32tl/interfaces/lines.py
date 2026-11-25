@@ -11,6 +11,7 @@ from esp32tl.interfaces import SourceError
 from esp32tl.interfaces.condition import Condition, FirstFrom
 from esp32tl.link.boardlink import Interface
 from esp32tl.link.protocol import GpioIn, Input, Release
+from esp32tl.net.handlers import refuse_board
 from esp32tl.report import RunLog
 from esp32tl.units import Duration
 
@@ -192,6 +193,7 @@ class Lines(Interface):
     def drive(self, line: int | str, level: int) -> None:
         """Drives `line` to `level`, 0 or 1, from the board's current instant on, until the test
         drives it again or releases it."""
+        refuse_board("lines.drive")
         pin = self._pin(line)
         self._unowned(pin)
         if isinstance(level, bool):
@@ -212,6 +214,7 @@ class Lines(Interface):
     def release(self, line: int | str) -> None:
         """Stops driving `line` from the board's current instant on: it goes back to the board's
         pull, if it has one, or to what the chip makes of an undriven pad."""
+        refuse_board("lines.release")
         pin = self._pin(line)
         self._unowned(pin)
         now = self._now()

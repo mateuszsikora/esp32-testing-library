@@ -1866,7 +1866,9 @@ that references to its number keep their meaning.
   `tests/test_mqtt_handlers.py::test_a_handler_answers_each_report_as_it_is_routed_during_a_plain_wait`
 - **304.** A handler cannot wait on the board or call it: a `board.wait*` or a console expect from
   inside a broker's handler, or its `connection_policy`, raises `RuntimeError` naming it, and so do
-  `board.flash`, `board.nvs`, `board.reset` and `board.power_*`, before they touch the board. What
+  `board.flash`, `board.nvs`, `board.reset` and `board.power_*`, before they touch the board,
+  `console.write`, `console.sendline`, `wifi.access_point_off()`, `access_point_on()`,
+  `lines.drive` and `lines.release`, and below them any wait on the held clock. What
   a handler raises, `pytest.fail` and `pytest.skip` included, fails the test's wait it interrupted,
   with a note naming the handler, and leaves the client's connection up; a `pytest.fail` in a
   `connection_policy` fails the link, as its other exceptions do, instead of ending its thread.
@@ -1880,7 +1882,9 @@ that references to its number keep their meaning.
   `tests/test_net_mqtt_policy.py::test_policy_errors_in_a_board_run_fail_the_link_naming_them`,
   `tests/test_net_mqtt_policy.py::test_pytest_fail_in_a_policy_closes_the_connection_and_raises_as_an_exception`,
   `tests/test_mqtt_handlers.py::test_a_handler_that_waits_on_the_board_fails_the_wait_naming_the_handler`,
-  `tests/test_mqtt_handlers.py::test_a_handler_that_raises_fails_the_wait_it_interrupted_and_the_device_stays_connected`
+  `tests/test_mqtt_handlers.py::test_a_handler_that_raises_fails_the_wait_it_interrupted_and_the_device_stays_connected`,
+  `tests/test_clock.py::test_the_clock_refuses_whatever_waits_on_it_from_a_handler`,
+  `tests/test_clock.py::test_what_drives_the_board_from_a_handler_names_itself`
 
 ## Explicit build selection
 
@@ -2487,7 +2491,8 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `ModemModel`; `esp32tl.__all__` names every public name of the package root but its submodules.
   Left out are what only the backend calls: the members the link's `Interface` declares, on an
   interface; the pairs `BACKEND_SIDE` names, as the package's services' `accept`; and the
-  constructors of the classes the backend makes. The protocols a test implements, `Model`,
+  constructors of the classes the backend makes. The constructors of those a test makes, which
+  `CONSTRUCTED` lists, as `HttpResponse`'s, are checked too. The protocols a test implements, `Model`,
   `Source`, `StreamService` and the rest, keep all of their methods. A public attribute that
   holds an instance of one of the package's generic classes, as a `Condition`, is annotated with
   its parameters, so that what waiting on it returns is checked too.
@@ -2802,3 +2807,40 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_net_ip.py::test_data_starts_with_an_rto_of_3_s_when_the_handshake_went_twice`,
   `tests/test_net_drop.py::test_the_rto_stops_in_a_hold_and_starts_again_at_its_end`,
   `tests/test_mqtt_session.py::test_a_burst_of_queued_qos1_messages_is_delivered_and_acknowledged`
+
+## The HTTP server's handlers
+
+- **306.** A handler answers each request for its path at the request's time, and never waits on
+  the board: the server calls it once per request read in full, the request already in
+  `requests`, and sends the `HttpResponse` it returns; a later `serve` replaces it, and it
+  replaces a fixed response. A handler that raises, `pytest.fail` and `pytest.skip` included,
+  returns something other than an `HttpResponse`, or calls what would wait on the board or drive
+  it, which raises `RuntimeError` at once (`board.wait: called from the HTTP server's handler for
+  '/': a handler must not wait`; `the board's clock: …` from any wait on the clock that names
+  itself nowhere above it; `board.reset: … a handler must not call the board`, and the same from
+  `console.write`, `console.sendline`, `wifi.access_point_off()`, `access_point_on()`,
+  `lines.drive` and `lines.release`), gives the device
+  `500 Internal Server Error`; on a board the test's wait raises the error at the next turn and
+  the run goes on, and without one `on_data` raises it once the `500` is written.
+  `tests/test_net_http.py::test_a_handler_answers_each_request_from_the_request`,
+  `tests/test_net_http.py::test_a_handler_and_a_fixed_response_replace_each_other`,
+  `tests/test_net_http.py::test_a_handler_that_fails_gives_a_500_and_the_error_to_the_test`,
+  `tests/test_net_http.py::test_without_a_board_the_handler_s_error_is_raised_once_the_500_is_written`,
+  `tests/test_net_http.py::test_a_handler_that_waits_on_the_board_fails_with_the_guard`,
+  `tests/test_net_http.py::test_a_handler_that_drives_the_board_fails_with_the_guard`,
+  `tests/test_clock.py::test_a_handler_that_ends_the_test_with_pytest_gives_a_500_and_its_outcome`,
+  `tests/test_clock.py::test_the_clock_refuses_whatever_waits_on_it_from_a_handler`,
+  `tests/test_clock.py::test_a_console_expect_from_a_handler_names_itself`,
+  `tests/test_clock.py::test_what_drives_the_board_from_a_handler_names_itself`,
+  `tests/test_clock.py::test_a_handler_s_error_is_raised_by_the_test_s_wait_and_the_run_goes_on`,
+  `tests/test_http_request.py::test_a_handler_answers_from_the_request_it_got`,
+  `tests/test_http_request.py::test_a_handler_that_waits_on_the_board_fails_the_test_and_the_device_gets_a_500`
+- **307.** A response with `after` is written `after` past its request's `at` on the board's
+  clock, never sooner, and the request is recorded when it comes: the server's `quiet_until` is
+  the earliest due response, which a wait behind the access point or the modem runs to, and a
+  connection the device closes first gets nothing.
+  `tests/test_net_http.py::test_after_writes_the_response_that_much_later_on_the_board_s_clock`,
+  `tests/test_net_http.py::test_a_connection_closed_before_after_gets_nothing`,
+  `tests/test_net_http.py::test_an_after_of_zero_answers_at_once`,
+  `tests/test_clock.py::test_a_wait_that_ends_at_a_delayed_http_response_finds_it_written`,
+  `tests/test_http_request.py::test_a_response_with_after_arrives_no_earlier_than_after_past_the_request`

@@ -416,7 +416,7 @@ A test imports from three modules, and from no other:
 
 | Module | What it holds |
 |---|---|
-| `esp32tl` | Every class, exception and constant a test names: the board (`Board`, `Boot`, `UptimeZero`, `Sleep`, `POWERON_RESET`, `DEEPSLEEP_RESET`, `RESET_REASONS`, `Condition`, `condition`), its profile (`BoardProfile`, `UartRoute`, `LineRoute`, `SdCardRoute`), the interfaces and what they return (`Console`, `ConsoleLine`, `Uart`, `Gnss`, `Modem`, `Lines`, `OutputLine`, `LineEvent`, `SdCard`, `CardImage`, `CardLayout`, `Wifi`, `EmulatedMacs` and `emulated_macs`, `Bluetooth`, `Tap`, ...), the sources and models (`Replay`, `Real`, `Model`, `ReactiveModel`, `IdleFramedModel`, `Timed`, `TimedAtRate`, `GnssReceiver`, `CasicFrame`, `ModemModel`, `ModemCommand`, `ModemRestart`, `ModemPower`, `ModeChange`, `Protocol`, `AT`, `PMTK`, `UBX`, `GNSS`), the build and the flash (`Build`, `FlashSnapshot`, `Namespaces`, `Typed`, `u8` to `i64`), the network and its services (`Internet`, `LinkChange`, `Broker`, `Message`, `MqttClient`, `ConnectionEnd`, `TEST_CLIENT`, `Publication`, `Registration`, `HttpServer`, `HttpRequest`, `NtpExchange`, `DnsQuestion`, `TcpConnection`, `CertificateAuthority`, ...), Bluetooth (`Air`, `SppPeer`, `BluetoothDevice`, `ChannelEvent`, `WrittenLine`, `Refusal`, `Pairing`, `BlePeripheral`, `BleCentral`, `BleDevice`, `GattService`, `GattCharacteristic`, `Advertisement`, `LeConnection`, `Disconnection`, `GattRead`, `GattWrite`, `Notification`, `Subscription`, `LePairing`, `Discovery`, `DiscoveredService`, `DiscoveredCharacteristic`, `LeEvent`, ...) and the exceptions (`NeverHappened`, `RunEnded`, `BoardOff`, `SourceError`, `BackendError`, `PeerError`, `AirError`, `BleError`, `ConnectionEnded`, `NotReachable`, ...). `esp32tl.__all__` lists them all |
+| `esp32tl` | Every class, exception and constant a test names: the board (`Board`, `Boot`, `UptimeZero`, `Sleep`, `POWERON_RESET`, `DEEPSLEEP_RESET`, `RESET_REASONS`, `Condition`, `condition`), its profile (`BoardProfile`, `UartRoute`, `LineRoute`, `SdCardRoute`), the interfaces and what they return (`Console`, `ConsoleLine`, `Uart`, `Gnss`, `Modem`, `Lines`, `OutputLine`, `LineEvent`, `SdCard`, `CardImage`, `CardLayout`, `Wifi`, `EmulatedMacs` and `emulated_macs`, `Bluetooth`, `Tap`, ...), the sources and models (`Replay`, `Real`, `Model`, `ReactiveModel`, `IdleFramedModel`, `Timed`, `TimedAtRate`, `GnssReceiver`, `CasicFrame`, `ModemModel`, `ModemCommand`, `ModemRestart`, `ModemPower`, `ModeChange`, `Protocol`, `AT`, `PMTK`, `UBX`, `GNSS`), the build and the flash (`Build`, `FlashSnapshot`, `Namespaces`, `Typed`, `u8` to `i64`), the network and its services (`Internet`, `LinkChange`, `Broker`, `Message`, `MqttClient`, `ConnectionEnd`, `TEST_CLIENT`, `Publication`, `Registration`, `HttpServer`, `HttpRequest`, `HttpResponse`, `NtpExchange`, `DnsQuestion`, `TcpConnection`, `CertificateAuthority`, ...), Bluetooth (`Air`, `SppPeer`, `BluetoothDevice`, `ChannelEvent`, `WrittenLine`, `Refusal`, `Pairing`, `BlePeripheral`, `BleCentral`, `BleDevice`, `GattService`, `GattCharacteristic`, `Advertisement`, `LeConnection`, `Disconnection`, `GattRead`, `GattWrite`, `Notification`, `Subscription`, `LePairing`, `Discovery`, `DiscoveredService`, `DiscoveredCharacteristic`, `LeEvent`, ...) and the exceptions (`NeverHappened`, `RunEnded`, `BoardOff`, `SourceError`, `BackendError`, `PeerError`, `AirError`, `BleError`, `ConnectionEnded`, `NotReachable`, ...). `esp32tl.__all__` lists them all |
 | `esp32tl.units` | The units: `Duration`, `Speed`, `Distance`, `Rate`, `Heading`, `Position`, their constructors (`ms`, `seconds`, `km_h`, `m`, ...), the compass points and `about` ([units](models-user.md#units)) |
 | `esp32tl.recording` | The recording format: reading and writing a recording, and its `Recording`, `Header`, `Event` and `ClockSwitch` ([the recording format](../recording-format.md)) |
 
@@ -441,7 +441,7 @@ promised.
 
 Each name is the class's own, and says what it belongs to where a bare one would not: `ConsoleLine`
 beside `LineRoute`, the board profile's GPIO line; `HttpRequest`, what the HTTP
-server was asked; `MqttClient` of the broker, beside `TcpClient`, the test's side of a TCP connection it
+server was asked, and `HttpResponse`, what it answers; `MqttClient` of the broker, beside `TcpClient`, the test's side of a TCP connection it
 opens; `ConnectionEnd`, how an MQTT connection ended, beside `ConnectionEnded`, the exception a
 TCP connection the test opened raises once it has ended; `ModemCommand`, `ModemRestart`,
 `ModemPower` and `ModeChange` of the modem's model. The model itself is a class named
@@ -877,9 +877,12 @@ and the output's times are those of the runner's slices, at most 1 ms late ([esp
   A run that ends first raises `RunEnded`.
 - An expect before `board.power_on()` raises `BoardOff`.
 - An expect from inside a handler of the network's, as the broker's
-  [`on_publish`](network-user.md#answer-the-devices-publications), raises `RuntimeError` at once:
+  [`on_publish`](network-user.md#answer-the-devices-publications) or the HTTP server's
+  [handler](network-user.md#a-handler-computes-the-response), raises `RuntimeError` at once:
   `console.expect: called from the broker's on_publish handler for 'dev/+/req': a handler must not
-  wait` (`console.expect_exact: …` for the other).
+  wait` (`console.expect_exact: …` for the other). `console.write` and `console.sendline` from one
+  raise `RuntimeError` too, ending `a handler must not call the board`, and so do `lines.drive`,
+  `lines.release`, `wifi.access_point_off()` and `wifi.access_point_on()`.
 - `console.line(pattern)` is a condition for `board.wait_until`: the first console line that
   ends from now on and matches `pattern`, a regular expression on the line's text, as a string or
   compiled. `board.wait_until(console.line(r"^fix lat=(?P<lat>\S+)"), within=seconds(2))` returns

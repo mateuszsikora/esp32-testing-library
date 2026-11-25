@@ -120,6 +120,7 @@ from esp32tl.net.dns import DnsQuestion as DnsQuestion
 from esp32tl.net.ethernet import Ethernet as Ethernet
 from esp32tl.net.handlers import Registration as Registration
 from esp32tl.net.http import HttpRequest as HttpRequest
+from esp32tl.net.http import HttpResponse as HttpResponse
 from esp32tl.net.http import HttpServer as HttpServer
 from esp32tl.net.http_client import ClientResponse as ClientResponse
 from esp32tl.net.http_client import HttpClient as HttpClient
@@ -243,6 +244,7 @@ __all__ = [
     "HttpClient",
     "HttpExchange",
     "HttpRequest",
+    "HttpResponse",
     "HttpServer",
     "IdleFramedModel",
     "Internet",

@@ -35,7 +35,10 @@ from esp32tl.link.protocol import (
     Sync,
     Wait,
 )
+from esp32tl.net import Internet
 from esp32tl.net.ethernet import GATEWAY_MAC
+from esp32tl.net.handlers import handling
+from esp32tl.net.http import HttpRequest, HttpResponse, HttpServer
 from esp32tl.net.mqtt import Broker, Publication
 from esp32tl.units import Duration, minutes, ms
 from esp32tl.units import seconds as secs
@@ -260,6 +263,30 @@ CONNECT_AND_PUBLISH = (
 )
 
 
+def a_network(clock: HeldClock, behind: str, tmp_path: Path) -> tuple[Internet, Interface]:
+    """A network on `clock` behind a Wi-Fi access point or a modem in data mode, as `behind`
+    says, and the interface it reaches the board through."""
+    if behind == "wifi":
+        wifi = Wifi(now=lambda: clock.now, asked=lambda request: None)
+        return wifi.access_point("myssid", password="mypassword"), wifi
+    modem = ModemRoute(
+        "uart.modem",
+        Wire(tx=26, rx=27, baud=115200),
+        clock=recording.EMULATED,
+        directory=tmp_path,
+        now=lambda: clock.now,
+        lines=Lines(LILYGO.name, LILYGO.lines, lambda: clock.now),
+        pins=LILYGO.lines["modem"],
+    )
+    network = modem.network()
+    model = modem.modem_model()
+    assert b"CONNECT" in b"".join(data for _, data in model.receive(0, b"ATD*99#\r\n"))
+    assert model.data_mode
+    # PPP's first LCP request: taken here, so that the runner's turns carry no input.
+    assert list(model.poll(0))
+    return network, modem
+
+
 def a_broker_with_deadlines(
     puback: Duration, behind: str, tmp_path: Path
 ) -> tuple[Run, Broker, Publication]:
@@ -267,28 +294,7 @@ def a_broker_with_deadlines(
     a publication of it whose PUBACK is due `puback` later; on the network `behind` a Wi-Fi access
     point or a modem in data mode."""
     clock = HeldClock()
-    interface: Interface
-    if behind == "wifi":
-        wifi = Wifi(now=lambda: clock.now, asked=lambda request: None)
-        network = wifi.access_point("myssid", password="mypassword")
-        interface = wifi
-    else:
-        modem = ModemRoute(
-            "uart.modem",
-            Wire(tx=26, rx=27, baud=115200),
-            clock=recording.EMULATED,
-            directory=tmp_path,
-            now=lambda: clock.now,
-            lines=Lines(LILYGO.name, LILYGO.lines, lambda: clock.now),
-            pins=LILYGO.lines["modem"],
-        )
-        network = modem.network()
-        model = modem.modem_model()
-        assert b"CONNECT" in b"".join(data for _, data in model.receive(0, b"ATD*99#\r\n"))
-        assert model.data_mode
-        # PPP's first LCP request: taken here, so that the runner's turns carry no input.
-        assert list(model.poll(0))
-        interface = modem
+    network, interface = a_network(clock, behind, tmp_path)
     broker = network.broker
     broker.puback = puback
     session = broker.accept(("10.0.0.2", 4000), lambda data: None, lambda: None)
@@ -375,6 +381,186 @@ def test_keepalive_expiry_wins_a_tie_with_a_puback_deadline_in_a_held_turn(
     finally:
         run.clock.stop()
         run.runner.join(5)
+
+
+@BEHIND
+def test_a_wait_that_ends_at_a_delayed_http_response_finds_it_written(
+    behind: str, tmp_path: Path
+) -> None:
+    clock = HeldClock()
+    network, interface = a_network(clock, behind, tmp_path)
+    network.http.serve("/", HttpResponse(body="slow", after=ms(100)))
+    received = bytearray()
+    exchange = network.http.accept(("10.64.0.2", 4000), received.extend, lambda: None)
+    exchange.on_data(b"GET / HTTP/1.1\r\n\r\n")
+    run = Run(clock=clock, interfaces=[interface])
+    try:
+        run.clock.wait(100 * MS - 1)
+        assert received == bytearray()
+        run.clock.wait(1)
+        assert run.clock.now == 100 * MS and received.endswith(b"\r\n\r\nslow")
+        assert network.http.requests[0].at == secs(0)
+    finally:
+        run.clock.stop()
+        run.runner.join(5)
+
+
+def test_a_handler_s_error_is_raised_by_the_test_s_wait_and_the_run_goes_on() -> None:
+    clock = HeldClock()
+    server = HttpServer(lambda: clock.now, test_error=clock.fail)
+    received = bytearray()
+    exchange = server.accept(("10.64.0.2", 4000), received.extend, lambda: None)
+    link_threads: list[threading.Thread] = []
+
+    def handler(request: HttpRequest) -> HttpResponse:
+        link_threads.append(threading.current_thread())
+        raise ZeroDivisionError("a bug of the test's")
+
+    server.serve("/fw", handler)
+
+    class HttpRun(Run):
+        def _print(self, until: int) -> None:
+            if not server.requests:
+                # In the runner's slice, on the link's thread, as the device's request comes.
+                exchange.on_data(b"GET /fw HTTP/1.1\r\n\r\n")
+
+    run = HttpRun(clock=clock)
+    try:
+        with pytest.raises(ZeroDivisionError, match="a bug of the test's") as raised:
+            run.clock.wait(S)
+        # The traceback reaches into the handler, which ran on the runner's thread.
+        assert link_threads == [run.runner]
+        assert raised.traceback[-1].name == "handler"
+        assert received.startswith(b"HTTP/1.1 500 Internal Server Error\r\n")
+        # The run is not over: the test may go on waiting, and nothing raises again.
+        at = run.clock.now
+        run.clock.wait(S)
+        assert run.clock.now == at + S and run.link.error is None
+    finally:
+        run.clock.stop()
+        run.runner.join(5)
+
+
+def a_handler_run(handler: Callable[[HttpRequest], HttpResponse]) -> tuple[Run, bytearray]:
+    """A run on the test's clock whose first slice brings a request for `/fw` to an HTTP server
+    serving `handler`, on the runner's thread; and what the server wrote back."""
+    clock = HeldClock()
+    server = HttpServer(lambda: clock.now, test_error=clock.fail)
+    received = bytearray()
+    exchange = server.accept(("10.64.0.2", 4000), received.extend, lambda: None)
+    server.serve("/fw", handler)
+
+    class HttpRun(Run):
+        def _print(self, until: int) -> None:
+            if not server.requests:
+                exchange.on_data(b"GET /fw HTTP/1.1\r\n\r\n")
+
+    return HttpRun(clock=clock), received
+
+
+@pytest.mark.parametrize("outcome", [pytest.fail, pytest.skip])
+def test_a_handler_that_ends_the_test_with_pytest_gives_a_500_and_its_outcome(
+    outcome: Callable[[str], object],
+) -> None:
+    def handler(request: HttpRequest) -> HttpResponse:
+        outcome("no Range header")
+        return HttpResponse()
+
+    run, received = a_handler_run(handler)
+    try:
+        # An OutcomeException, no Exception: it would end the link's thread unanswered.
+        with pytest.raises(outcome.Exception, match="no Range header"):  # type: ignore[attr-defined]
+            run.clock.wait(S)
+        assert received.startswith(b"HTTP/1.1 500 Internal Server Error\r\n")
+        run.clock.wait(S)
+        assert run.link.error is None
+    finally:
+        run.clock.stop()
+        run.runner.join(5)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda clock: clock.dump_flash(),
+        lambda clock: clock.write_flash(0x9000, "nvs.bin"),
+        lambda clock: clock.wait(S),
+        lambda clock: clock.wait_until(lambda: True, S, "anything"),
+    ],
+    ids=["dump_flash", "write_flash", "wait", "wait_until"],
+)
+def test_the_clock_refuses_whatever_waits_on_it_from_a_handler(
+    call: Callable[[HeldClock], object],
+) -> None:
+    clocks: list[HeldClock] = []
+
+    def handler(request: HttpRequest) -> HttpResponse:
+        call(clocks[0])
+        return HttpResponse()
+
+    run, received = a_handler_run(handler)
+    clocks.append(run.clock)
+    try:
+        with pytest.raises(RuntimeError) as raised:
+            run.clock.wait(S)
+        assert str(raised.value) == (
+            "the board's clock: called from the HTTP server's handler for '/fw':"
+            " a handler must not wait"
+        )
+        assert received.startswith(b"HTTP/1.1 500 Internal Server Error\r\n")
+        assert run.dumps == [] and run.writes == []
+    finally:
+        run.clock.stop()
+        run.runner.join(5)
+
+
+@pytest.mark.parametrize("exact", [False, True])
+def test_a_console_expect_from_a_handler_names_itself(exact: bool) -> None:
+    run, console = console_run((1, b"ready\n"))
+    expect = console.expect_exact if exact else console.expect
+    try:
+        with handling("the HTTP server's handler for '/'"), pytest.raises(RuntimeError) as raised:
+            expect("ready")
+        name = "console.expect_exact" if exact else "console.expect"
+        assert str(raised.value) == (
+            f"{name}: called from the HTTP server's handler for '/': a handler must not wait"
+        )
+        assert run.clock.now == 0
+    finally:
+        run.clock.stop()
+        run.runner.join(5)
+
+
+def test_what_drives_the_board_from_a_handler_names_itself(tmp_path: Path) -> None:
+    run, console = console_run()
+    try:
+        drive_the_board_from_a_handler(console)
+    finally:
+        run.clock.stop()
+        run.runner.join(5)
+
+
+def drive_the_board_from_a_handler(console: Console) -> None:
+    wifi = Wifi(now=lambda: 0, asked=lambda request: None)
+    wifi.access_point("myssid", password="mypassword")
+    lines = Lines(LILYGO.name, LILYGO.lines, lambda: 0)
+    line = next(iter(LILYGO.lines["modem"]))
+    calls: list[tuple[str, Callable[[], object]]] = [
+        ("console.write", lambda: console.write("help\n")),
+        ("console.sendline", lambda: console.sendline("help")),
+        ("wifi.access_point_off", wifi.access_point_off),
+        ("wifi.access_point_on", wifi.access_point_on),
+        ("lines.drive", lambda: lines.drive(f"modem.{line}", 1)),
+        ("lines.release", lambda: lines.release(f"modem.{line}")),
+    ]
+    for name, call in calls:
+        with handling("the HTTP server's handler for '/'"), pytest.raises(RuntimeError) as raised:
+            call()
+        assert str(raised.value) == (
+            f"{name}: called from the HTTP server's handler for '/': a handler must not call the"
+            " board"
+        )
+    assert wifi.on_air and wifi.events == []
 
 
 def test_a_service_that_raises_on_a_datagram_from_the_path_names_the_arrival() -> None:

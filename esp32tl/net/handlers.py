@@ -1,12 +1,14 @@
 """The test's code that a service of the network calls while the board advances, as the broker's
-`on_publish` handler or its `connection_policy`: it runs in the link's thread, at the board's
-instant of what it answers, and must not wait on the board, whose run is what called it.
-`handling` marks where one runs, and `refuse_wait` is what a wait on the board asks first;
-`refuse_board` is what the board's other calls that reach the runner ask, its flash and its
-power, which the link's thread cannot carry while it runs a handler. An exception of a handler,
-`pytest.fail`'s included, goes to the network's `test_error`: in a board test the waiting test
-raises it at the next turn of the link, and without a board `reraise` raises it where the service
-was called. `Registration` is what registering a handler returns.
+`on_publish` handler or its `connection_policy`, or the HTTP server's handler: it runs in the
+link's thread, at the board's instant of what it answers, and must not wait on the board, whose
+run is what called it. `handling` marks where one runs, and `refuse_wait` is what a wait on the
+board asks first; `refuse_board` is what the board's other calls that reach the runner ask, its
+flash and its power, which the link's thread cannot carry while it runs a handler, and the
+console's writes, the access point's switches and the lines' drives, which it would stamp with a
+turn the run is past. An exception
+of a handler, `pytest.fail`'s included, goes to the network's `test_error`: in a board test the
+waiting test raises it at the next turn of the link, and without a board `reraise` raises it
+where the service was called. `Registration` is what registering a handler returns.
 """
 
 from collections.abc import Callable, Iterator

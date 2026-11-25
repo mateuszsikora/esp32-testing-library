@@ -9,10 +9,10 @@ There are no sockets, worker threads or host-clock timers, but for a bridge's
 or Ethernet frame's timestamp inside receive callbacks and the held board time for test calls.
 Responses carry a 1,000,000 ns latency (`LATENCY_NS`), the path's RTT when the test sets one; the
 modem starts PPP after CONNECT, so LCP follows the AT response. `arrive`, before the test holds the
-turn, takes what has come up the path and evaluates broker keepalive and PUBACK deadlines and the
-SYN timers of the connections the test opened (`Network.poll`); `poll`, after the hold, does the
-same and drains queued replies; `quiet_until` bounds the next turn by the earliest of those
-deadlines and the path's next datagram.
+turn, takes what has come up the path and evaluates broker keepalive and PUBACK deadlines, the HTTP
+server's delayed responses and the SYN timers of the connections the test opened (`Network.poll`);
+`poll`, after the hold, does the same and drains queued replies; `quiet_until` bounds the next turn
+by the earliest of those deadlines and the path's next datagram.
 
 ## The link
 
@@ -78,7 +78,7 @@ stamp already behind `board.now`. So `_turn` first calls `Interface.arrive(now)`
 `Uart.arrive` passes it to a source that is `Arriving`, `ModemModel.arrive` to its `Internet`,
 `Wifi.arrive` to its network, in command mode and off the air too, and `Internet.arrive` runs
 `_arrive(now)`, then
-`Broker.poll()`, with `_at` set to `now`. Answers made there stay in `_out` until `poll`, after the
+`Broker.poll()` and `HttpServer.poll()`, with `_at` set to `now`. Answers made there stay in `_out` until `poll`, after the
 hold, so what the test does in the turn comes after what the network took in it. The broker's own
 deadlines, keepalive and a delayed PUBACK, run there too, for the same reason: the runner stops at
 the deadline, which `quiet_until` gives, and the test holding that turn sees the PUBACK emitted, the
@@ -100,8 +100,8 @@ datagram before the link sees it: what a service writes on a connection the link
 goes nowhere, and logs nothing. At the default every datagram is released in the call that
 made it, so `receive` returns it stamped `t + LATENCY_NS`, in the order it was made.
 
-`quiet_until` is the minimum of the broker's and the two heads: one turn per datagram. While the
-network is not `active` it is the broker's and the bridges', so the keepalive of a connection the
+`quiet_until` is the minimum of the broker's, the HTTP server's and the two heads: one turn per
+datagram. While the network is not `active` it is the broker's, the HTTP server's and the bridges', so the keepalive of a connection the
 link's end left open still gets its turn, and a bridged service that sends or closes then is taken
 in the next millisecond, as with the link up; `ModemModel` and `Wifi` ask for it then too. Each head
 is past `now` after `poll`, since `_arrive` and `_release` took all up to `now` and `now +
@@ -208,7 +208,7 @@ adds their count to `_dropped`. A writer whose `sendall` failed clears `_writing
 drops what the device sends from then on, so that nothing fills a queue nobody reads. Failures carry `OSError.strerror`, else its text, else its type's name; one that
 comes after `end` is not noted.
 
-`Internet.arrive` and `Internet.poll` call `_pump` after `broker.poll()`, with `_at` set to the
+`Internet.arrive` and `Internet.poll` call `_pump` after `broker.poll()` and `http.poll()`, with `_at` set to the
 turn's `now`: each bridge's `pump` takes every relay's `_arrived` in order, logs its lines, writes
 its bytes to the device's connection, which `Network` segments and the path stamps from `now`, and
 closes the device's end once `_ended` is set and its bytes are written. Bytes taken after the
@@ -342,23 +342,44 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   `Lease(at, mac, address, hostname)` to `leases`, `hostname` from option 12. `next_lease()`
   captures the length of `leases` at construction and returns a `Condition` reading the entry at
   that index, named `the next DHCP lease`. `find_lease()` reads the first lease.
-- `http.py`: `HttpServer(now, log)`, a `StreamService` on TCP 80 of every network (RFC 9110,
-  9112). `serve(path, body, *, status, content_type, headers)` stores an `HttpResponse` per path, after
+- `http.py`: `HttpServer(now, log, *, test_error=reraise)`, a `StreamService` on TCP 80 of every
+  network (RFC 9110, 9112). `serve(path, response, *, status, content_type, headers)` stores per
+  path an `HttpResponse` or a handler, `Callable[[HttpRequest], HttpResponse]` (`Handler`), after
   checking that the path starts with `/` and holds no `?`, since a request is looked up by its
-  path without the query, that the status is in `REASONS` and that no header holds CR, LF
-  or, in its name, `:`. Each connection is an `_Exchange` that reads one request: the head up to
+  path without the query; `status`, `content_type` and `headers` with an `HttpResponse` or a
+  handler raise `TypeError`, and with a body they make the `HttpResponse`. `HttpResponse` is a
+  frozen dataclass with its own `__init__`, which `_fill` checks and sets through
+  `object.__setattr__`: the status in `REASONS`, now with 206 and 416, the body text, encoded as
+  UTF-8, or bytes, none for a status in `NO_CONTENT`, headers of text, none holding CR, LF or, in
+  its name, `:`, no content type holding CR or LF, each of these that Latin-1 encodes, since
+  `_respond` writes the head in it (`_latin1`), and `after` a `Duration` of 0 or more: a handler's
+  response that fails these raises in the handler, which answers `500`, instead of in `_respond`,
+  where the device would get nothing; `serve` calls
+  `_fill` itself, so that its errors say `http.serve:` and `HttpResponse`'s `HttpResponse:`. Each
+  connection is an `_Exchange` that reads one request: the head up to
   `\r\n\r\n` (`MAX_HEAD`, 64 KiB, else 431), parsed by `_head` (else 400), `Transfer-Encoding`
   refused with 501, the distinct `Content-Length` values (more than one, or not all ASCII digits, 400; over
   `MAX_BODY`, 1 MiB, 413, compared by the number of digits first, so that no value is too long
   for `int`), then the body. `_path` gives the path by the target's form (RFC 9112 3.2): an
   origin-form target, which starts with `/`, up to `?`; an absolute-form one, a scheme of letters,
   digits, `+`, `-` and `.` then `://`, what follows its authority up to `?`, or `/`; any other
-  target as it is. `_answer` appends the `HttpRequest` to `requests`, logs
-  `http: <method> <target> → <status>`, and returns the served `HttpResponse` or `404` with
-  `not found\n`. A refusal logs `http: refused a request: <status> <reason>` and is not appended.
+  target as it is. `_answer` appends the `HttpRequest` to `requests`, then returns the served
+  `HttpResponse`, `404` with `not found\n`, or what the handler returns, called in
+  `handlers.handling("the HTTP server's handler for '<path>'")`; it logs
+  `http: <method> <target> → <status>`, with `, after <after>` for a delayed one. A handler that
+  raises an `Exception`, or returns what is not an `HttpResponse`, which raises
+  `TypeError("http.serve: the handler for '<path>' returned <repr>, not an HttpResponse")`, gets
+  `500` with `internal server error\n`, logged as
+  `http: <method> <target> → 500, the handler failed: <type>: <message>`; `on_data` writes the
+  `500` and closes, then hands the exception to `test_error`. A response with a positive `after`
+  waits in the server's `_waiting`, due at the request's `at` plus `after`: `poll()` writes, at
+  the board's `now`, every one due by then, earliest first, and `quiet_until()` is the earliest
+  due, or `None`. `on_close` of a waiting exchange, the device's FIN or the flow's end, drops it and
+  logs `http: <method> <target>: the connection closed before its response, due at <due>: nothing written`.
+  A refusal logs `http: refused a request: <status> <reason>` and is not appended.
   `_respond` writes the status line, `Content-Type` and `Content-Length` (not for a status in
   `NO_CONTENT`, 204 and 304, whose response ends with its head, RFC 9112 6.3), `Connection: close`,
-  the test's headers and the body (not for `HEAD`; `serve` refuses one for 204 and 304), then
+  the test's headers and the body (not for `HEAD`; `HttpResponse` refuses one for 204 and 304), then
   closes; later data on the connection is
   ignored. `next_request(path, method=...)` captures the length of `requests` at construction and
   returns a `Condition` whose `FirstFrom` scans from that index for an exact `path` and `method`
@@ -368,6 +389,12 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   Both refuse a `path` holding `?` with `ValueError`, through `_refuse_query`: `_path` strips the
   query of origin-form and absolute-form targets, so such a filter would match nothing. A target
   of no form `_path` knows, as `foo?bar`, keeps its `?` in `path`; only `requests` reaches it.
+- `handlers.py`: what the network runs of the test's code while the board advances, the
+  broker's handlers and the HTTP server's: `handling`, `refuse_wait`, `refuse_board`, `reraise`
+  and `Registration`, in [Handlers and delayed publications](#handlers-and-delayed-publications).
+  `HttpServer._answer` runs a handler in `handling` and catches `BaseException`, so that
+  `pytest.fail` and `pytest.skip`, which are no `Exception`, answer `500` and reach the test
+  too, instead of ending the link's thread with the runner's turn unanswered.
 - `ntp.py`: accepts NTP v3/v4 client requests; returns a v4 stratum-1 server response. The
   origin timestamp copies the client's transmit field. Reference, receive and transmit stamps
   use world UTC plus emulated time, including fractions and the 32-bit NTP era wrap.
@@ -692,6 +719,28 @@ from `snd_nxt - 1` through `_segment(..., seq=)`: it counts no retransmission an
 An orphaned flow keeps no timer: what its service writes still goes, and a RST of the new stack
 ends it, as before.
 
+## A handler of the test's
+
+An HTTP handler runs where the request is read in full: in `_Exchange.on_data`, called by
+`Network` for the device's segment, inside `Internet.receive` (behind the modem, from the modem
+model's `receive`; behind the access point, from `Wifi.receive`), so on the link's thread, while
+the runner is in its slice and the test's thread waits in `HeldClock._advance`. `Internet.now()`
+there is the chunk's or the frame's time, which is the request's `at`. What the handler returns is
+written in the same call, and goes down the path from that instant; a delayed one is written by
+`HttpServer.poll()` in `Internet.arrive` or `Internet.poll` of the turn its due time bounds
+(`quiet_until`), with `_at` at that turn's `now`, which is the due time. Behind the modem,
+`ModemModel.quiet_until` asks the network in command mode too, as for the broker's deadlines.
+
+The handler's exception does not go up the link's call: `HttpServer` catches it, answers `500`,
+and hands it to `test_error`. The esp32sim backend gives `HeldClock.fail`, through `Wifi` and
+`Modem` to every `Internet` they make, so the link is not failed and the test's wait raises the
+exception at the next turn ([backend](esp32sim-backend-technical.md#data-flow)). A wait from inside
+the handler raises before it reaches the clock, through `handlers.refuse_wait`, whose
+`ContextVar` is set only in the thread and the call that runs the handler. The broker's
+handlers go the same way to the same `test_error`
+([Handlers and delayed publications](#handlers-and-delayed-publications)); its
+`connection_policy` runs in `handling` too, but still fails the link when it raises.
+
 ## Connections the test opens
 
 `esp32tl/net/client.py` holds `TcpConnection`, `ConnectionEnded` (an `AssertionError`) and
@@ -984,10 +1033,15 @@ goes on from it.
 `handling(name, kind)` sets a `ContextVar` for the block, so it holds for the thread that runs the
 handler, the link's on a board. `Esp32Sim.wait`, `wait_until`, `wait_for_wake` and `wait_on_clock`,
 and `Console._expect`, call `refuse_wait("<call>")` first, which raises `RuntimeError("<call>:
-called from <name>: a <kind> must not wait")` while one is set; `Esp32Sim.flash`, `nvs`, `reset`,
-`power_on` and `power_off` call `refuse_board`, `… a <kind> must not call the board`. Without
-them, a wait or a flash request would hold the link's thread on the clock's condition until a turn
-that only that thread can bring. `_connect` runs `connection_policy` inside
+called from <name>: a <kind> must not wait")` while one is set, and below them `HeldClock._settle`,
+which every wait goes through, and `_ask`, under `dump_flash` and `write_flash`, call
+`refuse_wait("the board's clock")`, so that a wait that names itself nowhere above raises too;
+`Esp32Sim.flash`, `nvs`, `reset`, `power_on` and `power_off`, `Console.write` and `sendline`,
+`Wifi.access_point_off` and `access_point_on` (in `_switch`) and `Lines.drive` and `release` call
+`refuse_board`, `… a <kind> must not call the board`. Without them, a wait or a flash request
+would hold the link's thread on the clock's condition until a turn that only that thread can
+bring, and the console's bytes, the access point's switch and a line's level would be stamped with
+the turn the test holds, which the run is past, and fail the link. `_connect` runs `connection_policy` inside
 `handling("the broker's connection_policy", "policy")`; what the policy raises,
 this included, still fails the link as before, since it ends the connection.
 
@@ -1198,14 +1252,32 @@ polls, a poll after each of 10 000 requests reading each once, each condition's 
 refusal of `bool()`, a filter holding a query refused while
 the query stays in `target`, `serve` refusing a path with a query, the refused requests, unseen by
 the conditions and queries, what `serve` refuses, the path of each form of target
-(`/proxy/http://example.com/fw.bin` among them), and `204` and `304` ending with their head.
+(`/proxy/http://example.com/fw.bin` among them), and `204` and `304` ending with their head. Its
+handler tests check that a handler gets the request with its query, headers and body before it
+answers, once per request, `HEAD` included; that it replaces and is replaced by a fixed response;
+that a return of `None` or text, or an exception, gives a `500`, the log line and the error to
+`test_error`, or raises it without one, and that a wait from a handler gets the guard's message;
+that `after` writes a fixed or a handler's response no sooner than its due time, earliest first,
+and shows in `quiet_until`; that a connection closed first gets nothing; that `after=ms(0)`
+answers at once; a file served in parts with `206` and `416`; and the checks of `HttpResponse`
+and of `serve` with an `HttpResponse` or a handler. `tests/test_clock.py` runs a delayed response
+on the held clock behind the access point and the modem; a handler that raises on the
+runner's thread, whose error the test's `wait` raises with the handler's frame while the run goes
+on, and one that calls `pytest.fail`; the clock's own refusal of `dump_flash`, `write_flash`,
+`wait` and `wait_until` from a handler; `console.expect` and `expect_exact` naming themselves
+when a handler calls them; and the console's writes, the access point's switches and the lines'
+drives refused the same way, with nothing switched.
 `tests/test_wifi.py` checks the `Wifi` interface without the emulator: the runner's flags, the
 refusals, a backend that refuses the access point, and the `WifiAp` inputs at the instants of the
 switches. `tests/test_http_request.py` runs ESP-IDF's unmodified `http_request` in the runner:
 the fetch, a rejoin after `access_point_off()` and `access_point_on()` (with
 `Wi-Fi disconnected 3` printed), a `board.wait_until` timeout and run report naming
 `the next HTTP request for '/'` and `the next DHCP lease`, no access point, a wrong password that
-gets no lease, the report and properties, and `wifi` refused after power-on. Not covered: MQTT,
+gets no lease, the report and properties, `wifi` refused after power-on, a handler that echoes
+the request's method, path and `User-Agent` into the body the firmware prints, a response with
+`after=seconds(2)` printed no sooner than 2 s after its request, and a handler that calls
+`board.wait`, whose `RuntimeError` the test's wait raises before the firmware prints its `500`.
+Not covered: MQTT,
 NTP and TLS behind the access point; the layer tests cover them without a link or over PPP.
 `tests/test_net_client.py` drives the connections the test opens through `Internet`, behind PPP
 and behind Ethernet each, against a device made of handmade segments with checksums computed

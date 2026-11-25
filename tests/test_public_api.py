@@ -45,6 +45,7 @@ CONSTRUCTED = {
     esp32tl.Condition,
     esp32tl.GattCharacteristic,
     esp32tl.GattService,
+    esp32tl.HttpResponse,
     esp32tl.IdleFramedModel,
     esp32tl.Model,
     esp32tl.Protocol,
