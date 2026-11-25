@@ -10,7 +10,9 @@ runner take a turn soon after each event, and asks its condition at those turns 
 through a deep sleep, in which nothing happens until the chip wakes. `dump_flash` has the link
 ask the runner for the flash in the turn it is held at, on the link's thread, and `write_flash`
 has it write a file into the flash, with the board's supply off; the turn goes on: the board's
-time does not move. Times here are nanoseconds on the board's clock, from power-on.
+time does not move. `fail` takes an exception of the test's code that the link's thread ran while
+the run went, as a broker's handler: the waiting test raises it once the run reaches its next turn,
+and the run goes on. Times here are nanoseconds on the board's clock, from power-on.
 """
 
 import threading
@@ -36,7 +38,8 @@ class HeldClock:
     The link calls `turn` from its thread; the test calls `wait` and `wait_until` from its own.
     `stop` is the link's alone: from then on the link stops the run at the turn it is held at, or
     at its next one, as at the end of the test. `end` is for the backend once the run is over: a
-    test that waits gets `RunEnded` with the reason.
+    test that waits gets `RunEnded` with the reason. `fail` is for what the link's thread ran of
+    the test's: the test's wait raises the first such error at the next turn.
     """
 
     def __init__(self, step: int = STEP_NS) -> None:
@@ -59,6 +62,8 @@ class HeldClock:
         self._ended: str | None = None
         # Where the run ended, when the runner said so in its stats.
         self._ended_at: int | None = None
+        # The first exception of the test's code that the link's thread ran, for the test's wait.
+        self._failure: BaseException | None = None
 
     # The link's side.
 
@@ -118,6 +123,15 @@ class HeldClock:
             if self._ended is None:
                 self._ended = reason
                 self._ended_at = at
+            self._cv.notify_all()
+
+    def fail(self, error: BaseException) -> None:
+        """`error`, raised by the test's code that the link's thread ran, as a broker's handler,
+        goes to the test's wait, which raises it at the next turn; only the first one before the
+        wait raises."""
+        with self._cv:
+            if self._failure is None:
+                self._failure = error
             self._cv.notify_all()
 
     # The test's side.
@@ -269,6 +283,10 @@ class HeldClock:
         self._cv.notify_all()
         while self._turns == turns and self._ended is None:
             self._cv.wait()
+        if self._failure is not None:
+            # In the test's thread, with the traceback of where the link's thread raised it.
+            failure, self._failure = self._failure, None
+            raise failure
         if self._turns == turns:
             raise self._run_ended(what)
 

@@ -394,7 +394,11 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   and leave `on_data` without CONNACK or an outcome. In a board run `on_data` is called from the
   link's `modem.receive` or `wifi.receive`, so `boardlink.calling` turns the error into the
   `LinkError` `uart.modem.receive raised <Type>: <message>`; the link fails with its traceback, ends
-  the run, and the test's wait raises `RunEnded` naming it. A successfully selected code appends
+  the run, and the test's wait raises `RunEnded` naming it. A `BaseException` that is not an
+  `Exception`, `KeyboardInterrupt` or `SystemExit`, as `pytest.fail`'s `Failed`, is raised again as
+  `RuntimeError("MQTT connection_policy raised <Type>: <message>")` from it, since `calling` and
+  `BoardLink.receive` catch `Exception`s only and the link's thread would end with the turn
+  unanswered. A successfully selected code appends
   a `ConnectionAttempt` to `connection_attempts` before sending CONNACK. This history is separate
   from accepted `clients`; `next_connection_attempt()` captures a future cursor like
   `next_connection()`. Rejections log `mqtt: '<client-id>' rejected: <CODE_NAME> (<value>)`, send
@@ -943,6 +947,56 @@ logs
 fresh `Ethernet` has no `device_mac` until the station sends again. The `Dhcp` and its `leases`
 persist across the switches, so a test sees every lease of the run.
 
+### Handlers and delayed publications
+
+`Broker.on_publish(topic_filter, handler)` appends `(Registration, filter, handler)` to
+`Broker._handlers` and logs `mqtt: on_publish '<filter>' registered`; `Registration.remove()`
+(`esp32tl/net/handlers.py`) marks it inactive, and `Broker._unregister` drops the entry and logs
+`removed`. The filter is checked by `_is_filter`, the rule SUBSCRIBE parsing uses. `_route` takes
+`own=True` from `publish` and from `_poll`'s delayed publications; for any other message, once it
+has been offered to every `_State`, it queues `_answer(message)` with `_dispatch`. Inside an event,
+`on_data`, `on_close` or `poll`, the answer is therefore the next event: the PUBLISH's `_handle`
+has released an immediate PUBACK and the session has read the rest of the chunk first. A Will of
+the test's `disconnect`, outside any event, is answered at once. `_answer` walks a copy of
+`_handlers`, skips an inactive `Registration` and a filter `matches` rejects, and calls each
+handler inside `handling("the broker's on_publish handler for '<filter>'")`. Whatever it raises
+but `KeyboardInterrupt` and `SystemExit`, `pytest.fail`'s and `pytest.skip`'s `BaseException`s
+included, which would otherwise end the link's thread with the turn unanswered, is logged, `mqtt: on_publish '<filter>' raised <Type>: <message>`, given a note naming the
+handler, the client, the topic and `message.at` (`add_note`), and appended to `Broker._failures`;
+the remaining handlers still run. At the end of the outermost `_dispatch`, `Broker._failures` goes
+to `test_error`, one call each. `Broker.disconnect` sets `_test_side` while it closes a session
+outside any event, so the Will's failures stay for it to raise itself.
+
+`test_error` is `handlers.reraise` by default, which raises from the call that ran the event, once
+the event and those queued behind it are done, so the connection stays and later packets of the
+chunk are handled. On a board, `Esp32Sim` gives `HeldClock.fail` to `Wifi` and `Modem`, which give
+it to each `Internet` they make, which gives it to its `Broker`. `fail` keeps the first exception
+under the clock's lock; `HeldClock._advance`, in the test's thread, raises it once the next turn has
+come, before it checks for the run's end, with the traceback of the link's thread, and clears it.
+Every wait goes through `_advance`: `wait`, `wait_until` with its 100 ms steps and `wait_for_event`
+for `wait_for_wake`. The run is not stopped: the link stays held at that turn, and a later wait
+goes on from it.
+
+`handling(name, kind)` sets a `ContextVar` for the block, so it holds for the thread that runs the
+handler, the link's on a board. `Esp32Sim.wait`, `wait_until`, `wait_for_wake` and `wait_on_clock`,
+and `Console._expect`, call `refuse_wait("<call>")` first, which raises `RuntimeError("<call>:
+called from <name>: a <kind> must not wait")` while one is set; `Esp32Sim.flash`, `nvs`, `reset`,
+`power_on` and `power_off` call `refuse_board`, `… a <kind> must not call the board`. Without
+them, a wait or a flash request would hold the link's thread on the clock's condition until a turn
+that only that thread can bring. `_connect` runs `connection_policy` inside
+`handling("the broker's connection_policy", "policy")`; what the policy raises,
+this included, still fails the link as before, since it ends the connection.
+
+`publish(..., after=)` with a positive `Duration` pushes `(due, order, topic, payload, qos,
+retain)` onto the heap `Broker._scheduled`, `due` being `now() + after`, and logs `mqtt: (test)
+publishes on <topic> at <due>, after <after>`; `after=None` or zero routes at once. `quiet_until`
+adds the heap's head to the keepalive and PUBACK deadlines, so `Internet.quiet_until` gives the
+link a turn at it. `_poll`, which `Internet.arrive` runs before the hold, routes each entry due by
+then, after expiring keepalives and releasing due PUBACKs, stamped with the poll's `now`. A due
+time earlier than that turn, as from a handler answering a datagram that came off the path inside
+a turn, goes at the turn: the PUBACK delay's rule, never backdated. The heap belongs to the broker,
+not a session, so a delayed publication outlives the connections and network resets.
+
 ### Link changes
 
 `Internet.link_changes` is a `Sequence[LinkChange]`. `LinkChange.cause` is a `LinkCause`, a `Literal`
@@ -1023,6 +1077,21 @@ It also checks immutable wire metadata, anonymous-ID allocation only on acceptan
 empty-ID rejection precedence, malformed CONNECT exclusion and propagation of policy errors,
 both out of `on_data` and as a link failure in a `BoardLink` turn. A test through `Internet`
 covers its traced plain and TLS listeners and keeps the policy and both histories across reset.
+`tests/test_net_mqtt_handlers.py` drives a `Broker` with raw packets: a handler called once at
+the matching message's `at` and not for another topic, never for the test's own publications, for a
+Will and a DUP retransmission, after the PUBACK under `"immediate"` and on receipt under `"hold"`
+and a delay, two in order, `remove()`, a removal by an earlier handler, `publish` and `disconnect`
+from inside one, `after` through `poll` and `quiet_until` in the order made and across a
+disconnect, the refusals of `after` and of a bad filter, an exception out of `on_data` with its note
+and the connection up, `pytest.fail` and `pytest.skip` reaching the test with the PUBACK sent,
+`test_error`, `refuse_wait` inside a handler and a policy, every guarded call of `Esp32Sim` and the
+console's expects refusing on a board never set up, and, on a real `HeldClock` with
+`test_clock.Run`, an exception and a `pytest.fail` raised in the link's thread failing `wait` and
+`wait_until` at the next turn, after which a wait goes on.
+`tests/test_mqtt_handlers.py` runs `firmware/mqtt_session`: a handler answering each report during a
+plain `board.wait` over a 200 ms path, each `Delivery.at` equal to its report's `at` or 50 ms
+after it, a handler whose `board.wait` fails the test's wait with the message naming it, and one
+that raises failing `wait_until` while the device stays connected.
 MQTT temporal tests send CONNECT and PUBLISH in one callback, check the `next_*` methods,
 history filtering, equal timestamps, repeated polls and boolean protection. `tests/test_net_mqtt.py`
 counts, through `CountingList` of `tests/conftest.py`, the records `next_message`, `next_delivery`

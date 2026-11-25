@@ -117,6 +117,7 @@ from esp32tl.net.dhcp import Lease as Lease
 from esp32tl.net.dns import Dns as Dns
 from esp32tl.net.dns import DnsQuestion as DnsQuestion
 from esp32tl.net.ethernet import Ethernet as Ethernet
+from esp32tl.net.handlers import Registration as Registration
 from esp32tl.net.http import HttpRequest as HttpRequest
 from esp32tl.net.http import HttpServer as HttpServer
 from esp32tl.net.http_client import ClientResponse as ClientResponse
@@ -286,6 +287,7 @@ __all__ = [
     "Real",
     "ReceivedPacket",
     "Refusal",
+    "Registration",
     "Replay",
     "ReplayError",
     "RequestedFilter",

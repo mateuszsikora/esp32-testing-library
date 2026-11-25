@@ -326,6 +326,11 @@ in the test's thread:
   each event (protocol §6, rule 1), so a turn comes soon after a `reset`, and a stretch without
   events, as a deep sleep, takes no turn at all. Only the waits of `wait_for_event` carry the
   latency: every other `wait` the link sends has the interfaces' alone.
+- `fail(error)` is for the link's thread: an exception of the test's code it ran while the run
+  went, as a broker's `on_publish` handler. The first one is kept until a wait raises it:
+  `_advance`, under which every wait goes, raises it, with the traceback of where it was raised, as
+  soon as the next turn has come and before it looks for the run's end, and forgets it. The link
+  stays held at that turn, and a later wait goes on from it.
 - `now` is the block point of the last held turn, 0 until the first.
 - `stop()` is the link's side only: the held turn, or the next, answers `stop`, and no turn is held
   after it. It returns whether the link was held at that moment. `end(reason, at=None)` is the
@@ -341,7 +346,15 @@ clock's time as a `Duration`; `utc` adds it, in microseconds, to the UTC instant
 `utc_at(at)` adds `at` the same way, checked with `nanoseconds(at, "board.utc_at")` after `_on()`:
 it reads neither the clock nor the supply, so a model can call it from the link's thread, at an
 instant later than `now`, and after a `power_off`. `wait`, `wait_until`, `wait_on_clock`, `now`,
-`utc` and `utc_at` raise `BoardOff` before `power_on()`. `wait_until` describes its
+`utc` and `utc_at` raise `BoardOff` before `power_on()`. `wait`, `wait_until`, `wait_for_wake`
+and `wait_on_clock` first call `refuse_wait("board.<method>")` (`esp32tl/net/handlers.py`), and
+`Console._expect` calls `refuse_wait("console.expect")` (`console.expect_exact`) before it reaches
+`wait_on_clock`; each raises `RuntimeError` while a handler or a policy of the test's runs in the
+calling thread, as the link's thread does while it runs one. `flash`, `nvs`, `reset`, `power_on`
+and `power_off` first call `refuse_board("board.<method>")`, which raises the same way: from the
+link's thread `HeldClock._ask` would wait for a turn only that thread can bring, and
+`board_input` would stamp a switch at the last turn, before the one it goes out in. `Esp32Sim` gives `HeldClock.fail` to `Wifi` and to each
+`Modem` as `test_error`, which goes to every network they make. `wait_until` describes its
 condition as `the condition {condition.__qualname__}`, or by its `repr` when it has no qualified
 name; `wait_on_clock(condition, within, description)` takes the description from the caller, as the
 console does. `wait` logs `board.wait({seconds})` at the board's time it starts from, and `the run
@@ -592,7 +605,7 @@ repository makes.
 | `Esp32Sim.close()` | Ends the run and writes the taps; raises `BackendError` for a tap that cannot be written, a failing exit code, a killed runner or a link error |
 | `Esp32Sim.report(run=False)`, `Esp32Sim.properties()` | The `esp32sim link` report section, with the run on the board's clock when `run`; the `esp32sim_link` user property's data |
 | `BackendError` | What keeps the backend from starting, or a failing end |
-| `HeldClock(step=STEP_NS)` | `esp32tl/backends/clock.py`: the link's `Hold`, `turn(now)`, `answered(ack)`; `stop()`, `end(reason, at=None)`; the test's `now`, `wait(ns)`, `wait_until(condition, within_ns, description)`, `wait_for_event(condition, within_ns, description, latency_ns)`, `dump_flash()`, which returns the runner's `FlashDumpAck`, or `None` once the run has ended, `write_flash(offset, path)`, which returns its `FlashWriteAck`, or `None` once the run has ended, and `check(step)`, which raises `RunEnded` (`the run ended {when} before {step}: {reason}`) once the run has ended |
+| `HeldClock(step=STEP_NS)` | `esp32tl/backends/clock.py`: the link's `Hold`, `turn(now)`, `answered(ack)`; `stop()`, `end(reason, at=None)`, `fail(error)`, which the test's next wait raises at the next turn; the test's `now`, `wait(ns)`, `wait_until(condition, within_ns, description)`, `wait_for_event(condition, within_ns, description, latency_ns)`, `dump_flash()`, which returns the runner's `FlashDumpAck`, or `None` once the run has ended, `write_flash(offset, path)`, which returns its `FlashWriteAck`, or `None` once the run has ended, and `check(step)`, which raises `RunEnded` (`the run ended {when} before {step}: {reason}`) once the run has ended |
 | `nanoseconds(value, what)`, `seconds(ns)` | `esp32tl/backends/clock.py`: a `Duration` of the board's time to nanoseconds, checked; nanoseconds shown as `12.5 s`, as `str(Duration(ns))` |
 | `listen()` | The listening socket and its path, or `BackendError` |
 | `runner_path()`, `rom_path(chip="esp32", app=None)` | The runner and the ROM ELF of `rom_key(chip, app)`, or `BackendError`; `esp32tl has no ROM for {chip}; the chips are esp32, esp32s3, esp32c3, esp32c6, esp32p4, esp32p4-rev0, esp32s31` for a key `runtime.ROMS` does not have |
@@ -693,6 +706,8 @@ In the test body:
 | `{what} takes a Duration, as seconds({value!r}), not {value!r}` (`as seconds(5)` for what is not a number), `{what} takes a Duration of 0 or more, not {duration}` | `TypeError`, `ValueError` | A duration that is not a `Duration`, or is below 0 |
 | `{description} did not happen within {within}: waited from {start} to {end} of the board's time`, or `{description} did not happen within {within}: {why}; waited from …` when the condition's `waiting` returns `why` | `NeverHappened` | `wait_until`'s deadline, and `wait_for_wake`'s, with `a wake from deep sleep` |
 | `board.wait_for_wake: boot {number} at {at} is {reason} (reset cause {cause}), not a wake from deep sleep (DEEPSLEEP_RESET)` | `AssertionError` | The chip booted again through another reset: `esp_restart()`, a watchdog |
+| `{call}: called from {name}: a {handler\|policy} must not wait`, as `board.wait_until: called from the broker's on_publish handler for 'dev/+/req': a handler must not wait` | `RuntimeError` | `wait`, `wait_until`, `wait_for_wake` or `wait_on_clock`, or `console.expect`/`expect_exact`, from inside a handler or a policy of the test's, which the link's thread runs |
+| `{call}: called from {name}: a {handler\|policy} must not call the board`, as `board.flash: called from the broker's on_publish handler for 'dev/+/req': a handler must not call the board` | `RuntimeError` | `flash`, `nvs`, `reset`, `power_on` or `power_off` from inside a handler or a policy of the test's |
 | `the board is off: board.wait_for_wake() waits for a board that is on` | `BoardOff` | `wait_for_wake` after `power_off()` |
 | `the run ended {when} while the test waited {what}: {reason}` | `RunEnded` | The run ended during, or before, a wait. `{when}` is `at {time}` from the runner's `stats`, `after the turn at {time}` without them, the last held turn being only a bound, or `before its first turn`. `{what}` is `until {time}` for `wait`, `for {description}` for `wait_until`, `for a wake from deep sleep` for `wait_for_wake`; `{reason}` is `[the link failed: {error}; ][{no_bluetooth}; ]the runner exited with code {code}; its last output:` and the tail |
 

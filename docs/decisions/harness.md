@@ -5703,3 +5703,35 @@ a connection with bytes or a FIN the device had not acknowledged as `gapped`, be
 the path or in the air is gone. Since #335 the [retransmission timer](#the-networks-tcp-sends-again-what-the-device-does-not-acknowledge-on-its-rto)
 could send it again after the station's return instead. That changes what a test of the station
 sees when it leaves, which no test needs yet, and it waits for one.
+
+## The broker answers a client's publication with the test's handler, as it is routed
+
+Status: decided (#336)
+
+`broker.on_publish(topic_filter, handler)` calls the test's handler with each publication the
+broker routes on that filter, but the test's own, at its time on the board's clock, in the link's
+thread, after the PUBACK under `"immediate"`. The handler answers with the test's side of the
+broker, `publish` among it, and `publish(..., after=)` gives an answer a delay of its own, the
+server's processing time, through the broker's `poll` and `quiet_until`. What a handler raises
+fails the test's wait at the link's next turn and leaves the connection up; a wait on the board,
+or a call that reaches the runner, as `board.flash` or `board.reset`, from inside a handler raises
+at once. The guard and the error path (`esp32tl/net/handlers.py`,
+`HeldClock.fail`) are the ones the HTTP server's handlers of #338 use.
+
+**Rejected:** a server run inside the condition of `board.wait_until`, as tests did before. It
+answers up to 100 ms of the board's time late, says nothing during `board.wait` and
+`board.wait_for_wake`, and every helper of the test has to wait through it.
+
+**Rejected:** a source-like object with `receive`, `poll` and `quiet_until`, as for the SPP
+channel ([a model answers the SPP channel](#a-model-answers-the-spp-channel-as-the-far-end-of-a-uart-does)).
+The SPP decision rejected a callback because its answer would have no time of its own; here the
+path gives an answer its transit and `after` the server's delay, and a server that answers
+requests needs nothing more than a call per request.
+
+**Rejected:** the handler's return value as the answer. It could carry no QoS, retain or delay
+without a type of its own, and a handler that answers twice, or on another topic, or disconnects
+the client, would still need the broker.
+
+**Rejected:** a handler's exception failing the link, as a `connection_policy`'s does. Nothing of
+the device's caused it, and ending the run would take from the test the device's state it may want
+to look at; the wait it interrupted raises it, with its traceback.

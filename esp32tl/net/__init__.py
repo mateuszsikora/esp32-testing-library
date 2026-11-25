@@ -17,6 +17,7 @@ from esp32tl.net.client import ConnectionEnded, NotReachable, TcpConnection
 from esp32tl.net.dhcp import Dhcp
 from esp32tl.net.dns import Dns
 from esp32tl.net.ethernet import Ethernet
+from esp32tl.net.handlers import reraise
 from esp32tl.net.http import HttpServer
 from esp32tl.net.http_client import HttpClient
 from esp32tl.net.ip import (
@@ -124,7 +125,9 @@ class Internet:
     after it (`set_path`); the path may drop every datagram, and `block` one TCP port's. Public
     calls run while the board is held, and callbacks while it advances: neither uses host time or
     sockets, but for a bridge's. `bridging` is called with the call before a bridge is made, and
-    refuses it by raising: the backend's say on the wall clock.
+    refuses it by raising: the backend's say on the wall clock. `test_error` takes an exception of
+    the test's code that a service ran while the board advanced, as a broker's `on_publish`
+    handler's (`esp32tl.net.handlers`); by default it is raised where the service was called.
 
     The end of the link, a modem's call or an access point off the air, loses the connections the
     test opened and leaves the device's open and silent, as the far end of a device that lost its
@@ -140,6 +143,7 @@ class Internet:
         link: Link = "ppp",
         mac: str = DEFAULT_MAC,
         bridging: Callable[[str], None] = lambda call: None,
+        test_error: Callable[[BaseException], None] = reraise,
     ) -> None:
         self._now = now
         self._bridging = bridging
@@ -158,7 +162,7 @@ class Internet:
         self.dns = Dns("10.64.0.1", self.now, self.log)
         self.ntp = Ntp(self.now, world, self.log)
         self.ip.udp.update({53: self.dns, 123: self.ntp})
-        self.broker = Broker(self.now, self.log)
+        self.broker = Broker(self.now, self.log, test_error=test_error)
         self.listen(1883, self.broker)
         self.http_client = HttpClient(self.connect, self.log)
         self.http = HttpServer(self.now, self.log)

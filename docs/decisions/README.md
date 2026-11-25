@@ -378,6 +378,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The GNSS receiver answers every CASIC frame and acts on none](harness.md#the-gnss-receiver-answers-every-casic-frame-and-acts-on-none) | `harness.md` | decided (#333) |
 | [The network's TCP sends again what the device does not acknowledge, on its RTO](harness.md#the-networks-tcp-sends-again-what-the-device-does-not-acknowledge-on-its-rto) | `harness.md` | decided (#335) |
 | [Keeping a gapped connection behind a virtual station for its RTO is postponed](harness.md#keeping-a-gapped-connection-behind-a-virtual-station-for-its-rto-is-postponed) | `harness.md` | postponed (#335) |
+| [The broker answers a client's publication with the test's handler, as it is routed](harness.md#the-broker-answers-a-clients-publication-with-the-tests-handler-as-it-is-routed) | `harness.md` | decided (#336) |
 
 ## The runner crate and esp32sim
 

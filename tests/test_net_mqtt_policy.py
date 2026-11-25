@@ -305,6 +305,17 @@ def test_policy_exceptions_reach_the_test(error: Exception) -> None:
     assert not broker.clients and not broker.messages
 
 
+def test_pytest_fail_in_a_policy_closes_the_connection_and_raises_as_an_exception() -> None:
+    broker = Broker(lambda: 0, connection_policy=lambda connect: pytest.fail("bad credentials"))
+    closed: list[bool] = []
+    session = broker.accept(("10.64.0.2", 100), lambda b: None, lambda: closed.append(True))
+    with pytest.raises(RuntimeError) as raised:
+        session.on_data(WILL_CONNECT)
+    assert str(raised.value) == "MQTT connection_policy raised Failed: bad credentials"
+    assert isinstance(raised.value.__cause__, pytest.fail.Exception)
+    assert closed == [True] and not broker.connection_attempts and not broker.clients
+
+
 class MqttWire(Interface):
     """A modem whose UART carries one MQTT connection, so a policy runs in the link's turn."""
 
@@ -322,6 +333,10 @@ class MqttWire(Interface):
     [
         (lambda connect: 3, "TypeError: MQTT connection_policy must return a ConnackCode"),
         (lambda connect: 1 / 0, "ZeroDivisionError: division by zero"),
+        (
+            lambda connect: pytest.fail("bad credentials"),
+            "RuntimeError: MQTT connection_policy raised Failed: bad credentials",
+        ),
     ],
 )
 def test_policy_errors_in_a_board_run_fail_the_link_naming_them(

@@ -60,6 +60,17 @@ ended by the test's wall-time timeout, 600 s by default
 waits, up to a day of emulated time (`--max-seconds 86400`), at which the runner ends it and a
 waiting test gets `RunEnded`.
 
+A handler the test gives the network, as the broker's
+[`on_publish`](network-user.md#answer-the-devices-publications), runs while the test waits, in
+the link's thread, at the board's instant of what it answers. What it raises fails the wait it
+interrupted at the link's next turn, with its traceback, `pytest.fail`'s included, and the run
+goes on. A wait on the board from inside one, `board.wait`, `board.wait_until`,
+`board.wait_for_wake` or a console expect, raises `RuntimeError` at once, as `board.wait: called
+from the broker's on_publish handler for 'session/reports': a handler must not wait`: the link
+that would run the board is the thread that waits. So do `board.flash`, `board.nvs`,
+`board.reset`, `board.power_on` and `board.power_off`, which the link carries to the runner: `… a
+handler must not call the board`.
+
 One runner serves the whole test, from the first `power_on()` to teardown. `board.reset()`,
 `board.power_off()` and a `power_on()` after it go to it over the link, at the board's time the test
 calls them, and the run goes on through them on the same clock

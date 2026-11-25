@@ -22,6 +22,7 @@ import pexpect
 from esp32tl.interfaces import RunEnded, SourceError
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import Output
+from esp32tl.net.handlers import refuse_wait
 from esp32tl.tap import Tap
 from esp32tl.units import Duration, number, seconds
 
@@ -215,6 +216,8 @@ class Console:
         return_what_before_match: bool,
         exact: bool,
     ) -> Any:
+        # Named here, not as the board's `wait_on_clock` the expect waits through.
+        refuse_wait("console.expect_exact" if exact else "console.expect")
         within = timeout_of(timeout)
         patterns: list[Pattern] = (
             list(pattern) if isinstance(pattern, list | tuple) else [cast(Pattern, pattern)]

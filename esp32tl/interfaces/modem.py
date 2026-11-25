@@ -12,6 +12,7 @@ from esp32tl.interfaces.lines import Lines
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import Wire
 from esp32tl.net import Internet
+from esp32tl.net.handlers import reraise
 from esp32tl.net.ntp import DEFAULT_UTC
 from esp32tl.report import RunLog, board_time
 from esp32tl.sources.model.modem import (
@@ -30,7 +31,9 @@ from esp32tl.units import Duration
 class Modem(Uart):
     """The first successful model call before power-on selects the model; later calls change it
     on the test's clock. Merely requesting the fixture keeps the route silent. `bridging` goes to
-    the network, which calls it before a bridge to a real service is made (`Internet.bridge`)."""
+    the network, which calls it before a bridge to a real service is made (`Internet.bridge`), and
+    so does `test_error`, which takes an exception of the test's code that the network ran while
+    the board advanced."""
 
     def __init__(
         self,
@@ -47,12 +50,14 @@ class Modem(Uart):
         log: RunLog | None = None,
         files: dict[Path, tuple[str, str]] | None = None,
         bridging: Callable[[str], None] = lambda call: None,
+        test_error: Callable[[BaseException], None] = reraise,
     ) -> None:
         super().__init__(
             name, wire, clock=clock, directory=directory, asked=asked, log=log, files=files
         )
         self._now = now
         self._bridging = bridging
+        self._test_error = test_error
         self._world = world
         self._lines = lines
         self._pins = pins
@@ -66,7 +71,9 @@ class Modem(Uart):
             self._refuse_source("modem")
         self.asked(Request(self.name, source="model"))
         self._tell(lambda model: None, "network()")
-        network = Internet(self._now, self._world, bridging=self._bridging)
+        network = Internet(
+            self._now, self._world, bridging=self._bridging, test_error=self._test_error
+        )
         self.modem_model().data = network
         return network
 
