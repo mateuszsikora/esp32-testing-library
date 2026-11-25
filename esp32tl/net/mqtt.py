@@ -1,8 +1,10 @@
 """An MQTT 3.1.1 broker the test runs: QoS 0 and 1, retained messages, the Will, wildcards, and
 sessions kept by client ID. Every message it is given and every one it sends is kept, stamped with
-the board's time, for the test to look at; the test can publish too.
+the board's time, for the test to look at; the test can publish too, now or later on the board's
+clock, and answer what a client publishes as it is routed, with a handler.
 """
 
+import heapq
 import struct
 from collections import deque
 from collections.abc import Callable, Iterator, Sequence
@@ -12,6 +14,7 @@ from typing import Literal, TypeVar
 
 from esp32tl.interfaces.condition import Condition, FirstFrom
 from esp32tl.interfaces.history import History
+from esp32tl.net.handlers import Registration, handling, reraise
 from esp32tl.units import Duration
 
 TEST_CLIENT = "(test)"
@@ -279,6 +282,20 @@ def matches(pattern: str, topic: str) -> bool:
     return len(p) == len(t)
 
 
+def _is_filter(topic: str) -> bool:
+    """Whether `topic` is a topic filter a SUBSCRIBE may name: `#` alone and last in a level of its
+    own, `+` alone in its level, no NUL."""
+    parts = topic.split("/")
+    return (
+        bool(topic)
+        and "\0" not in topic
+        and not any(
+            ("#" in part and (part != "#" or i != len(parts) - 1)) or ("+" in part and part != "+")
+            for i, part in enumerate(parts)
+        )
+    )
+
+
 def _wants(topic: str, wanted: bytes | None) -> Callable[[Message | Delivery], bool]:
     """Whether a record is on this topic filter, with this payload if one is wanted."""
     return lambda record: (
@@ -354,7 +371,13 @@ def _packet(kind: int, flags: int, body: bytes) -> bytes:
 
 
 class Broker:
-    """`now` is the board's clock. The `StreamService` of `esp32tl.net.ip`."""
+    """`now` is the board's clock. The `StreamService` of `esp32tl.net.ip`.
+
+    What an `on_publish` handler raises goes to `test_error` once the event the broker was handling
+    is done, the client's connection kept: on a board, the board's, which the test's wait raises
+    at the next turn. By default it is raised from the call that handled the event, `on_data`,
+    `on_close` or `poll`. `disconnect`, the test's, raises what the Will's handlers raised either
+    way."""
 
     def __init__(
         self,
@@ -362,9 +385,19 @@ class Broker:
         log: Callable[[str], None] = lambda line: None,
         *,
         connection_policy: Callable[[Connect], ConnackCode] | None = None,
+        test_error: Callable[[BaseException], None] = reraise,
     ) -> None:
         self._now = now
         self._log = log
+        self._test_error = test_error
+        # The test's handlers, in the order it gave them, and what they raised since it was told.
+        self._handlers: list[tuple[Registration, str, Callable[[Message], None]]] = []
+        self._failures: list[BaseException] = []
+        # Inside `disconnect`, called by the test: what the Will's handlers raise is its to raise.
+        self._test_side = False
+        # The test's publications made with `after`: due time, order made, and what to route.
+        self._scheduled: list[tuple[int, int, str, bytes, int, bool]] = []
+        self._scheduled_count = 0
         self._messages: list[Message] = []
         self._clients: list[MqttClient] = []
         self._received_packets: list[ReceivedPacket] = []
@@ -429,6 +462,10 @@ class Broker:
                 self._events.popleft()
         finally:
             self._events.clear()
+        if self._failures and not self._test_side:
+            failures, self._failures = self._failures, []
+            for failure in failures:
+                self._test_error(failure)
 
     def _anonymous_id(self) -> str:
         """Allocate a repeatable ID that no earlier accepted CONNECT in this broker used."""
@@ -461,13 +498,67 @@ class Broker:
         return tuple(p for session in self._sessions for p in session.incoming.values())
 
     def disconnect(self, client_id: str) -> bool:
-        """Close this client's stream as a connection loss, including its Will, if connected."""
+        """Close this client's stream as a connection loss, including its Will, if connected.
+        Called by the test, it raises the first exception a handler of the Will raised; from
+        inside a handler, the handler's event reports it."""
         for session in list(self._sessions):
             if session.connected and session.client_id == client_id:
                 self._log(f"mqtt: {client_id} disconnected by the test")
-                session._lose("test", Duration(self._now()))
+                outermost = not self._events and not self._test_side
+                self._test_side = self._test_side or outermost
+                try:
+                    session._lose("test", Duration(self._now()))
+                finally:
+                    if outermost:
+                        self._test_side = False
+                if outermost and self._failures:
+                    failures, self._failures = self._failures, []
+                    raise failures[0]
                 return True
         return False
+
+    def on_publish(self, topic_filter: str, handler: Callable[[Message], None]) -> Registration:
+        """Call `handler(message)` for each publication the broker routes on `topic_filter`, MQTT
+        wildcards as in `matches`, at `message.at`: a client's, a retransmission with DUP, and a
+        Will the broker publishes; never the test's own. It runs once the message has gone to the
+        subscriptions and, with `puback = "immediate"`, its PUBACK has been written. Handlers run
+        in the order given. One may call `publish`, `disconnect` and the rest of the test's side
+        that does not wait; a wait on the board from inside one raises `RuntimeError`. What one
+        raises fails the test's wait, and the client's connection stays."""
+        if not isinstance(topic_filter, str) or not _is_filter(topic_filter):
+            raise ValueError(f"mqtt: on_publish: {topic_filter!r} is not an MQTT topic filter")
+        if not callable(handler):
+            raise TypeError(f"mqtt: on_publish: the handler {handler!r} is not callable")
+        registration = Registration(f"on_publish {topic_filter!r}", self._unregister)
+        self._handlers.append((registration, topic_filter, handler))
+        self._log(f"mqtt: {registration.name} registered")
+        return registration
+
+    def _unregister(self, registration: Registration) -> None:
+        self._handlers = [entry for entry in self._handlers if entry[0] is not registration]
+        self._log(f"mqtt: {registration.name} removed")
+
+    def _answer(self, message: Message) -> None:
+        """Call the handlers registered now whose filter matches `message`, in order; keep what
+        they raise for the end of the event."""
+        for registration, topic_filter, handler in list(self._handlers):
+            if not registration.active or not matches(topic_filter, message.topic):
+                continue
+            name = f"the broker's on_publish handler for {topic_filter!r}"
+            with handling(name):
+                try:
+                    handler(message)
+                except (KeyboardInterrupt, SystemExit):
+                    raise
+                except BaseException as error:
+                    # `pytest.fail` and `pytest.skip` raise a `BaseException` too: theirs is the
+                    # test's outcome, and the link's thread must not die of it.
+                    self._log(f"mqtt: {registration.name} raised {type(error).__name__}: {error}")
+                    error.add_note(
+                        f"raised by {name}, given {message.client}'s message on"
+                        f" {message.topic!r} at {message.at} of the board's time"
+                    )
+                    self._failures.append(error)
 
     def session(self, client_id: str) -> SessionState | None:
         """The state the broker has for this client ID now, or None."""
@@ -660,14 +751,40 @@ class Broker:
         return Condition(find, description, "MQTT")
 
     def publish(
-        self, topic: str, payload: bytes | str, *, retain: bool = False, qos: int = 0
+        self,
+        topic: str,
+        payload: bytes | str,
+        *,
+        retain: bool = False,
+        qos: int = 0,
+        after: Duration | None = None,
     ) -> None:
+        """Publish from the test at the board's time now; with `after`, that much later on the
+        board's clock, at `poll`, recorded in `messages` when it is routed."""
         if not topic or "+" in topic or "#" in topic or "\0" in topic:
             raise ValueError("MQTT publish needs a topic without wildcards or NUL")
         if qos not in (0, 1):
             raise ValueError("MQTT supports QoS 0 and 1")
+        if after is not None and not isinstance(after, Duration):
+            raise TypeError(f"mqtt: publish: after is {after!r}, not a Duration, as ms(50)")
+        if after is not None and after.ns < 0:
+            raise ValueError(f"mqtt: publish: after is {after}; it takes a Duration of 0 or more")
         data = payload.encode() if isinstance(payload, str) else payload
-        self._route(Message(Duration(self._now()), TEST_CLIENT, topic, data, qos, retain))
+        now = self._now()
+        if after is None or not after.ns:
+            message = Message(Duration(now), TEST_CLIENT, topic, data, qos, retain)
+            if self._events:
+                # From a handler: at once, so that what it does next, a disconnect, comes after.
+                self._route(message, own=True)
+            else:
+                # An event of its own: what a client's write callback feeds back while it is
+                # offered waits for every subscription to have it, and so does what that raises.
+                self._dispatch(lambda: self._route(message, own=True))
+            return
+        self._scheduled_count += 1
+        due = now + after.ns
+        heapq.heappush(self._scheduled, (due, self._scheduled_count, topic, data, qos, retain))
+        self._log(f"mqtt: {TEST_CLIENT} publishes on {topic} at {Duration(due)}, after {after}")
 
     def poll(self) -> None:
         now = self._now()
@@ -682,15 +799,23 @@ class Broker:
         for publication in self.pending:
             if publication._due is not None and now >= publication._due:
                 publication.release()
+        # And both with a publication of the test's that is due, which goes in the order made.
+        while self._scheduled and self._scheduled[0][0] <= now:
+            _, _, topic, data, qos, retain = heapq.heappop(self._scheduled)
+            self._route(Message(Duration(now), TEST_CLIENT, topic, data, qos, retain), own=True)
 
     def quiet_until(self) -> int | None:
         deadlines = [s.deadline for s in self._sessions if s.deadline is not None]
         deadlines.extend(p._due for p in self.pending if p._due is not None)
+        if self._scheduled:
+            deadlines.append(self._scheduled[0][0])
         return min(deadlines, default=None)
 
     # Routing.
 
-    def _route(self, message: Message) -> None:
+    def _route(self, message: Message, *, own: bool = False) -> None:
+        """Record `message`, keep it if retained, and offer it to every session; then, unless it
+        is the test's `own`, give it to the handlers, once the event that routed it is done."""
         self._messages.append(message)
         self._log(f"mqtt: {message.client} → {message.topic} {message.payload[:60]!r}")
         if message.retain:
@@ -700,6 +825,8 @@ class Broker:
                 self.retained.pop(message.topic, None)
         for client_id, state in list(self._states.items()):
             self._offer(client_id, state, message)
+        if not own and self._handlers:
+            self._dispatch(lambda: self._answer(message))
 
     def _offer(self, client_id: str, state: "_State", message: Message) -> None:
         if not any(matches(f, message.topic) for f in state.subscriptions):
@@ -982,12 +1109,20 @@ class _Session:
             code = ConnackCode.IDENTIFIER_REJECTED
         elif broker.connection_policy is not None:
             try:
-                code = broker.connection_policy(connect)
+                with handling("the broker's connection_policy", "policy"):
+                    code = broker.connection_policy(connect)
                 if not isinstance(code, ConnackCode):
                     raise TypeError("MQTT connection_policy must return a ConnackCode")
-            except Exception:
+            except (Exception, KeyboardInterrupt, SystemExit):
                 self._end()
                 raise
+            except BaseException as error:
+                # `pytest.fail` and `pytest.skip`: as an `Exception`, which the link turns into
+                # its failure, instead of one that would end the link's thread unanswered.
+                self._end()
+                raise RuntimeError(
+                    f"MQTT connection_policy raised {type(error).__name__}: {error}"
+                ) from error
         stored = broker._states.get(connect.client_id)
         session_present = (
             code == ConnackCode.ACCEPTED
@@ -1131,12 +1266,7 @@ class _Session:
             requested, filters, granted = [], [], bytearray()
             while at < len(body):
                 topic, at = _string(body, at)
-                parts = topic.split("/")
-                if not topic or any(
-                    ("#" in part and (part != "#" or i != len(parts) - 1))
-                    or ("+" in part and part != "+")
-                    for i, part in enumerate(parts)
-                ):
+                if not _is_filter(topic):
                     raise ValueError("invalid topic filter")
                 qos = body[at]
                 if qos > 2:

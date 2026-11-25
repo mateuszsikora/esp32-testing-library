@@ -60,7 +60,8 @@ silent; an AT-only model still works without PPP. The network's broker is `modem
 | `ended(connection_id)` | Immediate query returning how that connection ended, a `ConnectionEnd`, or `None` while it has not |
 | `next_subscribe(filter=None)` | Condition returning the first SUBSCRIBE recorded **after this method call**; with `filter`, the first naming exactly that topic filter ([every SUBSCRIBE and UNSUBSCRIBE](#every-subscribe-and-unsubscribe)) |
 | `connection_policy` | Callable receiving `Connect` and returning `ConnackCode`; `None` (default) accepts supported requests |
-| `publish(topic, payload, retain=False, qos=0)` | Publish from the test at the board's current time; bytes or UTF-8 text, QoS 0 or 1. The message's `client` is `TEST_CLIENT` |
+| `publish(topic, payload, retain=False, qos=0, after=None)` | Publish from the test at the board's current time, or `after` a `Duration` later ([delayed answers](#an-answer-with-a-delay-of-its-own)); bytes or UTF-8 text, QoS 0 or 1. The message's `client` is `TEST_CLIENT` |
+| `on_publish(topic_filter, handler)` | Call `handler(message)` for each publication of a client's the broker routes on that filter, as it is routed; returns a `Registration` whose `remove()` takes it away ([answer the device's publications](#answer-the-devices-publications)) |
 | `messages`, `clients`, `retained` | Message history, accepted-client history and currently retained messages |
 | `connection_attempts` | CONNECT outcome history, including accepted and rejected attempts |
 | `received_packets` | Complete client control packets across all connections, in the order the broker read them |
@@ -370,12 +371,115 @@ request = board.wait_until(resubscribed, within=seconds(60))
 assert request.connection_id != before.connection_id
 ```
 
+## Answer the device's publications
+
+A test that plays the server behind the broker, for configuration, a firmware update, assistance
+data or commands, answers each request of the device's as the broker routes it.
+`broker.on_publish(topic_filter, handler)` calls `handler(message)` with the `Message` the broker
+has just recorded, at `message.at`, on the board's clock; it returns a `Registration`, imported
+from `esp32tl` like `Message`, whose `remove()` takes the handler away:
+
+```python
+from esp32tl import Message
+from esp32tl.units import ms, seconds
+
+
+def answer(request: Message) -> None:
+    device = request.topic.split("/")[1]
+    broker.publish(f"dev/{device}/resp", b"config for " + request.payload, qos=1, after=ms(20))
+
+
+handler = broker.on_publish("dev/+/req", answer)
+board.power_on()
+board.wait(seconds(30))  # the handler answers during any wait, a plain one included
+assert broker.find_delivery("dev/+/resp") is not None
+handler.remove()
+```
+
+The handler answers during every kind of wait, `board.wait`, `board.wait_until`,
+`board.wait_for_wake` and the console's, since it runs where the broker reads the device's bytes,
+not at a condition's look every 100 ms of the board's time. Its answer sets off at the request's
+`at`, or `after` that ([below](#an-answer-with-a-delay-of-its-own)), and reaches the device the
+path's one way down later, as every publication of the test's does
+([the path](#give-the-network-a-round-trip-and-a-rate)).
+
+- **Which publications.** Every one the broker routes whose topic matches `topic_filter`, with the
+  wildcards of `next_message`: a client's PUBLISH, a QoS 1 retransmission (`message.dup` says
+  which), and a Will the broker publishes (`message.will`). Never the test's own, whose `client`
+  is `TEST_CLIENT`: a handler that publishes on its own filter does not answer itself. A filter a
+  SUBSCRIBE could not name raises `ValueError`, as `mqtt: on_publish: 'a/#/b' is not an MQTT topic
+  filter`, and a handler that is not callable `TypeError`.
+- **Order.** The handler runs once the message has gone to the subscriptions and, under
+  `broker.puback = "immediate"`, once its PUBACK has been written, so the device sees its PUBACK
+  before the answer, as with a real broker and a server behind it. Under `"hold"` or a delay above
+  zero it still runs on receipt, before the PUBACK; `message.publication` is the pending handle. The
+  broker first handles the rest of the bytes that carried the message, so two PUBLISHes in one TCP
+  segment are both acknowledged before either is answered. Several handlers run in the order they
+  were registered; one removed by an earlier handler is not called, even for the same message.
+- **What a handler may call.** The broker's side of the test: `broker.publish`,
+  `broker.disconnect`, `Publication.release()`, `broker.puback`, `broker.session` and
+  `forget_session`, the histories and the `find_*` queries, `on_publish` and `remove()`. The board
+  stands still while it runs.
+- **What it must not.** Wait on the board, or call it. A `board.wait`, `board.wait_until`,
+  `board.wait_for_wake`, `console.expect` or `console.expect_exact` from inside a handler raises
+  `RuntimeError` at once, as `board.wait_until: called from the broker's on_publish handler for
+  'dev/+/req': a handler must not wait`; `board.flash`, `board.nvs`, `board.reset`,
+  `board.power_on` and `board.power_off`, which reach the runner through the link the handler is
+  running on, raise `board.flash: called from the broker's on_publish handler for 'dev/+/req': a
+  handler must not call the board`. Either fails the test as below. The calls of the board's other
+  interfaces, a modem's, the Wi-Fi's, the lines' or a model's, are made for the test's thread
+  between waits, not for a handler.
+- **What it raises** fails the test at the wait it interrupted, at the link's next turn, with the
+  handler's traceback and a note, as `raised by the broker's on_publish handler for 'dev/+/req',
+  given dev-1's message on 'dev/1/req' at 12.5 s of the board's time`. Only the first exception
+  before that turn is raised; the transcript logs each, as `mqtt: on_publish 'dev/+/req' raised
+  ValueError: bad request`. The device's connection stays, as nothing of the device's caused
+  the error, unlike a [`connection_policy`](#reject-mqtt-connections-and-check-credentials) that
+  raises; the run goes on, and a test that expects the error, in `pytest.raises`, can wait again.
+  `pytest.fail(...)` and `pytest.skip(...)` in a handler go the same way: the wait raises them, and
+  the test fails or is skipped with their message. A `RunEnded` a handler raises comes as
+  `RuntimeError: a handler of the test's raised RunEnded: …`, so that no wait takes it for the end
+  of the run.
+  A Will's handler that raises during the test's own `broker.disconnect` raises from
+  `disconnect`.
+- **The transcript** logs `mqtt: on_publish 'dev/+/req' registered` and `mqtt: on_publish
+  'dev/+/req' removed`; the answers are logged as any publication of the test's. A second
+  `remove()` does nothing; `registration.active` says whether the handler is still there, and
+  `registration.name` is `on_publish 'dev/+/req'`.
+
+Behind a Wi-Fi access point the same API is on `network.broker`. A `Broker` driven directly,
+without a board, raises what a handler raised from the call that handled the event, `on_data`,
+`on_close` or `poll`, once it has finished with it, and the connection stays; one constructed with
+`Broker(now, log, test_error=...)` gives it to that callable instead. `tests/test_mqtt_handlers.py`
+answers each report of `firmware/mqtt_session` on `session/reports` with a QoS 1 `ack report N` on
+`session/commands`, during a `board.wait(seconds(10))`, over a path of 200 ms: each answer's
+`Delivery.at` is its report's `Message.at`, or 50 ms after it with `after=ms(50)`, and the firmware
+prints every answer.
+
+### An answer with a delay of its own
+
+`broker.publish(topic, payload, after=ms(20))` routes the publication that much later on the
+board's clock: the server's own processing time, beside the transit the path gives it. It works in
+a handler and outside one. The broker asks for a turn of the link at that instant, as for a delayed
+PUBACK, so a wait of any kind lets it go at its time; the publication is in `messages`, with that
+`at`, only once it has been routed, and the transcript logs `mqtt: (test) publishes on dev/1/resp
+at 12.52 s, after 0.02 s` when it is made. `after=ms(0)`, like `None`, publishes at once. Several
+due at one instant go in the order they were made, after a keepalive expiry and a delayed PUBACK
+due then. A delayed publication survives the device's disconnect and is routed as any `publish` is
+at its time: queued for a stored session at QoS 1, dropped at QoS 0 for a client that is offline. A
+negative `after` raises `ValueError`, `mqtt: publish: after is -0.001 s; it takes a Duration of 0 or
+more`, and anything but a `Duration` `TypeError`, `mqtt: publish: after is 50, not a Duration, as
+ms(50)`.
+
 ## Reject MQTT connections and check credentials
 
 Set `broker.connection_policy` before power-on or between board advances. It receives an
 immutable `Connect` record and must return a member of `ConnackCode`, both imported from
 `esp32tl`. The same policy applies to plain TCP and TLS listeners using this broker.
-It runs once per supported, fully parsed CONNECT; it must not block or wait on the board.
+It runs once per supported, fully parsed CONNECT; it must not block or wait on the board: a
+`board.wait*` from inside it raises `RuntimeError`, `board.wait_until: called from the broker's
+connection_policy: a policy must not wait`, and a call on the board as `board.flash`, `… a policy
+must not call the board`, which fail the link as any exception of the policy's does, below.
 Changing it affects future attempts only, leaving existing clients connected. Assign `None`
 to restore the accepting default. Behind a Wi-Fi access point the same policy is set on
 `network.broker`. A directly constructed `Broker` also accepts the keyword
@@ -457,7 +561,10 @@ policy's exception. Its message names the error, as in
 `the link failed: uart.modem.receive raised TypeError: MQTT connection_policy must return a ConnackCode`
 (`wifi.receive` behind an access point), and the traceback is in the link's report. Only a
 `Broker` driven directly, without a board, raises the policy's own exception from `on_data`, after
-closing that connection.
+closing that connection. `pytest.fail(...)` and `pytest.skip(...)` in a policy, whose exceptions
+are not `Exception`s, are raised as a `RuntimeError` that names them, with theirs as its cause, so
+that they fail the link in the same way:
+`the link failed: uart.modem.receive raised RuntimeError: MQTT connection_policy raised Failed: bad credentials`.
 
 ## Keep a session across connections
 

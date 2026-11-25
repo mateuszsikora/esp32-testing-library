@@ -104,6 +104,7 @@ from esp32tl.interfaces.wifi import Wifi
 from esp32tl.link.boardlink import BoardLink, Wire
 from esp32tl.link.protocol import ChipReset, Power, Reset
 from esp32tl.net import Internet
+from esp32tl.net.handlers import refuse_board, refuse_wait
 from esp32tl.net.ntp import DEFAULT_UTC
 from esp32tl.report import RunLog, board_time, build_line, build_properties, shown
 from esp32tl.sources.model.modem import Modem as ModemModel
@@ -688,6 +689,7 @@ class Esp32Sim(Board):
             asked=self._asked,
             log=self.log,
             bridging=self._bridging,
+            test_error=self._hold.fail,
         )
         self._bluetooth = Bluetooth(
             asked=self._asked,
@@ -745,6 +747,7 @@ class Esp32Sim(Board):
                 log=self.log,
                 files=self._files,
                 bridging=self._bridging,
+                test_error=self._hold.fail,
             )
         return Uart(
             interface,
@@ -900,6 +903,7 @@ class Esp32Sim(Board):
         the firmware left it after a power-off. Every namespace and key the test does not name
         keeps its value; the partition is written anew, so the firmware's layout of its items is
         not kept."""
+        refuse_board("board.nvs")
         call = f"board.nvs(partition={partition!r}{', merge=True' if merge else ''})"
         if self.powered:
             raise BoardOff(
@@ -986,6 +990,7 @@ class Esp32Sim(Board):
         the run left it. Each read in a turn removes the file, so that a later end of the run that
         wrote none says so. A runner that dies in the very turn it wrote one, before its answer
         comes, leaves that file, and it is what the run left: the guest has not run since."""
+        refuse_board("board.flash")
         if not self.started:
             raise BoardOff(
                 "board.flash: read the flash after board.power_on(): until then it holds the build"
@@ -1149,6 +1154,7 @@ class Esp32Sim(Board):
         is the world's time at that power-on; `POWER_ON_UTC` unless given. After `power_off`,
         the supply comes back at the board's time now, and the chip boots through a power-on
         reset; the world's time has run on meanwhile, and cannot be given again."""
+        refuse_board("board.power_on")
         if self.powered:
             raise BoardOff("the board is on already: call board.power_off() first")
         if self.started:
@@ -1222,6 +1228,7 @@ class Esp32Sim(Board):
         """The board's supply off, at the board's time now: the chip stops, and loses what is
         not in flash; the SD card, and the parts of the board a model stands for, lose their
         power with it. The board's clock runs on, and the test may wait, until `power_on`."""
+        refuse_board("board.power_off")
         if not self.started:
             raise BoardOff("the board is off; call board.power_on() first")
         if not self._supply:
@@ -1232,6 +1239,7 @@ class Esp32Sim(Board):
         """Pulses the chip's EN pin at the board's time now, as the board's reset button does:
         the chip boots again through a power-on reset, and the rest of the board keeps its
         power."""
+        refuse_board("board.reset")
         if not self.powered:
             raise BoardOff("the board is off: board.reset() resets a board that is on")
         self._hold.check("board.reset()")
@@ -1281,6 +1289,7 @@ class Esp32Sim(Board):
 
     def wait(self, duration: Duration) -> None:
         """Lets the board run for `duration` of its own time."""
+        refuse_wait("board.wait")
         clock = self._on()
         ns = nanoseconds(duration, "board.wait")
         self.log.test(clock.now, f"board.wait({seconds(ns)})")
@@ -1295,6 +1304,7 @@ class Esp32Sim(Board):
         its time; returns what it returned. `condition` is asked now, then at every turn of the
         link, at least every 100 ms of the board's time. Raises `NeverHappened` when `within`
         runs out, and `RunEnded` when the run ends first."""
+        refuse_wait("board.wait_until")
         name = getattr(condition, "__qualname__", None)
         description = f"the condition {name}" if name else repr(condition)
         return self._waited(condition, within, description, "board.wait_until: within")
@@ -1306,6 +1316,7 @@ class Esp32Sim(Board):
         turn at most `WAKE_LATENCY_NS` after each event, the reset among them, so a deep sleep
         costs no turns. Raises `NeverHappened` when `within` runs out, `RunEnded` when the run
         ends first, and `AssertionError` for a boot through another reset."""
+        refuse_wait("board.wait_for_wake")
         clock = self._on()
         if not self._supply:
             raise BoardOff("the board is off: board.wait_for_wake() waits for a board that is on")
@@ -1340,6 +1351,7 @@ class Esp32Sim(Board):
         self, condition: Callable[[], T | None], within: Duration, description: str
     ) -> T:
         """`wait_until`, with `description` naming the condition in its errors and in the log."""
+        refuse_wait("board.wait_on_clock")
         return self._waited(condition, within, description, "within")
 
     def _waited(

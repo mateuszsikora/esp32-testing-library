@@ -1838,6 +1838,36 @@ that references to its number keep their meaning.
   `tests/test_net_drop.py::test_a_new_connection_to_a_dropped_port_gets_no_answer`,
   `tests/test_net_drop.py::test_a_refused_port_answers_a_syn_with_rst_and_leaves_open_connections`,
   `tests/test_mqtt_session.py::test_a_blocked_broker_port_drops_or_refuses_while_dns_answers`
+- **303.** A broker's `on_publish` handler sees every publication the broker routes on its filter
+  but the test's own, a client's, a DUP retransmission and a Will, once each, at its `at`, after its
+  PUBACK under `"immediate"` and on receipt under `"hold"` or a delay; handlers run in the order
+  given, and one removed is called for nothing more. On the emulator an answer of a handler's sets
+  off at its request's `at`, or `after` that, during a plain `board.wait`.
+  `tests/test_net_mqtt_handlers.py::test_a_matching_publication_calls_the_handler_once_at_its_time_and_another_does_not`,
+  `tests/test_net_mqtt_handlers.py::test_the_test_s_own_publications_never_reach_a_handler`,
+  `tests/test_net_mqtt_handlers.py::test_a_will_and_a_dup_retransmission_reach_a_handler`,
+  `tests/test_net_mqtt_handlers.py::test_with_immediate_the_puback_is_written_before_the_answer`,
+  `tests/test_net_mqtt_handlers.py::test_with_a_held_or_delayed_puback_the_handler_still_runs_on_receipt`,
+  `tests/test_net_mqtt_handlers.py::test_two_handlers_are_called_in_the_order_given_and_remove_takes_one_away`,
+  `tests/test_net_mqtt_handlers.py::test_after_routes_a_publication_later_through_poll_and_quiet_until`,
+  `tests/test_mqtt_handlers.py::test_a_handler_answers_each_report_as_it_is_routed_during_a_plain_wait`
+- **304.** A handler cannot wait on the board or call it: a `board.wait*` or a console expect from
+  inside a broker's handler, or its `connection_policy`, raises `RuntimeError` naming it, and so do
+  `board.flash`, `board.nvs`, `board.reset` and `board.power_*`, before they touch the board. What
+  a handler raises, `pytest.fail` and `pytest.skip` included, fails the test's wait it interrupted,
+  with a note naming the handler, and leaves the client's connection up; a `pytest.fail` in a
+  `connection_policy` fails the link, as its other exceptions do, instead of ending its thread.
+  `tests/test_net_mqtt_handlers.py::test_a_wait_on_the_board_from_a_handler_or_a_policy_raises_naming_it`,
+  `tests/test_net_mqtt_handlers.py::test_an_exception_reaches_the_test_and_leaves_the_connection_up`,
+  `tests/test_net_mqtt_handlers.py::test_on_the_held_clock_what_a_handler_raises_fails_the_test_s_wait_at_the_next_turn`,
+  `tests/test_net_mqtt_handlers.py::test_pytest_fail_and_skip_in_a_handler_reach_the_test_and_the_rest_of_the_event_goes_on`,
+  `tests/test_net_mqtt_handlers.py::test_every_call_on_the_board_from_a_handler_is_refused_before_it_touches_the_board`,
+  `tests/test_net_mqtt_handlers.py::test_a_run_ended_a_handler_raises_is_not_taken_for_the_end_of_the_run`,
+  `tests/test_net_mqtt_handlers.py::test_a_handler_failure_fed_back_while_the_test_publishes_waits_for_every_subscription`,
+  `tests/test_net_mqtt_policy.py::test_policy_errors_in_a_board_run_fail_the_link_naming_them`,
+  `tests/test_net_mqtt_policy.py::test_pytest_fail_in_a_policy_closes_the_connection_and_raises_as_an_exception`,
+  `tests/test_mqtt_handlers.py::test_a_handler_that_waits_on_the_board_fails_the_wait_naming_the_handler`,
+  `tests/test_mqtt_handlers.py::test_a_handler_that_raises_fails_the_wait_it_interrupted_and_the_device_stays_connected`
 
 ## Explicit build selection
 

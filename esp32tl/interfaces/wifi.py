@@ -15,6 +15,7 @@ from esp32tl.interfaces.history import History
 from esp32tl.link.boardlink import Direction, Interface, Output
 from esp32tl.link.protocol import Input, WifiAp
 from esp32tl.net import LATENCY_NS, Internet
+from esp32tl.net.handlers import reraise
 from esp32tl.net.ntp import DEFAULT_UTC
 from esp32tl.net.station import DEFAULT_MAC
 from esp32tl.report import RunLog
@@ -133,7 +134,8 @@ class Wifi(Interface):
     take as its own (a `KeyError` for a chip it does not name); `None` on a physical board, whose
     MACs esp32tl does not know. `asked` is called with the request before a virtual peer is made,
     and refuses it by raising, as for a UART's source. `bridging` goes to the network, which calls
-    it before a bridge to a real service is made (`Internet.bridge`)."""
+    it before a bridge to a real service is made (`Internet.bridge`), and so does `test_error`,
+    which takes an exception of the test's code that the network ran while the board advanced."""
 
     def __init__(
         self,
@@ -144,11 +146,13 @@ class Wifi(Interface):
         asked: Callable[[Request], None] = lambda request: None,
         log: RunLog | None = None,
         bridging: Callable[[str], None] = lambda call: None,
+        test_error: Callable[[BaseException], None] = reraise,
     ) -> None:
         super().__init__(NAME, None)
         self._now = now
         self._own = None if chip is None else EMULATED_MACS[chip]
         self._bridging = bridging
+        self._test_error = test_error
         self._world = world
         self.asked = asked
         self.log = log
@@ -201,7 +205,13 @@ class Wifi(Interface):
         self.asked(Request(NAME, source="model"))
         if any(n.ssid == ssid or (bssid and n.bssid == bssid) for n in self._nearby):
             raise ValueError(f"wifi.access_point: {ssid!r} is a network around already")
-        network = Internet(self._now, self._world, link="ethernet", bridging=self._bridging)
+        network = Internet(
+            self._now,
+            self._world,
+            link="ethernet",
+            bridging=self._bridging,
+            test_error=self._test_error,
+        )
         with self._lock:
             if self._access_point is not None:
                 raise SourceError("wifi has its access point already: one per test")
@@ -244,7 +254,12 @@ class Wifi(Interface):
                     "one virtual Wi-Fi role per test"
                 )
             network = Internet(
-                self._now, self._world, link="station", mac=mac, bridging=self._bridging
+                self._now,
+                self._world,
+                link="station",
+                mac=mac,
+                bridging=self._bridging,
+                test_error=self._test_error,
             )
             self._station = StationConfig(ssid, password, mac)
             self._network = network
