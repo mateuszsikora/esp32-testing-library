@@ -127,7 +127,8 @@ class Internet:
     sockets, but for a bridge's. `bridging` is called with the call before a bridge is made, and
     refuses it by raising: the backend's say on the wall clock. `test_error` takes an exception of
     the test's code that a service ran while the board advanced, as a broker's `on_publish`
-    handler's (`esp32tl.net.handlers`); by default it is raised where the service was called.
+    handler's or an HTTP handler's (`esp32tl.net.handlers`); by default it is raised where the
+    service was called.
 
     The end of the link, a modem's call or an access point off the air, loses the connections the
     test opened and leaves the device's open and silent, as the far end of a device that lost its
@@ -165,7 +166,7 @@ class Internet:
         self.broker = Broker(self.now, self.log, test_error=test_error)
         self.listen(1883, self.broker)
         self.http_client = HttpClient(self.connect, self.log)
-        self.http = HttpServer(self.now, self.log)
+        self.http = HttpServer(self.now, self.log, test_error=test_error)
         self.listen(80, self.http)
         # The services a bridge may take the place of, by port.
         self._builtin: dict[int, str] = {1883: "the broker", 80: "the HTTP server"}
@@ -812,13 +813,12 @@ class Internet:
             self._at = None
 
     def arrive(self, now: int) -> None:
-        """Take in what has come up the path by `now`, then run the broker's deadlines, the
-        test's SYN timers and the TCP's retransmission timers due by it and hand over what bridged
-        services sent, before the test
-        looks at the turn at `now`: a record stamped `now`, a PUBACK, an expiry or a SYN sent
-        again at `now`, is there when `board.now` says it. What this answers goes out in `poll`.
-        With the link down the broker's deadlines run all the same, and `poll` has nothing to
-        send."""
+        """Take in what has come up the path by `now`, then run the broker's deadlines, the HTTP
+        server's delayed responses, the test's SYN timers and the TCP's retransmission timers due by
+        it and hand over what bridged services sent, before the test looks at the turn at `now`: a
+        record stamped `now`, a PUBACK, an expiry, a delayed response or a SYN sent again at `now`,
+        is there when `board.now` says it. What this answers goes out in `poll`. With the link down
+        the broker's deadlines run all the same, and `poll` has nothing to send."""
         self._at = now
         try:
             if self.active and isinstance(self.link, Station):
@@ -827,6 +827,7 @@ class Internet:
             self.ip.poll()
             self._retry()
             self.broker.poll()
+            self.http.poll()
             self._pump()
         finally:
             self._at = None
@@ -842,6 +843,7 @@ class Internet:
             self.ip.poll()
             self._retry()
             self.broker.poll()
+            self.http.poll()
             self._pump()
             return self._take()
         finally:
@@ -865,20 +867,22 @@ class Internet:
         return out
 
     def quiet_until(self) -> int | None:
-        """The earliest of the broker's deadlines, the next SYN timer of a connection the test
-        opened, the next retransmission timer of a TCP connection, the path's next datagram,
-        either way, and the next whole millisecond while a bridged connection is open; with the
-        link down, the broker's and the bridges', as its keepalive still ends the connections the
-        link's end left open, and a bridged service may still send or close."""
+        """The earliest of the broker's deadlines, the HTTP server's next delayed response, the
+        next SYN timer of a connection the test opened, the next retransmission timer of a TCP
+        connection, the path's next datagram, either way, and the next whole millisecond while a
+        bridged connection is open; with the link down, the broker's, the HTTP server's and the
+        bridges', as its keepalive still ends the connections the link's end left open, a response
+        still goes to them, into nothing, and a bridged service may still send or close."""
         bridged = (bridge.quiet_until(self._now()) for bridge in self.bridges.values())
         # A retry is due whether the link is up or not: one that finds it down says so.
         retries = (accepting.due() for accepting in self._accepting)
         if not self.active:
-            deadlines = (self.broker.quiet_until(), *bridged, *retries)
+            deadlines = (self.broker.quiet_until(), self.http.quiet_until(), *bridged, *retries)
             return min((bound for bound in deadlines if bound is not None), default=None)
         bounds = (
             self.link.quiet_until() if isinstance(self.link, Station) else None,
             self.broker.quiet_until(),
+            self.http.quiet_until(),
             self.ip.quiet_until(),
             self._up.head(),
             self._down.head(),

@@ -5,7 +5,9 @@ from collections.abc import Callable
 import pytest
 from conftest import CountingList
 
-from esp32tl.net.http import HttpRequest, HttpServer
+from esp32tl.net.handlers import refuse_board, refuse_wait
+from esp32tl.net.http import HttpRequest, HttpResponse, HttpServer
+from esp32tl.units import ms, seconds
 
 
 class Client:
@@ -268,3 +270,273 @@ def test_a_next_request_poll_reads_only_the_requests_since_the_last_one(
     request = history[-1]
     assert posted() is request and posted() is request
     assert history.reads == n + 1 + 2
+
+
+class Clock:
+    """The board's clock, set by the test."""
+
+    def __init__(self) -> None:
+        self.now = 0
+
+    def __call__(self) -> int:
+        return self.now
+
+
+def test_a_handler_answers_each_request_from_the_request() -> None:
+    log: list[str] = []
+    server = HttpServer(lambda: 42, log.append)
+    seen: list[HttpRequest] = []
+
+    def update(request: HttpRequest) -> HttpResponse:
+        seen.append(request)
+        # The request is recorded before its handler runs.
+        assert server.requests[-1] is request
+        version = request.target.partition("v=")[2]
+        return HttpResponse(
+            200,
+            f'{{"current": "{version}", "agent": "{request.header("user-agent")}"}}',
+            content_type="application/json",
+            headers={"X-Echo": request.text},
+        )
+
+    server.serve("/update", update)
+    client = Client(server)
+    client.send(
+        b"POST /update?v=1.2 HTTP/1.1\r\nUser-Agent: fw/1.2\r\nContent-Length: 4\r\n\r\n",
+        b"ping",
+    )
+    [request] = seen
+    assert request.at.ns == 42 and request.path == "/update" and request.body == b"ping"
+    assert client.head == [
+        "HTTP/1.1 200 OK",
+        "Content-Type: application/json",
+        "Content-Length: 37",
+        "Connection: close",
+        "X-Echo: ping",
+    ]
+    assert client.body == b'{"current": "1.2", "agent": "fw/1.2"}' and client.closed
+    assert log == ["http: POST /update?v=1.2 → 200"]
+    # once per request, HEAD too, which gets the head alone
+    head = Client(server)
+    head.send(b"HEAD /update?v=2 HTTP/1.1\r\n\r\n")
+    assert len(seen) == 2 and head.head[0] == "HTTP/1.1 200 OK" and head.body == b""
+
+
+def test_a_handler_and_a_fixed_response_replace_each_other(server: HttpServer) -> None:
+    server.serve("/", "fixed")
+    server.serve("/", lambda request: HttpResponse(201, "computed"))
+    client = Client(server)
+    client.send(b"GET / HTTP/1.1\r\n\r\n")
+    assert client.head[0] == "HTTP/1.1 201 Created" and client.body == b"computed"
+    server.serve("/", HttpResponse(body=b"\x01"))
+    again = Client(server)
+    again.send(b"GET / HTTP/1.1\r\n\r\n")
+    assert again.body == b"\x01" and "Content-Type: application/octet-stream" in again.head
+    server.serve("/", "text again")
+    last = Client(server)
+    last.send(b"GET / HTTP/1.1\r\n\r\n")
+    assert last.body == b"text again"
+
+
+def raises(request: HttpRequest) -> HttpResponse:
+    raise ZeroDivisionError("a bug of the test's")
+
+
+@pytest.mark.parametrize(
+    ("handler", "error", "message"),
+    [
+        (
+            lambda request: None,
+            TypeError,
+            "http.serve: the handler for '/fw' returned None, not an HttpResponse",
+        ),
+        (
+            lambda request: "text",
+            TypeError,
+            "http.serve: the handler for '/fw' returned 'text', not an HttpResponse",
+        ),
+        (raises, ZeroDivisionError, "a bug of the test's"),
+    ],
+)
+def test_a_handler_that_fails_gives_a_500_and_the_error_to_the_test(
+    handler: Callable[[HttpRequest], HttpResponse],
+    error: type[Exception],
+    message: str,
+) -> None:
+    log: list[str] = []
+    errors: list[BaseException] = []
+    server = HttpServer(lambda: 42, log.append, test_error=errors.append)
+    server.serve("/fw", handler)
+    client = Client(server)
+    client.send(b"GET /fw HTTP/1.1\r\n\r\n")
+    assert client.head[0] == "HTTP/1.1 500 Internal Server Error" and client.closed
+    assert client.body == b"internal server error\n"
+    [raised] = errors
+    assert type(raised) is error and str(raised) == message
+    assert log == [f"http: GET /fw → 500, the handler failed: {error.__name__}: {message}"]
+    # recorded all the same: the device did send it
+    assert server.find_request("/fw") is not None
+
+
+def test_without_a_board_the_handler_s_error_is_raised_once_the_500_is_written(
+    server: HttpServer,
+) -> None:
+    server.serve("/fw", raises)
+    client = Client(server)
+    with pytest.raises(ZeroDivisionError, match="a bug of the test's"):
+        client.send(b"GET /fw HTTP/1.1\r\n\r\n")
+    assert client.head[0] == "HTTP/1.1 500 Internal Server Error" and client.closed
+
+
+def test_a_handler_that_waits_on_the_board_fails_with_the_guard(server: HttpServer) -> None:
+    def waits(request: HttpRequest) -> HttpResponse:
+        refuse_wait("board.wait_until")  # as `board.wait_until` asks first
+        return HttpResponse()
+
+    server.serve("/fw", waits)
+    client = Client(server)
+    with pytest.raises(RuntimeError) as raised:
+        client.send(b"GET /fw HTTP/1.1\r\n\r\n")
+    assert str(raised.value) == (
+        "board.wait_until: called from the HTTP server's handler for '/fw': a handler must not wait"
+    )
+    assert client.head[0] == "HTTP/1.1 500 Internal Server Error"
+    # Outside a handler, a wait is the test's own.
+    refuse_wait("board.wait_until")
+
+
+def test_a_handler_that_drives_the_board_fails_with_the_guard(server: HttpServer) -> None:
+    def resets(request: HttpRequest) -> HttpResponse:
+        refuse_board("board.reset")  # as `board.reset()` asks first
+        return HttpResponse()
+
+    server.serve("/fw", resets)
+    client = Client(server)
+    with pytest.raises(RuntimeError) as raised:
+        client.send(b"GET /fw HTTP/1.1\r\n\r\n")
+    assert str(raised.value) == (
+        "board.reset: called from the HTTP server's handler for '/fw':"
+        " a handler must not call the board"
+    )
+    assert client.head[0] == "HTTP/1.1 500 Internal Server Error"
+    refuse_board("board.reset")
+
+
+@pytest.mark.parametrize("handled", [False, True])
+def test_after_writes_the_response_that_much_later_on_the_board_s_clock(handled: bool) -> None:
+    clock = Clock()
+    clock.now = 1_000
+    log: list[str] = []
+    server = HttpServer(clock, log.append)
+    slow = HttpResponse(200, "slow", after=ms(500))
+    server.serve("/", (lambda request: slow) if handled else slow)
+    assert server.quiet_until() is None
+    first, second = Client(server), Client(server)
+    first.send(b"GET / HTTP/1.1\r\n\r\n")
+    clock.now = 2_000
+    second.send(b"HEAD / HTTP/1.1\r\n\r\n")
+    # recorded at its arrival, answered later
+    assert [r.at.ns for r in server.requests] == [1_000, 2_000]
+    assert server.quiet_until() == 1_000 + 500_000_000
+    assert log == ["http: GET / → 200, after 0.5 s", "http: HEAD / → 200, after 0.5 s"]
+    clock.now = 500_000_999
+    server.poll()
+    assert first.received == bytearray() and not first.closed
+    clock.now = 500_001_000
+    server.poll()
+    assert first.body == b"slow" and first.closed and not second.closed
+    assert server.quiet_until() == 2_000 + 500_000_000
+    clock.now = 600_000_000
+    server.poll()
+    assert second.head[0] == "HTTP/1.1 200 OK" and second.body == b"" and second.closed
+    assert server.quiet_until() is None
+
+
+def test_a_connection_closed_before_after_gets_nothing() -> None:
+    clock = Clock()
+    log: list[str] = []
+    server = HttpServer(clock, log.append)
+    server.serve("/", HttpResponse(body="late", after=seconds(5)))
+    client = Client(server)
+    client.send(b"GET / HTTP/1.1\r\n\r\n")
+    client.connection.on_close()
+    assert server.quiet_until() is None
+    clock.now = 10_000_000_000
+    server.poll()
+    assert client.received == bytearray() and not client.closed
+    assert log[-1] == (
+        "http: GET /: the connection closed before its response, due at 5 s: nothing written"
+    )
+    assert len(server.requests) == 1
+
+
+def test_an_after_of_zero_answers_at_once(server: HttpServer) -> None:
+    server.serve("/", HttpResponse(body="now", after=ms(0)))
+    client = Client(server)
+    client.send(b"GET / HTTP/1.1\r\n\r\n")
+    assert client.body == b"now" and server.quiet_until() is None
+
+
+def test_a_handler_serves_a_file_in_parts_by_range(server: HttpServer) -> None:
+    firmware = bytes(range(256)) * 4
+
+    def parts(request: HttpRequest) -> HttpResponse:
+        first, _, last = (request.header("Range") or "").removeprefix("bytes=").partition("-")
+        start, end = int(first), min(int(last), len(firmware) - 1)
+        if start >= len(firmware):
+            return HttpResponse(416, headers={"Content-Range": f"bytes */{len(firmware)}"})
+        return HttpResponse(
+            206,
+            firmware[start : end + 1],
+            headers={"Content-Range": f"bytes {start}-{end}/{len(firmware)}"},
+        )
+
+    server.serve("/fw.bin", parts)
+    received = bytearray()
+    for start in range(0, len(firmware), 300):
+        client = Client(server)
+        client.send(f"GET /fw.bin HTTP/1.1\r\nRange: bytes={start}-{start + 299}\r\n\r\n".encode())
+        assert client.head[0] == "HTTP/1.1 206 Partial Content"
+        received += client.body
+    assert received == firmware
+    beyond = Client(server)
+    beyond.send(b"GET /fw.bin HTTP/1.1\r\nRange: bytes=2000-2100\r\n\r\n")
+    assert beyond.head[0] == "HTTP/1.1 416 Range Not Satisfiable"
+    assert "Content-Range: bytes */1024" in beyond.head and beyond.body == b""
+
+
+def test_a_response_is_checked_where_it_is_made() -> None:
+    assert HttpResponse() == HttpResponse(200, b"", content_type="application/octet-stream")
+    text = HttpResponse(body="é")
+    assert (text.body, text.content_type) == ("é".encode(), "text/plain; charset=utf-8")
+    pairs = HttpResponse(headers=[("Set-Cookie", "a=1"), ("Set-Cookie", "b=2")])
+    assert pairs.headers == (("Set-Cookie", "a=1"), ("Set-Cookie", "b=2"))
+    with pytest.raises(ValueError, match=r"^HttpResponse: status 418 is not one of \[200, 201"):
+        HttpResponse(418)
+    with pytest.raises(ValueError, match=r"^HttpResponse: a 304 response has no body$"):
+        HttpResponse(304, "x")
+    with pytest.raises(ValueError, match=r"^HttpResponse: 'X:Y': 'a' is not a header field$"):
+        HttpResponse(headers={"X:Y": "a"})
+    with pytest.raises(ValueError, match="is not a content type"):
+        HttpResponse(content_type="text/plain\r\nX: 1")
+    with pytest.raises(TypeError, match=r"^HttpResponse: the body is text or bytes, not 42$"):
+        HttpResponse(body=42)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match=r"^HttpResponse: after takes a Duration, as seconds\(5\)"):
+        HttpResponse(after=5)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match=r"^HttpResponse: after takes a Duration of 0 or more"):
+        HttpResponse(after=ms(-1))
+    with pytest.raises(AttributeError):
+        text.status = 404  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("response", "kind"),
+    [(HttpResponse(), "an HttpResponse"), (lambda request: HttpResponse(), "a handler")],
+)
+def test_serve_takes_status_and_headers_with_a_body_only(
+    server: HttpServer, response: object, kind: str
+) -> None:
+    with pytest.raises(
+        TypeError, match=rf"^http\.serve: status, headers with {kind}: the HttpResponse carries"
+    ):
+        server.serve("/", response, status=200, headers={"X": "1"})  # type: ignore[arg-type]

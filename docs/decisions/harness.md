@@ -3249,7 +3249,7 @@ Wi-Fi network, which would make tests of one firmware differ by its link.
 
 ## An HTTP server answers on port 80 of every simulated network
 
-Status: decided (#31)
+Status: decided (#31), responses amended (#338)
 
 `network.http` is an HTTP/1.1 server on TCP 80, behind the modem and behind the access point alike,
 as the broker is on 1883: `serve(path, body)` says what a path answers, `requested(...)` is a
@@ -3259,10 +3259,25 @@ answers one request per connection and closes it, and refuses chunked bodies and
 over its limits; firmware that fetches over HTTP (plan M7's validation, ESP-IDF's `http_request`)
 needs nothing more yet.
 
+Since #338 `serve(path, handler)` takes a function too, which the server calls with each request
+for the path, at its time, during any wait, and whose `HttpResponse` it sends: a firmware whose
+request carries what the answer depends on, its version in the query, a JSON body, a `Range`, a
+second attempt, could not be tested against one fixed answer per path. `HttpResponse` is public,
+checks its parts where it is made, and has `after`, the server's own delay on the board's clock,
+which the network's path cannot stand for. A handler's exception, and a return that is no
+`HttpResponse`, answer `500` and fail the test at its wait with the handler's traceback, but leave
+the link and the run alone: nothing of the device's caused the error, and the device's next step
+after a `500` is worth seeing. A wait on the board from a handler raises at once: the link's
+thread, which runs the handler, is the one that would run the board.
+
 **Rejected:** a server the test has to install with `network.listen(80, ...)` first, because a
 test of a firmware that fetches would always do so; and keep-alive, chunked transfer and TLS by
 default, until a firmware's test needs them (TLS is `network.listen(443, network.http, tls=ca)`
-already).
+already). For #338: a separate `serve_with(path, handler)`, because one method that takes a
+response or a function keeps one answer per path, which a later `serve` replaces whatever its
+kind, where two methods for one path would leave open which one wins; a handler that returns the body alone, because then status,
+headers and delay would need a type of their own anyway; and a handler's exception failing the
+link, as `connection_policy`'s does, because the run would end before the device got its `500`.
 
 ## The HTTP client opens one plain connection per request
 

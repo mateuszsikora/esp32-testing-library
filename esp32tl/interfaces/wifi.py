@@ -15,7 +15,7 @@ from esp32tl.interfaces.history import History
 from esp32tl.link.boardlink import Direction, Interface, Output
 from esp32tl.link.protocol import Input, WifiAp
 from esp32tl.net import LATENCY_NS, Internet
-from esp32tl.net.handlers import reraise
+from esp32tl.net.handlers import refuse_board, reraise
 from esp32tl.net.ntp import DEFAULT_UTC
 from esp32tl.net.station import DEFAULT_MAC
 from esp32tl.report import RunLog
@@ -349,6 +349,7 @@ class Wifi(Interface):
         return args
 
     def _switch(self, on: bool, step: str) -> None:
+        refuse_board(step.removesuffix("()"))
         if self._station is not None:
             raise SourceError(f"{step}: wifi.station has no virtual access point to switch")
         network = self.network

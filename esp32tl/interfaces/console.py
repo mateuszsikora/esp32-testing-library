@@ -22,7 +22,7 @@ import pexpect
 from esp32tl.interfaces import RunEnded, SourceError
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import Output
-from esp32tl.net.handlers import refuse_wait
+from esp32tl.net.handlers import refuse_board, refuse_wait
 from esp32tl.tap import Tap
 from esp32tl.units import Duration, number, seconds
 
@@ -158,6 +158,7 @@ class Console:
 
     def write(self, data: bytes | str) -> None:
         """Writes bytes (text encoded as UTF-8) at the board's current instant."""
+        refuse_board("console.write")
         if isinstance(data, str):
             data = data.encode()
         if not isinstance(data, bytes):
@@ -168,6 +169,7 @@ class Console:
 
     def sendline(self, line: bytes | str) -> None:
         """Writes a line followed by LF; text is encoded as UTF-8."""
+        refuse_board("console.sendline")
         if isinstance(line, str):
             line = line.encode()
         if not isinstance(line, bytes):

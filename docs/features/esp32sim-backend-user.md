@@ -69,7 +69,10 @@ goes on. A wait on the board from inside one, `board.wait`, `board.wait_until`,
 from the broker's on_publish handler for 'session/reports': a handler must not wait`: the link
 that would run the board is the thread that waits. So do `board.flash`, `board.nvs`,
 `board.reset`, `board.power_on` and `board.power_off`, which the link carries to the runner: `… a
-handler must not call the board`.
+handler must not call the board`, and `console.write`, `console.sendline`,
+`wifi.access_point_off()`, `wifi.access_point_on()`, `lines.drive` and `lines.release`, whose
+input would be stamped with a turn the run is past. The HTTP server's handler
+([the HTTP server](network-user.md#a-handler-computes-the-response)) follows the same rules.
 
 One runner serves the whole test, from the first `power_on()` to teardown. `board.reset()`,
 `board.power_off()` and a `power_on()` after it go to it over the link, at the board's time the test
@@ -315,6 +318,15 @@ The teardown says nothing when the test has already failed on `RunEnded`: it nam
 link's reason already. A test that failed for any other reason still gets the teardown error.
 
 The runner's exit codes are in [how a run ends](runner-user.md#how-a-run-ends).
+
+An HTTP handler of the test's that raises, or returns something other than an `HttpResponse`,
+does not fail the link: the device gets `500 Internal Server Error`, the run goes on, and the
+test's wait raises the handler's exception at the next turn of the link, with its traceback;
+`pytest.fail` and `pytest.skip` in a handler fail or skip the test the same way. What a handler
+may not call, and the `RuntimeError` it gets instead, as `board.wait: called from the HTTP
+server's handler for '/': a handler must not wait`, are those of the broker's handlers, in
+[how a run goes](#how-a-run-goes), and they reach the test the same way
+([the HTTP server](network-user.md#a-handler-computes-the-response)).
 
 ## The link's report
 

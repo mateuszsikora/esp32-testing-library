@@ -426,9 +426,11 @@ path's one way down later, as every publication of the test's does
   'dev/+/req': a handler must not wait`; `board.flash`, `board.nvs`, `board.reset`,
   `board.power_on` and `board.power_off`, which reach the runner through the link the handler is
   running on, raise `board.flash: called from the broker's on_publish handler for 'dev/+/req': a
-  handler must not call the board`. Either fails the test as below. The calls of the board's other
-  interfaces, a modem's, the Wi-Fi's, the lines' or a model's, are made for the test's thread
-  between waits, not for a handler.
+  handler must not call the board`, and so do `console.write`, `console.sendline`,
+  `wifi.access_point_off()`, `wifi.access_point_on()`, `lines.drive` and `lines.release`, whose
+  input would be stamped with a turn the run is past. Either fails the test as below. The calls of
+  the board's other interfaces, a modem's or a model's, are made for the test's thread between
+  waits, not for a handler.
 - **What it raises** fails the test at the wait it interrupted, at the link's next turn, with the
   handler's traceback and a note, as `raised by the broker's on_publish handler for 'dev/+/req',
   given dev-1's message on 'dev/1/req' at 12.5 s of the board's time`. Only the first exception
@@ -976,10 +978,11 @@ address, as `network.http`. Until the test serves a path, every request gets `40
 
 | HTTP server API | Meaning |
 |---|---|
-| `serve(path, body=b"", *, status=200, content_type=None, headers=None)` | Answer every request for `path` from now on, replacing what was served there before. A `str` body goes as UTF-8 with `text/plain; charset=utf-8`, `bytes` with `application/octet-stream`, unless `content_type` names another; `headers` (a dict) are added as given |
+| `serve(path, response=b"", *, status=None, content_type=None, headers=None)` | Answer every request for `path` from now on, replacing what was served there before, a handler included. `response` is an `HttpResponse`, a handler (below), or the body of an `HttpResponse` with `status` (200 when not given), `content_type` and `headers` (a dict), so that `serve("/", "text")` is `serve("/", HttpResponse(body="text"))` |
 | `next_request(path=None, *, method=None)` | Condition returning the first request, for `path` and with `method` when given, recorded **after this method call** |
 | `find_request(path=None, *, method=None)` | Immediate history query returning the first recorded request with the same filters, or `None` |
 | `requests` | Every request recorded, in order; refused requests are not |
+| `HttpResponse(status=200, body=b"", *, content_type=None, headers=None, after=None)` | A response, from `esp32tl`. A `str` body goes as UTF-8 with `text/plain; charset=utf-8`, `bytes` with `application/octet-stream`, unless `content_type` names another; `headers` (a dict, or name and value pairs, which may repeat a name) are added as given; `after` (a `Duration`) writes it that much later on the board's clock than the request came |
 
 A request (`HttpRequest`) has `at` (`Duration`), `method`, `target` (as sent), `path` (an
 origin-form target such as `/a?b` without its query, `://` in it or not; an absolute-form one such
@@ -1018,6 +1021,115 @@ serves gets `404 Not Found` with the body `not found\n`, and is kept in `request
 logs each answer as `http: GET / → 200`. For HTTPS, put the same server behind TLS on another port:
 `network.listen(443, network.http, tls=ca)` ([TLS](#dns-time-and-services)).
 
+### A handler computes the response
+
+When the second argument of `serve` is a function, the server calls it with each request for the
+path, as an `HttpRequest`, once the request has been read in full, at the request's `at` on the
+board's clock, and sends the `HttpResponse` it returns. It runs during whatever wait the test is
+in, `board.wait` and `board.wait_for_wake` too, so the answer comes in the same turn as the
+request, with no condition to poll. The request is in `requests` before the handler runs. A later
+`serve` on the path replaces the handler, with another one or a fixed response, and a handler
+replaces a fixed response.
+
+```python
+from esp32tl import HttpRequest, HttpResponse
+
+
+def test_the_firmware_updates_from_the_version_it_reports(board):
+    network = board.wifi.access_point("myssid", password="mypassword")
+
+    def update(request: HttpRequest) -> HttpResponse:
+        # GET /update?v=1.2 with the firmware's version in the query
+        version = request.target.partition("v=")[2]
+        if version == "1.3":
+            return HttpResponse(304)
+        return HttpResponse(body='{"latest": "1.3"}', content_type="application/json")
+
+    network.http.serve("/update", update)
+```
+
+A handler runs in the link's thread, not in the test's, while the board is held at the request's
+instant: it reads the request and the test's own state, may call the network's methods, as
+`network.http.serve`, `requests` and the broker's, and returns. `board.now` there is the last
+turn the test saw, not the request's time: use `request.at`. A handler must not wait on the
+board, nor call it. These raise `RuntimeError` at once when a handler calls them:
+
+| Called from a handler | Message |
+|---|---|
+| `board.wait`, `board.wait_until`, `board.wait_for_wake`, `console.expect`, `console.expect_exact` | `board.wait_until: called from the HTTP server's handler for '/fw': a handler must not wait`, with the call's own name |
+| `board.flash()`, `board.nvs()`, `board.reset()`, `board.power_off()`, `board.power_on()`, `console.write`, `console.sendline`, `wifi.access_point_off()`, `wifi.access_point_on()`, `lines.drive`, `lines.release` | `board.reset: called from the HTTP server's handler for '/fw': a handler must not call the board`, with the call's own name, as `wifi.access_point_off` |
+
+A helper that waits through `board.wait_on_clock` gets that name, and anything else that would
+wait on the board's clock, which the handler's own thread runs, gets
+`the board's clock: called from the HTTP server's handler for '/fw': a handler must not wait`
+instead of waiting for itself. What drives the board is stamped with the last turn the test held,
+which the run is past while a handler runs; to switch the access point off once the server has
+answered, wait for the request in the test and switch it there.
+
+A handler that raises, `RuntimeError` above and `pytest.fail` or `pytest.skip` included, or that
+returns something other than an `HttpResponse`, is a test error: the device gets `500 Internal Server Error` with the body
+`internal server error\n`, the request stays in `requests`, the transcript logs
+`http: GET /fw → 500, the handler failed: TypeError: http.serve: the handler for '/fw' returned None, not an HttpResponse`,
+and the test's wait raises the exception at the next turn of the link, with the handler's
+traceback: here `TypeError("http.serve: the handler for '/fw' returned None, not an HttpResponse")`.
+`pytest.fail("no Range header")` in a handler fails the test there, and `pytest.skip` skips it.
+The run goes on, so the test may still look at the device's answer to the `500`. Without a
+board, an `HttpServer` driven directly raises the exception from the `on_data` that ran the
+handler, once the `500` is written.
+
+A handler serves a file in parts with `Range`, with `206 Partial Content` and
+`416 Range Not Satisfiable`:
+
+```python
+firmware = Path("build/app.bin").read_bytes()
+
+
+def parts(request: HttpRequest) -> HttpResponse:
+    # One range, as an OTA client sends it: bytes=<first>-<last>, bytes=<first>- or bytes=-<n>,
+    # the last n bytes (RFC 9110 14.1.2). Several ranges in one header are not served here.
+    first, _, last = (request.header("Range") or "bytes=0-").removeprefix("bytes=").partition("-")
+    if first:
+        start, end = int(first), min(int(last or len(firmware) - 1), len(firmware) - 1)
+    else:
+        start, end = max(len(firmware) - int(last), 0), len(firmware) - 1
+    if start >= len(firmware) or start > end:
+        return HttpResponse(416, headers={"Content-Range": f"bytes */{len(firmware)}"})
+    return HttpResponse(
+        206,
+        firmware[start : end + 1],
+        headers={"Content-Range": f"bytes {start}-{end}/{len(firmware)}"},
+    )
+
+
+network.http.serve("/fw.bin", parts)
+```
+
+A server that refuses the second attempt keeps its count in the handler:
+
+```python
+attempts = []
+
+
+def once(request: HttpRequest) -> HttpResponse:
+    attempts.append(request)
+    return HttpResponse(body="ok") if len(attempts) == 1 else HttpResponse(503)
+```
+
+### A slow server
+
+`HttpResponse(..., after=seconds(5))` writes the response 5 s of the board's time after the
+request came, as a slow server's, from a handler or served as it is:
+`network.http.serve("/", HttpResponse(body="slow\n", after=seconds(5)))`. The request is recorded,
+and the transcript logs `http: GET / → 200, after 5 s`, when it comes; the response goes out at
+`request.at + after`, and then down the [path](#give-the-network-a-round-trip-and-a-rate), whose
+RTT adds to it. A wait lets the run go to that instant whatever it waits for, as for the broker's
+deadlines. If the device closes or resets the connection first, nothing is written and the
+transcript says
+`http: GET /: the connection closed before its response, due at 5 s: nothing written`.
+`after=ms(0)` answers at once, as without it. In `tests/test_http_request.py`, ESP-IDF's
+`http_request` prints a response with `after=seconds(2)` no earlier than 2 s after its request;
+it gives up on a reply after 5 s (`SO_RCVTIMEO`).
+
 These requests are refused, logged as `http: refused a request: 400 Bad Request` (with their own
 status), answered with the reason in lower case as the body, and not kept in `requests`:
 
@@ -1030,11 +1142,20 @@ status), answered with the reason in lower case as the body, and not kept in `re
 
 `serve` raises `ValueError` for a path that does not start with `/`
 (`http.serve: 'index.html' is not a path, which starts with /`) or that holds a query
-(`http.serve: '/a?b' holds a query, which a path does not: serving the path answers it whatever the query`), a status the server has no reason
-for (`http.serve: status 418 is not one of [200, 201, 204, 301, 302, 304, 400, 401, 403, 404, 413, 431, 500, 501, 503]`),
+(`http.serve: '/a?b' holds a query, which a path does not: serving the path answers it whatever the query`),
+and `TypeError` for `status`, `content_type` or `headers` given with an `HttpResponse` or a
+handler, which carries them
+(`http.serve: status with a handler: the HttpResponse carries them`). `HttpResponse` checks its
+parts where it is made, and so does `serve` for a body with its keywords, with `http.serve` in
+place of `HttpResponse` in the message: `ValueError` for a status the server has no reason for
+(`HttpResponse: status 418 is not one of [200, 201, 204, 206, 301, 302, 304, 400, 401, 403, 404, 413, 416, 431, 500, 501, 503]`),
 a header whose name is empty or holds `:`, or whose name or value holds a line break
-(`http.serve: 'X-A:B': '1' is not a header field`), and a body with a `204` or `304`
-(`http.serve: a 204 response has no body`).
+(`HttpResponse: 'X-A:B': '1' is not a header field`), a content type with a line break
+(`HttpResponse: 'text/plain\r\nX: 1' is not a content type`), a body with a `204` or `304`
+(`HttpResponse: a 204 response has no body`) and an `after` below 0
+(`HttpResponse: after takes a Duration of 0 or more, not -0.001 s`); `TypeError` for a body that is
+neither text nor bytes (`HttpResponse: the body is text or bytes, not 42`) and an `after` that is
+not a `Duration` (`HttpResponse: after takes a Duration, as seconds(5), not 5`).
 
 ## Addresses behind the access point
 

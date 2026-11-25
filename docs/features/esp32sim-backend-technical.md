@@ -334,6 +334,13 @@ in the test's thread:
   `RuntimeError("a handler of the test's raised RunEnded: <message>")` with it as its cause, since
   `_wait` and the console's `pexpect.EOF` take a `RunEnded` for the end of the run.
 - `now` is the block point of the last held turn, 0 until the first.
+- `fail(error)` is for the link's thread: an exception of the test's code that a service of the
+  network ran while the board advanced, as an HTTP handler's, which the server has answered with a
+  `500` ([network](network-technical.md#a-handler-of-the-tests)). The first one is kept, and the
+  wait that lets the run go raises it in the test's thread at the next turn, before it looks at
+  the run's end, with the traceback of where the handler raised it. The link is not failed and
+  the run goes on: the next wait lets it go as any other. A second error before that turn is
+  dropped; the transcript has each as `http: … → 500, the handler failed: …`.
 - `stop()` is the link's side only: the held turn, or the next, answers `stop`, and no turn is held
   after it. It returns whether the link was held at that moment. `end(reason, at=None)` is the
   run's end: the first reason is kept, with `at`, the board's time it ended at when known, and
@@ -355,7 +362,13 @@ and `wait_on_clock` first call `refuse_wait("board.<method>")` (`esp32tl/net/han
 calling thread, as the link's thread does while it runs one. `flash`, `nvs`, `reset`, `power_on`
 and `power_off` first call `refuse_board("board.<method>")`, which raises the same way: from the
 link's thread `HeldClock._ask` would wait for a turn only that thread can bring, and
-`board_input` would stamp a switch at the last turn, before the one it goes out in. `Esp32Sim` gives `HeldClock.fail` to `Wifi` and to each
+`board_input` would stamp a switch at the last turn, before the one it goes out in. Below them
+`HeldClock._settle`, which every wait goes through, and `_ask`, under `dump_flash` and
+`write_flash`, call `refuse_wait("the board's clock")`, so that a wait that names itself nowhere
+above raises too rather than hang. The interfaces that stamp the test's input with the last held
+turn refuse it the same way: `Console.write` and `sendline`, `Wifi._switch`
+(`wifi.access_point_off`, `wifi.access_point_on`) and `Lines.drive` and `release` call
+`refuse_board`. `Esp32Sim` gives `HeldClock.fail` to `Wifi` and to each
 `Modem` as `test_error`, which goes to every network they make. `wait_until` describes its
 condition as `the condition {condition.__qualname__}`, or by its `repr` when it has no qualified
 name; `wait_on_clock(condition, within, description)` takes the description from the caller, as the
@@ -607,7 +620,7 @@ repository makes.
 | `Esp32Sim.close()` | Ends the run and writes the taps; raises `BackendError` for a tap that cannot be written, a failing exit code, a killed runner or a link error |
 | `Esp32Sim.report(run=False)`, `Esp32Sim.properties()` | The `esp32sim link` report section, with the run on the board's clock when `run`; the `esp32sim_link` user property's data |
 | `BackendError` | What keeps the backend from starting, or a failing end |
-| `HeldClock(step=STEP_NS)` | `esp32tl/backends/clock.py`: the link's `Hold`, `turn(now)`, `answered(ack)`; `stop()`, `end(reason, at=None)`, `fail(error)`, which the test's next wait raises at the next turn; the test's `now`, `wait(ns)`, `wait_until(condition, within_ns, description)`, `wait_for_event(condition, within_ns, description, latency_ns)`, `dump_flash()`, which returns the runner's `FlashDumpAck`, or `None` once the run has ended, `write_flash(offset, path)`, which returns its `FlashWriteAck`, or `None` once the run has ended, and `check(step)`, which raises `RunEnded` (`the run ended {when} before {step}: {reason}`) once the run has ended |
+| `HeldClock(step=STEP_NS)` | `esp32tl/backends/clock.py`: the link's `Hold`, `turn(now)`, `answered(ack)`; `stop()`, `end(reason, at=None)`, `fail(error)`, which the test's next wait raises at the next turn; the test's `now`, `wait(ns)`, `wait_until(condition, within_ns, description)`, `wait_for_event(condition, within_ns, description, latency_ns)`, `dump_flash()`, which returns the runner's `FlashDumpAck`, or `None` once the run has ended, `write_flash(offset, path)`, which returns its `FlashWriteAck`, or `None` once the run has ended, and `check(step)`, which raises `RunEnded` (`the run ended {when} before {step}: {reason}`) once the run has ended. `_settle` and `_ask` refuse a call from a handler with `refuse_wait("the board's clock")` |
 | `nanoseconds(value, what)`, `seconds(ns)` | `esp32tl/backends/clock.py`: a `Duration` of the board's time to nanoseconds, checked; nanoseconds shown as `12.5 s`, as `str(Duration(ns))` |
 | `listen()` | The listening socket and its path, or `BackendError` |
 | `runner_path()`, `rom_path(chip="esp32", app=None)` | The runner and the ROM ELF of `rom_key(chip, app)`, or `BackendError`; `esp32tl has no ROM for {chip}; the chips are esp32, esp32s3, esp32c3, esp32c6, esp32p4, esp32p4-rev0, esp32s31` for a key `runtime.ROMS` does not have |

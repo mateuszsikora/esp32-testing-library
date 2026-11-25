@@ -1,13 +1,15 @@
 """An HTTP/1.1 server the test runs (RFC 9110, 9112): one request per connection, answered from
-what the test serves at each path and closed. Every request is kept, stamped with the board's
-time, for the test to look at.
+what the test serves at each path, a fixed response or one its handler makes from the request,
+now or `after` a delay on the board's clock, and closed. Every request is kept, stamped with the
+board's time, for the test to look at.
 """
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 
 from esp32tl.interfaces.condition import Condition, FirstFrom
 from esp32tl.interfaces.history import History
+from esp32tl.net.handlers import handling, reraise
 from esp32tl.units import Duration
 
 # The statuses whose response ends with its head (RFC 9112 6.3): no body, and no Content-Length.
@@ -20,6 +22,7 @@ REASONS = {
     200: "OK",
     201: "Created",
     204: "No Content",
+    206: "Partial Content",
     301: "Moved Permanently",
     302: "Found",
     304: "Not Modified",
@@ -28,6 +31,7 @@ REASONS = {
     403: "Forbidden",
     404: "Not Found",
     413: "Content Too Large",
+    416: "Range Not Satisfiable",
     431: "Request Header Fields Too Large",
     500: "Internal Server Error",
     501: "Not Implemented",
@@ -57,25 +61,99 @@ class HttpRequest:
         return self.body.decode(errors="replace")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class HttpResponse:
-    status: int = 200
-    body: bytes = b""
-    content_type: str = "text/plain; charset=utf-8"
-    headers: tuple[tuple[str, str], ...] = field(default=())
+    """What the server answers: `status`, one of `REASONS`, and `body`, text as UTF-8 with
+    `text/plain; charset=utf-8` and bytes with `application/octet-stream` unless `content_type`
+    names another, then `headers`, a dict or name and value pairs, as given. A 204 or 304 takes
+    no body. With `after`, the response is written that much later on the board's clock than
+    the request came, as a slow server's."""
+
+    status: int
+    body: bytes
+    content_type: str
+    headers: tuple[tuple[str, str], ...]
+    after: Duration | None
+
+    def __init__(
+        self,
+        status: int = 200,
+        body: bytes | str = b"",
+        *,
+        content_type: str | None = None,
+        headers: Mapping[str, str] | Iterable[tuple[str, str]] | None = None,
+        after: Duration | None = None,
+    ) -> None:
+        _fill(self, "HttpResponse", status, body, content_type, headers, after)
+
+
+# A handler: the response to each request for its path, made from the request.
+Handler = Callable[[HttpRequest], HttpResponse]
+
+
+def _fill(
+    response: HttpResponse,
+    what: str,
+    status: int,
+    body: bytes | str,
+    content_type: str | None,
+    headers: Mapping[str, str] | Iterable[tuple[str, str]] | None,
+    after: Duration | None,
+) -> None:
+    """Checks the parts of `response` and sets them; `what` names the call in the errors."""
+    if isinstance(status, bool) or not isinstance(status, int) or status not in REASONS:
+        raise ValueError(f"{what}: status {status!r} is not one of {sorted(REASONS)}")
+    if isinstance(body, str):
+        data = body.encode()
+    elif isinstance(body, bytes | bytearray | memoryview):
+        data = bytes(body)
+    else:
+        raise TypeError(f"{what}: the body is text or bytes, not {body!r}")
+    if status in NO_CONTENT and data:
+        raise ValueError(f"{what}: a {status} response has no body")
+    pairs = tuple((headers.items() if isinstance(headers, Mapping) else headers) or ())
+    for name, value in pairs:
+        if any(c in name + value for c in "\r\n") or ":" in name or not name:
+            raise ValueError(f"{what}: {name!r}: {value!r} is not a header field")
+    kind = content_type or (
+        "text/plain; charset=utf-8" if isinstance(body, str) else "application/octet-stream"
+    )
+    if any(c in kind for c in "\r\n"):
+        raise ValueError(f"{what}: {kind!r} is not a content type")
+    if after is not None:
+        if not isinstance(after, Duration):
+            raise TypeError(f"{what}: after takes a Duration, as seconds(5), not {after!r}")
+        if after.ns < 0:
+            raise ValueError(f"{what}: after takes a Duration of 0 or more, not {after}")
+    for field_, value_ in [
+        ("status", status),
+        ("body", data),
+        ("content_type", kind),
+        ("headers", pairs),
+        ("after", after),
+    ]:
+        object.__setattr__(response, field_, value_)
 
 
 class HttpServer:
     """`now` is the board's clock. The `StreamService` of `esp32tl.net.ip`. A path nobody serves
-    gets `404 Not Found`."""
+    gets `404 Not Found`. A handler's exception, and the `TypeError` for what it returns that is
+    not an `HttpResponse`, goes to `test_error` once the device has its `500`."""
 
     def __init__(
-        self, now: Callable[[], int], log: Callable[[str], None] = lambda line: None
+        self,
+        now: Callable[[], int],
+        log: Callable[[str], None] = lambda line: None,
+        *,
+        test_error: Callable[[BaseException], None] = reraise,
     ) -> None:
         self._now = now
         self._log = log
+        self._test_error = test_error
         self._requests: list[HttpRequest] = []
-        self._served: dict[str, HttpResponse] = {}
+        self._served: dict[str, HttpResponse | Handler] = {}
+        # The exchanges whose response waits for its `after`, in the order their requests came.
+        self._waiting: list[_Exchange] = []
 
     @property
     def requests(self) -> Sequence[HttpRequest]:
@@ -84,16 +162,19 @@ class HttpServer:
     def serve(
         self,
         path: str,
-        body: bytes | str = b"",
+        response: bytes | str | HttpResponse | Handler = b"",
         *,
-        status: int = 200,
+        status: int | None = None,
         content_type: str | None = None,
-        headers: dict[str, str] | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> None:
-        """Answers every request for `path`, from now on, with `status` and `body`: text goes as
-        UTF-8, `text/plain` unless `content_type` says otherwise, bytes as
-        `application/octet-stream`. `headers` are added as given. A 204 or 304 takes no body,
-        and is sent without `Content-Type` and `Content-Length`."""
+        """Answers every request for `path`, from now on, replacing what was served there.
+        `response` is an `HttpResponse`; a handler, called with each request once it has been
+        read in full, at its `at` on the board's clock, which returns the `HttpResponse`; or the
+        body of one with `status`, `content_type` and `headers`, as `HttpResponse` takes them:
+        text goes as UTF-8, `text/plain` unless `content_type` says otherwise, bytes as
+        `application/octet-stream`. A 204 or 304 takes no body, and is sent without
+        `Content-Type` and `Content-Length`."""
         if not path.startswith("/"):
             raise ValueError(f"http.serve: {path!r} is not a path, which starts with /")
         if "?" in path:
@@ -101,18 +182,34 @@ class HttpServer:
                 f"http.serve: {path!r} holds a query, which a path does not:"
                 " serving the path answers it whatever the query"
             )
-        if status not in REASONS:
-            raise ValueError(f"http.serve: status {status} is not one of {sorted(REASONS)}")
-        if status in NO_CONTENT and body:
-            raise ValueError(f"http.serve: a {status} response has no body")
-        for name, value in (headers or {}).items():
-            if any(c in name + value for c in "\r\n") or ":" in name or not name:
-                raise ValueError(f"http.serve: {name!r}: {value!r} is not a header field")
-        data = body.encode() if isinstance(body, str) else body
-        kind = content_type or (
-            "text/plain; charset=utf-8" if isinstance(body, str) else "application/octet-stream"
+        if isinstance(response, HttpResponse) or callable(response):
+            given = [
+                name
+                for name, value in [
+                    ("status", status),
+                    ("content_type", content_type),
+                    ("headers", headers),
+                ]
+                if value is not None
+            ]
+            if given:
+                kind = "an HttpResponse" if isinstance(response, HttpResponse) else "a handler"
+                raise TypeError(
+                    f"http.serve: {', '.join(given)} with {kind}: the HttpResponse carries them"
+                )
+            self._served[path] = response
+            return
+        fixed = HttpResponse.__new__(HttpResponse)
+        _fill(
+            fixed,
+            "http.serve",
+            200 if status is None else status,
+            response,
+            content_type,
+            headers,
+            None,
         )
-        self._served[path] = HttpResponse(status, data, kind, tuple((headers or {}).items()))
+        self._served[path] = fixed
 
     def next_request(
         self, path: str | None = None, *, method: str | None = None
@@ -143,11 +240,46 @@ class HttpServer:
     ) -> "_Exchange":
         return _Exchange(self, write, close)
 
-    def _answer(self, request: HttpRequest) -> HttpResponse:
+    def poll(self) -> None:
+        """Writes each response whose `after` has run out by now, earliest first."""
+        now = self._now()
+        due = sorted((e for e in self._waiting if e.due <= now), key=lambda e: e.due)
+        for exchange in due:
+            exchange.send()
+
+    def quiet_until(self) -> int | None:
+        """When the next response waiting for its `after` is due, or `None`."""
+        return min((exchange.due for exchange in self._waiting), default=None)
+
+    def _answer(self, request: HttpRequest) -> tuple[HttpResponse, BaseException | None]:
+        """Records `request` and makes its response: the served one, the handler's, or `404`;
+        a `500` and the error for a handler that raised or returned something else."""
         self._requests.append(request)
-        response = self._served.get(request.path, HttpResponse(404, b"not found\n"))
-        self._log(f"http: {request.method} {request.target} → {response.status}")
-        return response
+        served = self._served.get(request.path)
+        what = f"http: {request.method} {request.target}"
+        if served is None:
+            response = HttpResponse(404, "not found\n")
+        elif isinstance(served, HttpResponse):
+            response = served
+        else:
+            try:
+                with handling(f"the HTTP server's handler for {request.path!r}"):
+                    answer = served(request)
+                if not isinstance(answer, HttpResponse):
+                    raise TypeError(
+                        f"http.serve: the handler for {request.path!r} returned {answer!r},"
+                        " not an HttpResponse"
+                    )
+            except BaseException as error:
+                # pytest.fail and pytest.skip too, which are no `Exception`: on the link's thread
+                # they would end it without an answer to the runner's turn.
+                self._log(f"{what} → 500, the handler failed: {type(error).__name__}: {error}")
+                return HttpResponse(500, "internal server error\n"), error
+            response = answer
+        after = response.after
+        delayed = f", after {after}" if after is not None and after.ns else ""
+        self._log(f"{what} → {response.status}{delayed}")
+        return response, None
 
 
 class _Exchange:
@@ -159,6 +291,10 @@ class _Exchange:
         self._head: tuple[str, str, str, tuple[tuple[str, str], ...]] | None = None
         self._length = 0
         self._done = False
+        # A response waiting for its `after`: what it answers, as `GET /fw`, whether it goes
+        # without its body, and when it is due on the board's clock.
+        self._waiting: tuple[str, HttpResponse, bool] | None = None
+        self.due = 0
 
     def on_data(self, data: bytes) -> None:
         if self._done:
@@ -208,16 +344,32 @@ class _Exchange:
             headers,
             bytes(self._buffer[: self._length]),
         )
-        self._respond(self._server._answer(request), head_only=method == "HEAD")
+        self._done = True
+        response, error = self._server._answer(request)
+        head_only = method == "HEAD"
+        if error is not None:
+            self._respond(response, head_only=head_only)
+            self._server._test_error(error)
+        elif response.after is not None and response.after.ns:
+            self._waiting = (f"{method} {target}", response, head_only)
+            self.due = request.at.ns + response.after.ns
+            self._server._waiting.append(self)
+        else:
+            self._respond(response, head_only=head_only)
+
+    def send(self) -> None:
+        """Writes the response that waited for its `after`."""
+        assert self._waiting is not None
+        _, response, head_only = self._waiting
+        self._respond(response, head_only=head_only)
 
     def _fail(self, status: int) -> None:
+        self._done = True
         self._server._log(f"http: refused a request: {status} {REASONS[status]}")
-        self._respond(
-            HttpResponse(status, f"{REASONS[status].lower()}\n".encode()), head_only=False
-        )
+        self._respond(HttpResponse(status, f"{REASONS[status].lower()}\n"), head_only=False)
 
     def _respond(self, response: HttpResponse, *, head_only: bool) -> None:
-        self._done = True
+        self._unwait()
         lines = [f"HTTP/1.1 {response.status} {REASONS[response.status]}"]
         if response.status not in NO_CONTENT:
             lines += [
@@ -232,8 +384,20 @@ class _Exchange:
         self._write(head if head_only else head + response.body)
         self._close()
 
+    def _unwait(self) -> None:
+        if self._waiting is not None:
+            self._waiting = None
+            self._server._waiting.remove(self)
+
     def on_close(self) -> None:
         self._done = True
+        if self._waiting is not None:
+            what = self._waiting[0]
+            self._unwait()
+            self._server._log(
+                f"http: {what}: the connection closed before its response, due at"
+                f" {Duration(self.due)}: nothing written"
+            )
 
 
 def _wants(path: str | None, method: str | None) -> Callable[[HttpRequest], bool]:

@@ -11,8 +11,9 @@ through a deep sleep, in which nothing happens until the chip wakes. `dump_flash
 ask the runner for the flash in the turn it is held at, on the link's thread, and `write_flash`
 has it write a file into the flash, with the board's supply off; the turn goes on: the board's
 time does not move. `fail` takes an exception of the test's code that the link's thread ran while
-the run went, as a broker's handler: the waiting test raises it once the run reaches its next turn,
-and the run goes on. Times here are nanoseconds on the board's clock, from power-on.
+the run went, as a broker's or the HTTP server's handler: the waiting test raises it once the run
+reaches its next turn, and the run goes on. Times here are nanoseconds on the board's clock, from
+power-on.
 """
 
 import threading
@@ -23,6 +24,7 @@ from esp32tl.interfaces import NeverHappened, RunEnded
 from esp32tl.interfaces.condition import waiting
 from esp32tl.link.boardlink import RunTo
 from esp32tl.link.protocol import FlashDump, FlashDumpAck, FlashWrite, FlashWriteAck
+from esp32tl.net.handlers import refuse_wait
 from esp32tl.units import Duration
 
 # How far the run may go between two looks at a condition, 100 emulated milliseconds: how late
@@ -126,10 +128,11 @@ class HeldClock:
             self._cv.notify_all()
 
     def fail(self, error: BaseException) -> None:
-        """`error`, raised by the test's code that the link's thread ran, as a broker's handler,
-        goes to the test's wait, which raises it at the next turn; only the first one before the
-        wait raises. A `RunEnded` goes as a `RuntimeError` that names it, with it as its cause:
-        a wait, and the console's end of file, take a `RunEnded` for the end of the run."""
+        """`error`, raised by the test's code that the link's thread ran, as a broker's or the HTTP
+        server's handler, goes to the test's wait, which raises it at the next turn; only the first
+        one before the wait raises. A `RunEnded` goes as a `RuntimeError` that names it, with it
+        as its cause: a wait, and the console's end of file, take a `RunEnded` for the end of the
+        run."""
         if isinstance(error, RunEnded):
             wrapped = RuntimeError(f"a handler of the test's raised RunEnded: {error}")
             wrapped.__cause__ = error
@@ -179,6 +182,8 @@ class HeldClock:
     def _ask(self, request: FlashDump | FlashWrite) -> FlashDumpAck | FlashWriteAck | None:
         """`request` to the runner in the turn the link is held at, once it is held at one, and
         the runner's answer; `None` once the run is over."""
+        # From the link's thread, which alone holds a turn, this would wait for itself.
+        refuse_wait("the board's clock")
         with self._cv:
             while not self._held and self._ended is None:
                 self._cv.wait()
@@ -272,7 +277,9 @@ class HeldClock:
 
     def _settle(self, what: str) -> None:
         """Waits, holding the lock, until the link is held at a turn: from power-on to the
-        first `sync`, while the runner loads the images."""
+        first `sync`, while the runner loads the images. Refused from a handler on the link's
+        thread, whatever the board's call that came here, which names itself first."""
+        refuse_wait("the board's clock")
         while not self._held and self._ended is None:
             self._cv.wait()
         if not self._held:
