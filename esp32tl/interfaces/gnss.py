@@ -1,7 +1,7 @@
 """The `gnss` fixture: the profile's `uart.gnss` route, whose far end is a replay, a real device or
 a receiver the test describes, by what the test calls first, before `board.power_on()`."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -10,8 +10,8 @@ from esp32tl.interfaces import SourceError
 from esp32tl.interfaces.uart import Uart
 from esp32tl.link.boardlink import Wire
 from esp32tl.report import RunLog
-from esp32tl.sources.model.gnss import HDOP, SATELLITES, GnssReceiver
-from esp32tl.units import Heading, Position, Speed
+from esp32tl.sources.model.gnss import HDOP, SATELLITES, CasicFrame, GnssReceiver
+from esp32tl.units import Duration, Heading, Position, Speed
 
 
 class Gnss(Uart):
@@ -42,6 +42,7 @@ class Gnss(Uart):
         )
         self._clock_now = now
         self._world = world
+        self._baud = wire.baud
 
     def fix(self, at: Position, *, hdop: float = HDOP, satellites: int = SATELLITES) -> None:
         """A fix at `at`, standing still, of `hdop` with `satellites` in use."""
@@ -80,6 +81,20 @@ class Gnss(Uart):
         """Sentences again, from the epoch at this instant on."""
         self._tell(GnssReceiver.resume, "resume()")
 
+    def refuse(self, cls: int, id: int) -> None:
+        """ACK-NAK, from now on, for each CASIC frame of class `cls` and id `id`."""
+        self._tell(lambda receiver: receiver.refuse(cls, id), f"refuse(cls={cls!r}, id={id!r})")
+
+    def answer_after(self, duration: Duration) -> None:
+        """The answer to each CASIC frame from now on comes `duration` after its last byte."""
+        self._tell(lambda receiver: receiver.answer_after(duration), f"answer_after({duration!r})")
+
+    @property
+    def casic_frames(self) -> Sequence[CasicFrame]:
+        """Each CASIC frame the receiver heard, with its answer. Reading it makes no receiver:
+        without one, a `SourceError`."""
+        return self.receiver().casic_frames
+
     def recorded_source(self) -> str:
         """`model:gnss` for the receiver model, as the recording format names a model."""
         return self.MODEL if isinstance(self.source, GnssReceiver) else super().recorded_source()
@@ -113,6 +128,6 @@ class Gnss(Uart):
         self._refuse_source("receiver")
         # First: it refuses a source after power-on, and skips a backend that gives no model.
         self._ask("model")
-        receiver = GnssReceiver(self._clock_now, self._world)
+        receiver = GnssReceiver(self._clock_now, self._world, baud=self._baud)
         call(receiver)
         self._give(receiver, "model", self.DETAIL, step=step)

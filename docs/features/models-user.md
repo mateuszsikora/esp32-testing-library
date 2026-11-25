@@ -342,9 +342,9 @@ class RateSwitchingModem(ReactiveModel):
 
 `gnss` becomes a receiver the test describes at the first of these calls that succeeds, which must
 come before `board.power_on()`; one that is refused leaves `gnss` as it was. Every call after it but
-`position`, before or after power-on, changes the receiver from the board's current instant,
-`board.now`, until the test says something else, as the world does: time passes only while the test
-waits.
+`position` and `casic_frames`, before or after power-on, changes the receiver from the board's
+current instant, `board.now`, until the test says something else, as the world does: time passes
+only while the test waits.
 
 ```python
 from esp32tl.units import NORTH, Position, km_h, minutes, seconds
@@ -371,7 +371,10 @@ def test_follows_the_receiver_as_it_moves(board):
 | `gnss.lose_fix()` | Has no fix, until the next `fix`; it goes on moving as it did |
 | `gnss.go_silent()` | Sends nothing, until `resume` |
 | `gnss.resume()` | Sends again, from the epoch at this instant on, if one falls here, or else from the next |
+| `gnss.refuse(cls, id)` | Answers each CASIC frame of class `cls` and id `id`, whole numbers from 0 to 255, with ACK-NAK instead of ACK-ACK ([what it hears](#what-it-hears)) |
+| `gnss.answer_after(duration)` | Answers each CASIC frame `duration` after its last byte reached the receiver, a `Duration` of 0 or more: `ms(1.5)`, as an L76K, until the test says otherwise |
 | `gnss.position` | Where it is now, fix or not, a `Position`; `None` until its first fix. Reading it changes nothing and makes no receiver: before any other call it raises `SourceError` |
+| `gnss.casic_frames` | Each CASIC frame it heard, a `CasicFrame`, in the order it heard them: a live, read-only view, which a reference kept goes on filling. Reading it makes no receiver either |
 
 `hdop` is a number from 0.01 to 99.99, which the GGA writes to two decimals; `satellites` a whole
 number from 1 to 99. Until its first `fix`, as after a `lose_fix`, the receiver talks but has no
@@ -418,15 +421,87 @@ $GPGGA,120001.00,,,,,0,00,99.99,,,,,,*64
   `go_silent` and `resume` and the supply are apart, so a receiver the test silenced stays silent
   when the power comes back. `board.reset()` does not touch it
   ([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)).
-- It hears what the firmware sends it and answers nothing: a firmware that configures its
-  receiver gets no acknowledgement. It does not act on what it hears either: its output stays an
-  RMC and a GGA from talker `GP`, one epoch a second, whatever the firmware asks for. A test whose
-  firmware needs a configuration to take effect (another sentence set, other talkers, another
-  rate), or that depends on what a real receiver's full output does to the line, writes its own
-  `Model` on `uart.gnss` ([a model of the test's](#a-model-of-the-tests-in-durations)), dated with
-  `board.utc_at(...)` ([a model that dates what it sends](#a-model-that-dates-what-it-sends)), and
-  for another line rate sending at the rate it was told
+- It answers the CASIC frames the firmware sends it ([what it hears](#what-it-hears)), and nothing
+  else: an NMEA command, as `$PCAS03`, gets no answer. It does not act on what it hears either:
+  its output stays an RMC and a GGA from talker `GP`, one epoch a second, whatever the firmware
+  asks for. A test whose firmware needs a configuration to take effect (another sentence set,
+  other talkers, another rate), or that depends on what a real receiver's full output does to the
+  line, writes its own `Model` on `uart.gnss`
+  ([a model of the test's](#a-model-of-the-tests-in-durations)), dated with `board.utc_at(...)`
+  ([a model that dates what it sends](#a-model-that-dates-what-it-sends)), and for another line
+  rate sending at the rate it was told
   ([a model that changes its line rate](#a-model-that-changes-its-line-rate)).
+
+### What it hears
+
+An L76K, the receiver on `uart.gnss` of the `lilygo-t-a7670g-r2` profile, takes CASIC binary
+frames as well as NMEA: a firmware writes assistance data (AID-INI, with time and position, and
+ephemerides) or configuration to it one frame at a time, and waits for each frame's answer. The
+receiver answers each CASIC frame the firmware sends it, as an L76K did
+([stage 0 findings](../stage0-findings.md#casic-answers-of-an-l76k)):
+
+- ACK-ACK, class `0x05`, id `0x01`, for a frame of any class and id;
+- ACK-NAK, class `0x05`, id `0x00`, for one whose checksum does not hold, and for one whose class
+  and id the test refused with `gnss.refuse(cls, id)`.
+
+The answer carries the frame's class and id, then two zero bytes, and starts `answer_after` after
+the frame's last byte reached the receiver: `ms(1.5)` unless the test says otherwise with
+`gnss.answer_after(...)`, as the L76K started its answers 1.53 ms after the frame at 9600 baud.
+The firmware writes a frame into its UART's FIFO at about one instant, and the bytes leave at the
+route's baud, one after another, after those it wrote before: at the profile's 9600 baud an AID-INI
+frame, 66 bytes, takes 68.75 ms on the line, so its answer starts 70.25 ms after the write. The
+answer goes out after the bytes the receiver was sending, so it never splits an epoch's sentences;
+the L76K, too, held its answers until the end of the epoch it was sending. A firmware that sends
+AID-INI again when the receiver refuses it, up to three times:
+
+```python
+from esp32tl.units import seconds
+
+AID_INI = (0x0B, 0x01)
+
+
+def test_retries_assistance_the_receiver_refuses(board):
+    board.gnss.refuse(*AID_INI)
+    board.power_on()
+    board.wait(seconds(5))
+    frames = [f for f in board.gnss.casic_frames if (f.cls, f.id) == AID_INI]
+    assert [f.answer for f in frames] == ["nak", "nak", "nak"]
+```
+
+- `gnss.casic_frames` holds a `CasicFrame(at, cls, id, payload, answer)` for each frame, once its
+  last byte has reached the receiver: `at`, a `Duration`, the board's time it did; `payload`, its
+  bytes; `answer`, `"ack"`, `"nak"` or `None`, no answer. While the receiver talks, a test that
+  waits for a frame sees it in the turn at `at`; silent, the board does not stop there for it, and
+  the frame is there from the next turn that comes. `answer` is what the receiver chose when the
+  firmware wrote the frame, not what it sent: an answer still to come when the receiver goes silent
+  or loses its supply is never sent, and the frame keeps it. What did go out is in the route's tap,
+  `gnss.tap(path)`.
+- The receiver only answers: it acts on no frame. A CFG frame that sets the rate or the sentences,
+  or turns the receiver off, changes nothing in what it sends; an assistance frame gives no fix.
+  A test whose firmware needs its configuration to take effect writes its own model, as
+  [what it sends](#what-it-sends) says.
+- A frame is `0xBA 0xCE`, the payload's length in two little-endian bytes, the class, the id, the
+  payload and a 4-byte checksum. Whatever lies between frames, NMEA and noise, the receiver drops,
+  and a header that says more than 2047 bytes of payload is noise too. A frame with a bad checksum
+  takes as many bytes as its header says, the frames among them included: noise that looks like a
+  header, `0xBA 0xCE` and a length, takes up to 2057 bytes, which get one ACK-NAK, and their frames
+  none.
+- Where the model and the L76K part: the L76K answers a query, as the CFG-PRT query `BA CE 00 00 06
+  00 00 00 06 00`, with the data it asks for, two CFG-PRT frames, and then ACK-ACK; the model sends
+  the ACK-ACK alone. And the L76K answered ACK-NAK to a class and id the specification does not
+  define, CFG `0x06 0x7F`; the model answers ACK-ACK to every frame with a good checksum, of any
+  class and id. A test whose firmware sends one the receiver does not know says so with
+  `gnss.refuse(cls, id)`.
+- `refuse` and `answer_after` hold from the board's current instant, for each frame the firmware
+  finishes writing after it, and can come before power-on or after.
+- Silent, after `go_silent`, the receiver sends nothing, answers included, even one due to a frame
+  heard before: it hears the frames and records them with no answer, a frame still on the line
+  when it went silent too. Without the board's supply it hears nothing, and what it had heard of a
+  frame when the power went, a frame still on the line and the answers not sent yet are lost: a
+  firmware that boots again gets no answer meant for the one before.
+- Each answer makes the board stop soon after every write to the receiver, NMEA included, so that
+  the answer can go in on time: a firmware that writes to the receiver often runs a little slower
+  on the host.
 
 ## When the test gets it wrong
 
@@ -435,7 +510,7 @@ $GPGGA,120001.00,,,,,0,00,99.99,,,,,,*64
 | `uart.gnss: the board is on already: give an interface its source before board.power_on()` | `SourceError` | The first model call comes after `board.power_on()`; `the board has been on` once `board.power_off()` has switched it off again |
 | `uart.gnss replays a recording: it has no receiver to describe; one source per test` | `SourceError` | A model call after `gnss.replay` |
 | `uart.gnss has its source already: one per test` | `SourceError` | `gnss.replay` after a model call |
-| `uart.gnss has no receiver: give it one with gnss.fix(at=...)` | `SourceError` | `gnss.position` before any model call |
+| `uart.gnss has no receiver: give it one with gnss.fix(at=...)` | `SourceError` | `gnss.position` or `gnss.casic_frames` before any model call |
 | `gnss.move: the receiver has no position to move from: give it a fix first, with gnss.fix(at=...)` | `ModelError` | `move` before any `fix` |
 | `gnss.degrade: the receiver has no fix to degrade: give it one first, with gnss.fix(at=...)` | `ModelError` | `degrade` without a fix |
 | `gnss.move: speed is -1 m/s, less than 0` | `ModelError` | A negative speed |
@@ -443,6 +518,8 @@ $GPGGA,120001.00,,,,,0,00,99.99,,,,,,*64
 | `gnss.degrade: satellites is 0, not from 1 to 99: a fix has some` | `ModelError` | A number of satellites out of range, also from `fix` |
 | `gnss.move: heading is 90, not a Heading, as NORTH`, `gnss.move: speed is 10, not a Speed, as km_h(50)`, `gnss.fix: at is (52, 21), not a Position` | `TypeError` | A plain number or tuple where a unit belongs |
 | `gnss.degrade: give it hdop=, satellites=, or both` | `TypeError` | `degrade()` with neither |
+| `gnss.refuse: cls is 256, not from 0 to 255`, `gnss.refuse: id is True, not a whole number` | `ModelError`, `TypeError` | A class or an id that is not a byte |
+| `gnss.answer_after: 10 is not a Duration, as ms(1.5)`, `gnss.answer_after: -0.001 s is less than 0` | `TypeError`, `ModelError` | A plain number, or a negative `Duration` |
 | `esp32sim: the test set up the model of uart.gnss and never called board.power_on(): it ran no firmware` | error at teardown | A test that described a receiver and never powered on |
 
 `ModelError` is a `ValueError` and `SourceError` an `Exception`, both from `esp32tl`. A call that is refused changes nothing. A backend that cannot give a model

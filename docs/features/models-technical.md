@@ -14,11 +14,13 @@ receiver its clock in
 
 1. **The receiver is made** by `Gnss._tell` at the first model call, after the backend's
    `asked("uart.gnss", "model")` has let it through:
-   `GnssReceiver(now, world)`, where `now` returns `HeldClock.now`, the block point of the turn
-   the link was last held at (0 before power-on), and `world` returns `Esp32Sim._utc`, the world's
-   time at power-on. The call is made on it, and only when the call returns does it become the
-   `Uart`'s `source`, of kind `model`: a refused first call leaves the route without a source.
-   Reading `Gnss.position` or `Gnss.receiver()` makes no receiver.
+   `GnssReceiver(now, world, baud=wire.baud)`, where `now` returns `HeldClock.now`, the block
+   point of the turn the link was last held at (0 before power-on), `world` returns
+   `Esp32Sim._utc`, the world's time at power-on, and `baud` is the route's rate, which times the
+   firmware's bytes on the line (step 6). The call is made on it, and only when the call returns
+   does it become the `Uart`'s `source`, of kind `model`: a refused first call leaves the route
+   without a source. Reading `Gnss.position`, `Gnss.casic_frames` or `Gnss.receiver()` makes no
+   receiver.
 2. **The test tells it** something: each call checks its arguments, then, under the receiver's lock,
    replaces its `State` with one whose `since` is `now()`, whose `position` and `heading` are where
    it is and which way it goes at that instant (`State.at(now)`, `State.course(now)`), and which
@@ -45,14 +47,56 @@ receiver its clock in
    `heading`, `atan2(sin θ cos φ, cos d cos φ cos θ − sin φ sin d)`, with `d` the angle travelled,
    `φ` the starting latitude and `θ` the starting heading. The UTC time is `world() +
    timedelta(microseconds=t // 1000)`.
-6. **`receive(t, data)`** returns nothing: the receiver hears what the firmware sends and drops
-   it. **`latency()`** is `None`.
+6. **`receive(t, data)`** finds CASIC frames in what the firmware sends, and returns nothing:
+   the answers go out from `poll`. `t` is the instant the firmware wrote the piece's first byte
+   into its UART's FIFO (protocol 5.2), and the bytes reach the receiver one character time
+   apart, 10 bits at `baud`, the route's (`Gnss` passes `wire.baud`): the piece starts on the line
+   at `max(t, _line_free)`, after what was written before, and `_line_free` moves past it,
+   `_char_ns` rounding down as the runner's `char_ns` does. The bytes come cut anywhere, so it
+   appends them to `_heard` and takes out of it each frame complete there (`_frames_heard`): it
+   drops what comes before `CASIC_HEADER`, waits for the 6 bytes of the header, the length, the
+   class and the id, drops the first byte of a header whose length is more than
+   `CASIC_MAX_PAYLOAD` and searches again, and waits for the payload and the 4 bytes of the
+   checksum. A frame whose checksum does not hold takes all its bytes out, whatever they hold.
+   What it drops, NMEA `$PCAS` commands and noise included, it never sees again; a last `0xBA`
+   stays, since it may start a header. Each frame's `at` is the instant its last byte arrives,
+   the piece's start plus its offset in the piece in character times. It goes into `_arriving` as
+   a `CasicFrame` with its answer, chosen from the state as `receive` finds it, the one the last
+   held turn left: none while `talking` is false; else ACK-NAK for a checksum that does not hold
+   or a `(cls, id)` in `_refused`, ACK-ACK for any other. The answer,
+   `casic(ACK, ACK_ACK or ACK_NAK, bytes((cls, id, 0, 0)))`, goes into `_answers` at
+   `at + _answer_after`. Without the supply, `receive` returns at once: the receiver hears
+   nothing.
+   **`arrive(now)`**, which `Uart.arrive` calls at the start of every turn, before the test's
+   hold (the receiver is `Arriving`, `esp32tl/interfaces/uart.py`), moves the frames of
+   `_arriving` whose `at` has come into `_frames`, which `casic_frames` views: the test holding
+   the turn at `at`, which `quiet_until` asks for, sees the frame. **`poll(now)`** does the same,
+   for a frame `receive` found in this turn whose `at` has passed already, and sends the answers
+   due, with the epochs, in time order. Each answer is
+   its own output: the runner queues it on the RX line behind what it queued before (protocol §8),
+   so it never splits an epoch's sentences. **`quiet_until()`** is the earliest of the next epoch,
+   the next `at` in `_arriving` and the next answer, while the receiver talks and has its supply: a
+   frame heard silent goes into `_frames` in whichever turn comes next.
+   **`latency()`** is `_answer_after` then, `None` else: a receiver that answers makes the link
+   take a turn no later than that after every transmission to it, NMEA included, and since `at`
+   is no earlier than `t`, no answer is stamped before the turn that receives its frame.
+   `refuse` and `answer_after` change `_refused` and `_answer_after` under the lock, in a held
+   turn, before the `Wait` that carries the new latency: so bytes the firmware writes after that
+   `Wait` are answered with the new ones. `go_silent` empties `_answers` and takes the answer off
+   each frame of `_arriving` whose `at` is after `now`; a frame heard by then keeps the answer it
+   was given, which never goes out.
 7. **`supply(on)`** is the board's supply, which the backend hands every UART's source that has
    the method (`Supplied`, `esp32tl/interfaces/uart.py`) at `board.power_off()` and at the
    `power_on()` after it. `_supplied` is apart from the state's `talking`: `poll` sends an epoch
    only with both, and `quiet_until` is `None` without either. When the supply comes back,
    `_next` moves to the first epoch at or after `now`, as `resume` does, so the epochs of the
-   power cut stay unsent. The state, fix and motion included, is as the test left it.
+   power cut stay unsent. The state, fix and motion included, is as the test left it. When it
+   goes, the frames of `_arriving` whose `at` has come go into `_frames`, and then `_heard`,
+   the rest of `_arriving` and `_answers` are emptied and `_line_free` is 0: what the receiver
+   had heard of a frame, a frame still on the line and the answers not sent are lost with its
+   power, so a firmware that boots again gets none meant for the boot before. The runner does not
+   drop what is queued on an RX line at a power cut (`Session::power_off`), so an answer handed
+   to it before could reach the next boot.
 
 ## Schema
 
@@ -70,6 +114,26 @@ GGA with a fix: `GPGGA`, the time, latitude, `N`/`S`, longitude, `E`/`W`, qualit
 satellites (`02d`), the HDOP (`.2f`), altitude `0.0`, `M`, geoid separation `0.0`, `M`, two empty
 DGPS fields. Without a fix: the time, four empty fields, quality `0`, `00`, `99.99`
 (`NO_FIX_HDOP`), six empty fields.
+
+A CASIC frame, as ZKW's CASIC protocol specification (V4.2.0.3, 2.2) and Quectel's L76K GNSS
+protocol specification (V1.1, 3.1) give it: `0xBA 0xCE`, the payload's length (`U2`, little-endian,
+the payload only), the class, the id, the payload, a multiple of 4 bytes, and the checksum (`U4`,
+little-endian). Both specifications compute the checksum as
+
+```c
+ckSum = (id << 24) + (class << 16) + len;
+for (i = 0; i < (len / 4); i++) { ckSum = ckSum + payload[i]; }
+```
+
+with `payload[i]` the payload's `i`-th little-endian 32-bit word, modulo 2³²: `casic_checksum`
+does the same, and so counts the bytes past the last whole word of a payload that is not a
+multiple of 4 only in `len`. ZKW's specification bounds the payload at "<2k bytes",
+`CASIC_MAX_PAYLOAD`, 2047. ACK-ACK (`0x05 0x01`) and ACK-NAK (`0x05 0x00`) carry 4 bytes: the
+answered frame's class and id, `U1` each, and a reserved `U2`, which the model sends as 0. Quectel's
+specification, 3.2.2, has the CFG-PRT query `BA CE 00 00 06 00 00 00 06 00` answered with
+`BA CE 04 00 05 01 06 00 00 00 0A 00 05 01`, which
+`test_casic_frames_and_answers_are_those_of_quectel_s_specification` checks with three of that
+section's frames.
 
 `angle(degrees, digits, positive, negative)` writes a latitude (`digits` 2) or a longitude (3):
 `round(abs(degrees) * 60 * 100_000)` units of 10⁻⁵ minute, split into whole degrees, minutes and
@@ -90,7 +154,11 @@ hemisphere's letter, `negative` for a value below 0.
 | `number(value, what)` | A finite `int` or `float`, not a `bool`: `TypeError` `{what}: {value!r} is not a number`, `ValueError` `{what}: {value!r} is not a finite number` |
 | `shown(value)` | A number with up to six decimals, without trailing zeros, as the `str` and `repr` above write it |
 | `NS_PER_S`, `EARTH_RADIUS_M`, `M_PER_MILE`, `M_PER_FOOT`, `M_PER_NAUTICAL_MILE` | `1_000_000_000`; 6371008.8, IUGG's mean radius R1; 1609.344; 0.3048; 1852 |
-| `GnssReceiver(now, world)` | `esp32tl/sources/model/gnss.py`: the test's `fix`, `move`, `stand_still`, `degrade`, `lose_fix`, `go_silent`, `resume`, `position`; the link's `receive`, `poll`, `quiet_until`, `latency`; `epoch(t)`; `sent` |
+| `GnssReceiver(now, world, *, baud)` | `esp32tl/sources/model/gnss.py`: the test's `fix`, `move`, `stand_still`, `degrade`, `lose_fix`, `go_silent`, `resume`, `refuse`, `answer_after`, `position`, `casic_frames`; the link's `receive`, `arrive`, `poll`, `quiet_until`, `latency`, `supply`; `epoch(t)`; `sent` |
+| `CasicFrame` | Frozen dataclass: `at` (a `Duration`), `cls`, `id`, `payload` (`bytes`), `answer`, `"ack"`, `"nak"` or `None` (`CasicAnswer`) |
+| `CASIC_HEADER`, `CASIC_HEAD`, `CASIC_CHECKSUM`, `CASIC_MAX_PAYLOAD` | `b"\xba\xce"`; 6, the header, the length, the class and the id; 4; 2047 |
+| `ACK`, `ACK_ACK`, `ACK_NAK`, `ACK_AFTER` | `0x05`, `0x01`, `0x00`: the class and ids of the answers; `ms(1.5)`, `answer_after`'s default |
+| `casic_checksum(cls, id, payload)`, `casic(cls, id, payload)` | The checksum below, and the whole frame with it |
 | `State` | Frozen dataclass: `since`, `position`, `heading`, `speed`, `fixed`, `hdop`, `satellites`, `talking`; `at(t)`, `course(t)`, `travelled(t)`. The first is `State(0, None, NORTH, m_s(0), False, 99.99, 0, True)` |
 | `FIRST_EPOCH`, `PERIOD` | `seconds(1)` each |
 | `HDOP`, `SATELLITES`, `NO_FIX_HDOP`, `MIN_HDOP`, `SENTENCE_MAX`, `TALKER` | `0.9`, `8`: a `fix`'s defaults; `99.99`; `0.01`, the lowest HDOP the GGA's two decimals say; `82`; `"GP"` |
@@ -105,7 +173,8 @@ hemisphere's letter, `negative` for a value below 0.
 
 ## Configuration
 
-None: the receiver's rate, talker, sentences and altitude are constants of the module. The
+None: the receiver's rate, talker, sentences and altitude are constants of the module, and so is
+`ACK_AFTER`, `ms(1.5)`, the latency of its answers until `answer_after`, measured on an L76K. The
 world's time at power-on is `board.power_on(utc=...)`'s, `POWER_ON_UTC` in
 `esp32tl/backends/esp32sim.py` by default. The built-in receiver gets it from the backend as
 `world`, `lambda: self._utc`; a `Model` of the test's has no such argument, and asks the board
@@ -127,6 +196,8 @@ instants only, and a model that needs the world's time keeps the board.
 | `{what}: hdop: {value!r} is not a number`, `… is not a finite number` | `TypeError`, `ValueError` | From `number` |
 | `gnss.fix: at is {at!r}, not a Position`, `gnss.move: heading is {heading!r}, not a Heading, as NORTH`, `gnss.move: speed is {speed!r}, not a Speed, as km_h(50)` | `TypeError` | A value without its unit |
 | `gnss.degrade: give it hdop=, satellites=, or both` | `TypeError` | `degrade()` |
+| `gnss.refuse: {cls or id} is {value}, not from 0 to 255`, `gnss.refuse: {cls or id} is {value!r}, not a whole number` | `ModelError`, `TypeError` | `refuse`, from `_byte`; a `bool` is not a whole number |
+| `gnss.answer_after: {duration!r} is not a Duration, as ms(1.5)`, `gnss.answer_after: {duration} is less than 0` | `TypeError`, `ModelError` | `answer_after` |
 | `{line!r} is longer than NMEA's 82 characters` | `ModelError` | `sentence`; the model's own RMC is 74 characters at 999.99 knots, with both coordinates' longest fields |
 | `Position: lat {lat!r} is not from -90 to 90 degrees`, `Position: lon {lon!r} is not from -180 to 180 degrees` | `ValueError` | `Position(...)` |
 | `moved: heading is {heading!r}, not a Heading, as NORTH`, `moved: distance is {distance!r}, not a Distance, as km(1)`, `distance_to: {other!r} is not a Position`, `bearing_to: {other!r} is not a Position` | `TypeError` | |
@@ -156,7 +227,18 @@ The `SourceError`s of the first model call are the backend's and `Gnss`'s
   move across the antimeridian and over the north pole, with its course;
   what is refused; the rounding of coordinates into the next degree; the 82-character limit;
   and `Gnss`, off the link: a refused first call that leaves the route without a source, and
-  `position` that makes no receiver.
+  `position` that makes no receiver. CASIC frames: Quectel's worked frames and ACK-ACK, and an
+  ACK-NAK an AT6558 receiver sent; an AID-INI and a GPS ephemeris, the second behind the first on
+  the line, heard when their last bytes arrive at 9600 baud and answered `answer_after` after;
+  a frame cut over five pieces; two frames in one piece, and frames between NMEA commands, a
+  `0xBA` that starts no header, noise, a header with too long a length and a last `0xBA` that
+  starts the next one; a bad checksum, answered ACK-NAK; the bytes an L76K answered with; a refused
+  class and id; a power cycle in the middle of a
+  frame, and one between a frame and its answer
+  (`test_a_power_cycle_loses_a_frame_half_heard_and_the_answers_not_sent`); silence before a
+  frame, while one is on the line and between a frame and its answer; and `refuse`,
+  `answer_after` and `casic_frames` on `Gnss`, as steps of the test's log, with the route's
+  baud.
 - `tests/test_nmea_reader_model.py`: `nmea_reader` on the real runner, fed by the model: the first
   fix and its time, the southern and western hemispheres, 1 km north at 36 km/h, no fix line while
   the fix is lost, the fix coming back at the epoch of its instant, silence, and a power cycle
@@ -199,7 +281,12 @@ Not covered: a receiver moving across a pole or the antimeridian on the real fir
 `power_on(utc=...)` off a whole second on the real runner; `tests/test_gnss_model.py` tests the
 model's side of each (`test_the_receiver_moves_across_the_antimeridian_and_over_a_pole`,
 `test_epochs_fall_on_whole_seconds_of_the_world_s_time`). A receiver that starts exactly at a
-pole is not tested.
+pole is not tested. The CASIC answers are tested on the model only, through no firmware: no
+validation firmware writes CASIC frames. What they should be was measured once, on one L76K
+(`SW=URANUS5,V5.3.0.0`) with `tools/casic_probe`
+([stage 0 findings](../stage0-findings.md#casic-answers-of-an-l76k)), and
+`test_the_answers_are_those_an_l76k_gave` holds the model to the answers it gave; another firmware
+of the receiver may answer otherwise.
 
 ## See also
 

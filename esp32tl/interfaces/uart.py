@@ -60,7 +60,9 @@ class Supplied(Protocol):
 
 @runtime_checkable
 class Arriving(Protocol):
-    """A source whose far end takes things in on its own time: the network, on its path."""
+    """A source whose far end takes things in on its own time: the network, on its path; the GNSS
+    receiver, the last byte of a CASIC frame. It takes them in at the start of every turn, before
+    the test's hold, so that the test holding the turn sees them."""
 
     def arrive(self, now: int) -> None: ...
 

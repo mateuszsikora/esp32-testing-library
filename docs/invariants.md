@@ -570,6 +570,24 @@ that references to its number keep their meaning.
     `tests/test_nmea_reader_model.py::test_follows_the_receiver_as_it_moves`,
     `tests/test_nmea_reader_model.py::test_says_nothing_while_the_receiver_has_no_fix`,
     `tests/test_nmea_reader_model.py::test_reports_again_when_the_fix_comes_back`
+- **298.** The GNSS receiver model answers each CASIC frame it hears, wherever the UART's pieces
+    cut it and whatever lies between frames, `answer_after` after the frame's last byte reached it
+    at the route's baud: ACK-NAK for a bad checksum and for a class and id the test refused,
+    ACK-ACK for any other, each carrying the frame's class and id with the specifications'
+    checksum, in the bytes an L76K answered with; nothing while silent, not even an answer due
+    before, and without the board's supply
+    it hears nothing, and what it had heard of a frame and the answers not sent are lost.
+    `gnss.casic_frames` holds every frame it heard, with its answer, and while the receiver talks a
+    test holding the turn at the instant it heard the frame sees it there.
+    `tests/test_gnss_model.py::test_casic_frames_and_answers_are_those_of_quectel_s_specification`,
+    `tests/test_gnss_model.py::test_casic_frames_get_ack_ack_naming_them_answer_after_their_last_byte`,
+    `tests/test_gnss_model.py::test_a_frame_cut_over_several_pieces_is_heard_when_its_last_byte_arrives`,
+    `tests/test_gnss_model.py::test_two_frames_in_one_piece_and_frames_between_nmea_and_noise`,
+    `tests/test_gnss_model.py::test_a_frame_with_a_bad_checksum_gets_ack_nak`,
+    `tests/test_gnss_model.py::test_the_answers_are_those_an_l76k_gave`,
+    `tests/test_gnss_model.py::test_a_refused_class_and_id_gets_ack_nak_from_then_on`,
+    `tests/test_gnss_model.py::test_a_power_cycle_loses_a_frame_half_heard_and_the_answers_not_sent`,
+    `tests/test_gnss_model.py::test_a_silent_receiver_hears_the_frames_and_answers_none`
 - **61.** A console line is stamped with the board's time its line ending came at, without its line
     ending and colour codes, and is a line only once it has ended; `console.line(pattern)` finds
     only lines that end after it was made, and after the last line it found.

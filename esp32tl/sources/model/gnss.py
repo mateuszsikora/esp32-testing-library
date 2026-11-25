@@ -6,27 +6,31 @@ one at least `FIRST_EPOCH` after power-on: an RMC and then a GGA, NMEA 0183 with
 the same UTC time. What the test says holds from the board's current instant until it says
 something else, as the world does: `move()` takes no duration, and the receiver goes on moving
 while the test waits. A move follows the great circle it starts on. Until the test gives it a fix,
-the receiver talks but has none, as one does after a cold start. It hears what the firmware sends
-it, and answers nothing.
+the receiver talks but has none, as one does after a cold start. Of what the firmware sends it,
+it hears CASIC binary frames, and answers each with ACK-ACK or ACK-NAK, as an L76K does; it acts on
+none of them, and drops the rest.
 """
 
 import math
 import threading
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
+from esp32tl.interfaces.history import History
 from esp32tl.link.boardlink import Output
 from esp32tl.units import (
     EARTH_RADIUS_M,
     NORTH,
+    NS_PER_S,
     Distance,
     Duration,
     Heading,
     Position,
     Speed,
     m_s,
+    ms,
     number,
     seconds,
 )
@@ -50,6 +54,37 @@ MIN_HDOP = 0.01
 SENTENCE_MAX = 82
 
 STILL = m_s(0)
+
+# CASIC binary frames (ZKW's CASIC protocol specification, 2.2; Quectel's L76K GNSS protocol
+# specification, 3.1): the header, the payload's length in 2 little-endian bytes, the class, the
+# id, the payload and a 4-byte checksum.
+CASIC_HEADER = b"\xba\xce"
+CASIC_HEAD = 6
+CASIC_CHECKSUM = 4
+# The longest payload the receiver takes, "<2k bytes" in ZKW's specification: a header that says
+# more is noise.
+CASIC_MAX_PAYLOAD = 2047
+ACK = 0x05
+ACK_ACK = 0x01
+ACK_NAK = 0x00
+# How long after the frame's last byte the receiver starts its answer, unless the test says
+# otherwise: 1.53 ms on an L76K at 9600 baud (tools/casic_probe, docs/stage0-findings.md).
+ACK_AFTER = ms(1.5)
+
+CasicAnswer = Literal["ack", "nak"]
+
+
+@dataclass(frozen=True)
+class CasicFrame:
+    """A CASIC frame the receiver heard, stamped at the instant its last byte reached it: its
+    class, its id, its payload and how the receiver chose to answer it, `"ack"` (ACK-ACK), `"nak"`
+    (ACK-NAK) or `None`, no answer."""
+
+    at: Duration
+    cls: int
+    id: int
+    payload: bytes
+    answer: CasicAnswer | None
 
 
 class ModelError(ValueError):
@@ -101,11 +136,12 @@ class GnssReceiver:
     """The receiver the `gnss` fixture becomes at the first model call before power-on.
 
     `now` gives the board's time, in nanoseconds, which each change takes effect at; `world` the
-    world's time at power-on, which the sentences are dated from, asked once the run has started.
+    world's time at power-on, which the sentences are dated from, asked once the run has started;
+    `baud` the route's rate, which the firmware's bytes take on the line to reach the receiver.
     The methods besides the test's are those of `Source`, for the link.
     """
 
-    def __init__(self, now: Callable[[], int], world: Callable[[], datetime]) -> None:
+    def __init__(self, now: Callable[[], int], world: Callable[[], datetime], *, baud: int) -> None:
         self._now = now
         self._world = world
         self._lock = threading.Lock()
@@ -116,6 +152,18 @@ class GnssReceiver:
         self._supplied = True
         # How many epochs the link has been given.
         self.sent = 0
+        # What the receiver heard of a CASIC frame it has not finished hearing, the classes and
+        # ids it refuses, how long it takes to answer, the frames it heard, those whose last byte
+        # is still on the line, and the answers it has not sent yet, each at its time.
+        self._baud = baud
+        self._heard = bytearray()
+        self._refused: set[tuple[int, int]] = set()
+        self._answer_after = ACK_AFTER.ns
+        self._frames: list[CasicFrame] = []
+        self._arriving: list[CasicFrame] = []
+        self._answers: list[Output] = []
+        # When the last byte the firmware wrote to the receiver leaves the line.
+        self._line_free = 0
 
     # What the test tells it.
 
@@ -174,8 +222,16 @@ class GnssReceiver:
         self._change(fixed=False, hdop=NO_FIX_HDOP, satellites=0)
 
     def go_silent(self) -> None:
-        """No sentences from now on, until `resume`."""
-        self._change(talking=False)
+        """Nothing sent from now on, until `resume`: no sentences, and no answer, not even one
+        still due to a frame heard before; a frame still arriving is heard silent."""
+        with self._lock:
+            now = self._now()
+            self._answers.clear()
+            self._arriving = [
+                frame if frame.at.ns <= now else replace(frame, answer=None)
+                for frame in self._arriving
+            ]
+            self._change_locked(talking=False)
 
     def resume(self) -> None:
         """Sentences again, from the epoch at this instant on, if one falls here. The epochs of
@@ -197,7 +253,37 @@ class GnssReceiver:
             if on and not self._supplied and self._next is not None:
                 while self._next < now:
                     self._next += PERIOD.ns
+            if not on:
+                # What it heard of a frame, a frame still arriving, and the answers it had not
+                # sent, go with its power.
+                self._hear(now)
+                self._heard.clear()
+                self._arriving.clear()
+                self._answers.clear()
+                self._line_free = 0
             self._supplied = on
+
+    def refuse(self, cls: int, id: int) -> None:
+        """ACK-NAK, from now on, for each CASIC frame of class `cls` and id `id`."""
+        key = (_byte(cls, "gnss.refuse: cls"), _byte(id, "gnss.refuse: id"))
+        with self._lock:
+            self._refused.add(key)
+
+    def answer_after(self, duration: Duration) -> None:
+        """The answer to each CASIC frame from now on comes `duration` after its last byte."""
+        if not isinstance(duration, Duration):
+            raise TypeError(f"gnss.answer_after: {duration!r} is not a Duration, as ms(1.5)")
+        if duration.ns < 0:
+            raise ModelError(f"gnss.answer_after: {duration} is less than 0")
+        with self._lock:
+            self._answer_after = duration.ns
+
+    @property
+    def casic_frames(self) -> Sequence[CasicFrame]:
+        """Each CASIC frame the receiver heard, with its answer, in the order it heard them: once
+        its last byte has arrived, from the first turn at or after that, before the test's hold
+        (`arrive`)."""
+        return History(self._frames, lock=self._lock)
 
     @property
     def position(self) -> Position | None:
@@ -219,30 +305,105 @@ class GnssReceiver:
     # The link's side: the `Source` of `Uart`.
 
     def receive(self, t: int, data: bytes) -> Iterable[Output]:
-        """The firmware sent `data` at `t`: the receiver hears it, and answers nothing."""
-        return ()
+        """The firmware wrote `data` at `t`, which reaches the receiver a byte every character
+        time at the route's baud, after what it wrote before: each CASIC frame it completes is
+        heard when its last byte has arrived, and answered `answer_after` later, from `poll`.
+        Without power the receiver hears nothing; silent, it hears the frames and answers none."""
+        with self._lock:
+            if not self._supplied:
+                return ()
+            start = max(t, self._line_free)
+            self._line_free = start + _char_ns(len(data), self._baud)
+            before = len(self._heard)
+            self._heard += data
+            for cls, id, payload, valid, end in self._frames_heard():
+                at = start + _char_ns(end - before, self._baud)
+                answer: CasicAnswer | None = None
+                if self._state.talking:
+                    answer = "nak" if not valid or (cls, id) in self._refused else "ack"
+                    reply = ACK_ACK if answer == "ack" else ACK_NAK
+                    frame = casic(ACK, reply, bytes((cls, id, 0, 0)))
+                    self._answers.append((at + self._answer_after, frame))
+                self._arriving.append(CasicFrame(Duration(at), cls, id, payload, answer))
+            return ()
+
+    def arrive(self, now: int) -> None:
+        """The frames whose last byte has arrived by `now` go into `casic_frames`, at the start
+        of the turn at `now`, before the test's hold, so that the test holding it sees them."""
+        with self._lock:
+            self._hear(now)
+
+    def _hear(self, now: int) -> None:
+        """The frames whose last byte has arrived by `now` go into `casic_frames`."""
+        while self._arriving and self._arriving[0].at.ns <= now:
+            self._frames.append(self._arriving.pop(0))
+
+    def _frames_heard(self) -> list[tuple[int, int, bytes, bool, int]]:
+        """The CASIC frames complete in what the receiver heard, each with whether its checksum
+        holds and where it ends, counted in bytes from the start of `_heard` before this call,
+        taken out of it; what lies before a frame's header is dropped, and so is a header whose
+        length is more than `CASIC_MAX_PAYLOAD`, up to the next `0xBA`."""
+        heard = self._heard
+        frames: list[tuple[int, int, bytes, bool, int]] = []
+        dropped = 0
+        while True:
+            start = heard.find(CASIC_HEADER)
+            if start < 0:
+                # A last 0xBA may be the start of a header.
+                del heard[: len(heard) - 1 if heard.endswith(CASIC_HEADER[:1]) else len(heard)]
+                return frames
+            del heard[:start]
+            dropped += start
+            if len(heard) < CASIC_HEAD:
+                return frames
+            length = int.from_bytes(heard[2:4], "little")
+            if length > CASIC_MAX_PAYLOAD:
+                del heard[:1]
+                dropped += 1
+                continue
+            end = CASIC_HEAD + length + CASIC_CHECKSUM
+            if len(heard) < end:
+                return frames
+            cls, id = heard[4], heard[5]
+            payload = bytes(heard[CASIC_HEAD : CASIC_HEAD + length])
+            checksum = int.from_bytes(heard[end - CASIC_CHECKSUM : end], "little")
+            valid = checksum == casic_checksum(cls, id, payload)
+            frames.append((cls, id, payload, valid, dropped + end))
+            del heard[:end]
+            dropped += end
 
     def poll(self, now: int) -> Iterable[Output]:
-        """The epochs due at `now`, each at its own time; none while the receiver is silent or
-        without power."""
+        """The epochs and the answers due at `now`, each at its own time; none while the
+        receiver is silent or without power."""
         with self._lock:
             outputs = []
             for t in self._due(now):
                 if self._state.talking and self._supplied:
                     outputs.append((t, self.epoch(t)))
             self.sent += len(outputs)
-            return outputs
+            self._hear(now)
+            due = [answer for answer in self._answers if answer[0] <= now]
+            self._answers = [answer for answer in self._answers if answer[0] > now]
+            return sorted(outputs + due, key=lambda output: output[0])
 
     def quiet_until(self) -> int | None:
-        """The time of the next epoch; `None` while the receiver is silent or without power,
-        which it can stop being only in a turn the test holds, before the link polls it, and
-        `resume` and `supply` move the next epoch past the silence."""
+        """The time of the next epoch or answer, whichever comes first; `None` while the receiver
+        is silent or without power, which it can stop being only in a turn the test holds, before
+        the link polls it, and `resume` and `supply` move the next epoch past the silence."""
         with self._lock:
-            return self._next if self._state.talking and self._supplied else None
+            if not (self._state.talking and self._supplied):
+                return None
+            due = [answer[0] for answer in self._answers]
+            due += [frame.at.ns for frame in self._arriving]
+            if self._next is not None:
+                due.append(self._next)
+            return min(due, default=None)
 
     def latency(self) -> int | None:
-        """`None`: the receiver answers nothing."""
-        return None
+        """`answer_after`, how soon the receiver answers a CASIC frame; `None` while it is silent
+        or without power, when it answers none."""
+        with self._lock:
+            return self._answer_after if self._state.talking and self._supplied else None
 
     def _due(self, now: int) -> list[int]:
         if self._next is None:
@@ -293,6 +454,34 @@ def sentence(body: str) -> bytes:
     return line
 
 
+def _char_ns(count: int, baud: int) -> int:
+    """How long `count` characters take on the line at `baud`, 10 bits each, as 8N1, rounded
+    down as the runner rounds them."""
+    return count * 10 * NS_PER_S // baud
+
+
+def casic_checksum(cls: int, id: int, payload: bytes) -> int:
+    """A CASIC frame's checksum, as the specifications compute it: `(id << 24) + (cls << 16) +
+    len(payload)`, plus each of the `len(payload) // 4` little-endian 32-bit words of the
+    payload, modulo 2³². A payload is a multiple of 4 bytes; the bytes past the last whole word
+    of one that is not count only in its length."""
+    checksum = (id << 24) + (cls << 16) + len(payload)
+    for i in range(0, len(payload) - 3, 4):
+        checksum += int.from_bytes(payload[i : i + 4], "little")
+    return checksum & 0xFFFF_FFFF
+
+
+def casic(cls: int, id: int, payload: bytes) -> bytes:
+    """The CASIC frame of class `cls` and id `id` carrying `payload`, with its checksum."""
+    return (
+        CASIC_HEADER
+        + len(payload).to_bytes(2, "little")
+        + bytes((cls, id))
+        + payload
+        + casic_checksum(cls, id, payload).to_bytes(4, "little")
+    )
+
+
 def angle(degrees: float, digits: int, positive: str, negative: str) -> str:
     """`degrees` as NMEA's ddmm.mmmmm, or dddmm.mmmmm with `digits` 3, then its hemisphere's
     letter: minutes to five decimals, rounded half to even, a centimetre or two on the ground."""
@@ -308,6 +497,14 @@ def _hdop(value: float, what: str) -> float:
     if not MIN_HDOP <= hdop <= NO_FIX_HDOP:
         raise ModelError(f"{what}: hdop is {value!r}, not from {MIN_HDOP} to {NO_FIX_HDOP}")
     return hdop
+
+
+def _byte(value: int, what: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{what} is {value!r}, not a whole number")
+    if not 0 <= value <= 0xFF:
+        raise ModelError(f"{what} is {value}, not from 0 to 255")
+    return value
 
 
 def _satellites(value: int, what: str) -> int:

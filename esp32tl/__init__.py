@@ -155,6 +155,7 @@ from esp32tl.sources.model import Model as Model
 from esp32tl.sources.model import ReactiveModel as ReactiveModel
 from esp32tl.sources.model import Timed as Timed
 from esp32tl.sources.model import TimedAtRate as TimedAtRate
+from esp32tl.sources.model.gnss import CasicFrame as CasicFrame
 from esp32tl.sources.model.gnss import GnssReceiver as GnssReceiver
 from esp32tl.sources.model.gnss import ModelError as ModelError
 from esp32tl.sources.model.modem import ModeChange as ModeChange
@@ -201,6 +202,7 @@ __all__ = [
     "CardFault",
     "CardImage",
     "CardImageBuilder",
+    "CasicFrame",
     "CertificateAuthority",
     "ChannelEvent",
     "ClientResponse",

@@ -319,6 +319,33 @@ esp32tl-runner: chip reset at 2.069211 s, cause 0x5
 PROBE boot=3 reset=5 wake=4 STATE0=0x00000000 SLEEP_EN=0 DIG_PWC=0xc0020000 DG_WRAP_PD_EN=1
 ```
 
+## CASIC answers of an L76K
+
+On 2026-11-25, `tools/casic_probe` ran on a LilyGO T-A7670G R2 (ESP32 rev. 3.1) and the L76K on
+its `uart.gnss` route (UART2, 9600 8N1), whose `$PCAS06,0` gave `SW=URANUS5,V5.3.0.0`, indoors
+and without a fix. It wrote CASIC frames to the receiver and stamped what came back, a byte at a
+time, against the end of each write (`uart_wait_tx_done`); the console, without its NMEA, is in
+`tools/casic_probe/l76k.txt`. What esp32tl's GNSS receiver model answers follows from it
+([models](features/models-user.md#what-it-hears)).
+
+| Frames written | Answer, every time | First byte of the answer after the write's end |
+|---|---|---|
+| CFG-PRT query `BA CE 00 00 06 00 00 00 06 00`, 20 | Two CFG-PRT frames, then ACK-ACK `BA CE 04 00 05 01 06 00 00 00 0A 00 05 01` | 40.03 to 40.09 ms in the gap after an epoch's sentences; 110 to 239 ms when written during them |
+| The same with a bad checksum, 5 | ACK-NAK `BA CE 04 00 05 00 06 00 00 00 0A 00 05 00` | 2.586 to 2.632 ms |
+| CFG `0x06 0x7F`, which the specifications do not define, 3 | ACK-NAK | 2.587 to 2.656 ms |
+| Two CFG-PRT queries in one write, 3 | Each its two CFG-PRT frames and ACK-ACK | |
+| AID-INI, 56 bytes, nothing valid, 5; with the receiver's own GPS time valid, 5 | ACK-ACK `BA CE 04 00 05 01 0B 01 00 00 0F 01 05 01` | 2.573 to 2.623 ms; once 374 ms, written during an epoch |
+| AID-INI with a bad checksum, 3 | ACK-NAK `BA CE 04 00 05 00 0B 01 00 00 0F 01 05 00` | 2.572 to 2.573 ms |
+| MSG-GPSEPH, 72 zero bytes, 3 | ACK-ACK `BA CE 04 00 05 01 08 07 00 00 0C 07 05 01` | 2.575 to 2.576 ms |
+
+A byte is stamped once it has been received, 1.042 ms of line time after its start bit at 9600
+baud, so the answers started about 1.53 ms after the frame's last stop bit. Written while the
+receiver was sending an epoch's sentences, a frame was answered only after the last of them, the
+`$GPTXT` that ends the epoch: in the example at 28.23 s of the log, the query's write ended during
+`$GNZDA`, and the answer came after the `$GPTXT` that followed. Every frame was answered, and
+each answer named the frame's class and id, then two zero bytes. The probe sends no command that
+saves the receiver's configuration: no CFG-CFG, `$PCAS00` or CFG-RST.
+
 ## Reproducing
 
 Build in the ESP-IDF v5.3.6 container from the table above. For an example, copy it out of
@@ -418,3 +445,24 @@ runner/target/release/esp32tl-runner --chip esp32 \
   --flash-at 0x8000=$B/partition_table/partition-table.bin \
   --flash-at 0x10000=$B/sleep_reset_probe.bin --max-seconds 15
 ```
+
+### CASIC probe (#333)
+
+Build `tools/casic_probe` for the classic ESP32 in the v5.3.6 container, flash a LilyGO T-A7670G
+whose L76K is fitted, and record its console from an EN reset, with `PORT` the board's serial
+port. `capture.py` resets the chip through RTS, writes the whole console to the file and prints
+all but the NMEA; the run ends with `casic_probe: done` after about 100 s. Power-cycle the board
+afterwards, to drop the AID-INI the receiver was given.
+
+```sh
+docker run --rm -v "$PWD":/project -w /project/tools/casic_probe <image> \
+  idf.py -B build-probe -D SDKCONFIG=build-probe/sdkconfig set-target esp32 build
+(cd tools/casic_probe/build-probe &&
+  ../../../.venv/bin/python -m esptool --chip esp32 --port "$PORT" -b 460800 write-flash @flash_args)
+.venv/bin/python -I tools/casic_probe/capture.py "$PORT" casic-probe.log 180
+grep -E '^(RESULT|CASIC) ' casic-probe.log
+```
+
+Each `RESULT <case> <i> <answer> <after> <busy>` line says whether the frame got ACK-ACK, ACK-NAK
+or nothing within 1.5 s, the microseconds from the end of the write to the answer's first byte,
+and whether the receiver was sending NMEA when the write ended.
