@@ -49,7 +49,8 @@ class TcpConnection:
 
     `state` is `"connecting"` until the device answers, then `"established"`, and at the end
     `"closed"` (both ends closed), `"refused"` (the device answered the SYN with a RST), `"reset"`
-    (a RST later), `"lost"` (the link went down, or the device reset or lost its power) or
+    (a RST later), `"lost"` (the link went down, the device reset or lost its power, or 15
+    retransmissions went unacknowledged) or
     `"timed out"` (no answer to any of its SYNs). `syns` holds when each SYN went, and `received`
     every byte the device sent, in order. Calls run while the board is held; the network calls
     back during the board's turns."""

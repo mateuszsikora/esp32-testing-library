@@ -90,12 +90,13 @@ EndCause = Literal["disconnect", "keepalive", "takeover", "closed", "malformed",
 class ConnectionEnd:
     """How and when this connection ended, on the board's time.
 
-    One for each accepted connection, the one of `MqttClient` with the same `connection_id`, once
-    it has ended. `by` says how: `"disconnect"` the client's DISCONNECT, `"keepalive"` 1.5 times its
+    One for each accepted connection, the one of `MqttClient` with the same `connection_id`, once it
+    has ended. `by` says how: `"disconnect"` the client's DISCONNECT, `"keepalive"` 1.5 times its
     keepalive with nothing from it, `"takeover"` a CONNECT with the same client ID on another
-    connection, `"closed"` its stream closing under it (the device's FIN or RST, `ip.reset`, the
-    TLS layer under it closing), `"malformed"` a packet the broker could not take, `"test"`
-    `Broker.disconnect`. `will_sent` is whether the broker published the connection's Will then.
+    connection, `"closed"` its stream closing under it (the device's FIN or RST, `ip.reset`, the TLS
+    layer under it closing, the network's TCP giving up after 15 retransmissions), `"malformed"` a
+    packet the broker could not take, `"test"` `Broker.disconnect`. `will_sent` is whether the
+    broker published the connection's Will then.
     """
 
     at: Duration

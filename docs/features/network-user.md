@@ -283,7 +283,7 @@ assert packet.at - client.at <= seconds(client.keepalive)
 | `"disconnect"` | the client's DISCONNECT; the log has `mqtt: <id> sent DISCONNECT` | never |
 | `"keepalive"` | 1.5 times its keepalive with no packet from the client; `mqtt: <id> keepalive expired` | sent |
 | `"takeover"` | a CONNECT with the same client ID on another connection; `mqtt: <id> (connection <new>) took over connection <old>` | sent, unless both keep the session and the old keepalive has not run out ([a lost link](#a-lost-link-and-the-will)) |
-| `"closed"` | its stream closing under it: the device's FIN or RST, `ip.reset`, the TLS layer under it closing | sent |
+| `"closed"` | its stream closing under it: the device's FIN or RST, `ip.reset`, the TLS layer under it closing, the network's TCP giving up after 15 retransmissions unacknowledged ([what goes again](#what-the-devices-stack-drops-goes-again)) | sent |
 | `"malformed"` | a packet the broker could not take; `mqtt: malformed or unsupported packet, closing`, or no line for a remaining length over 1 MiB or encoded in more than four bytes | sent |
 | `"test"` | `broker.disconnect(client_id)`; `mqtt: <id> disconnected by the test` | sent |
 
@@ -658,7 +658,69 @@ The firmware's own timers can outrun a path: lwIP retransmitted segments at an R
 the network answers each with an acknowledgement. Over a path whose rate is too low for what it
 carries, a client's timeouts can fire before a message has got through: the path has no queue limit
 and loses nothing, so each retransmission only adds to what it has to carry. esp-mqtt's
-`network.timeout_ms` is 10 s by default.
+`network.timeout_ms` is 10 s by default. The network's TCP has an RTO of its own, at least 1 s
+([below](#what-the-devices-stack-drops-goes-again)): over such a path it can send again what is
+still on its way, as a real server's TCP does.
+
+### What the device's stack drops goes again
+
+The path loses nothing, but the device's own stack does. lwIP keeps a segment its application has
+not taken yet, its mailbox of 6 being full, and drops every segment with data that comes behind it
+until the application catches up, with no ACK; it also drops what it has no buffer for. A firmware
+that reads more slowly than the network writes so loses segments: an MQTT client that gets a burst
+of queued messages after reconnecting, an OTA download that writes flash between reads.
+Behind the modem the UART, at 115200 baud, takes bytes to the device more slowly than
+`firmware/mqtt_session` reads and prints them: a burst of 128 queued messages of 200 bytes is
+delivered once and acknowledged
+(`tests/test_mqtt_session.py::test_a_burst_of_queued_qos1_messages_is_delivered_and_acknowledged`),
+and in trials that burst and one of 256 messages of 900 bytes went with nothing sent again.
+
+The network's TCP keeps what it sent until the device acknowledges it, and when its retransmission
+timeout (RTO) runs out with something unacknowledged, it sends one segment again from the first
+byte the device has not acknowledged, doubles the RTO, and with each ACK of the device's lets
+what it acknowledged and a segment more of the rest go again, as a real server's slow start does:
+what was unacknowledged comes back doubling per round trip. The stream then goes on in order. Each
+retransmission is a line in the transcript:
+
+```text
+net: TCP 203.0.113.153:1883 → 10.64.0.2:4000: sent again 11 bytes from sequence 65542, the 1st time, after an RTO of 1 s
+```
+
+`and its FIN` follows the bytes when the FIN went again too; one that an ACK let go ends `after the
+device's ACK of sequence 65542` instead. The bytes are those of the first transmission: the
+transcript's stream of the connection, the device's or the test's, has them once. The 15 below
+count RTOs: what an ACK lets go counts toward none, so a stall can show more than 15 `sent again`
+lines.
+
+| | Value |
+|---|---|
+| The RTO before the first measured round trip | 1 s |
+| The RTO after it | from the measured round trip (RFC 6298), at least 1 s |
+| The most an RTO doubles to | 120 s |
+| Retransmissions before the connection times out | 15 |
+
+At least 1 s, so that lwIP's delayed ACK, up to 250 ms, sends nothing again; the path's `rtt`
+counts once the round trip it gives is long enough. When the SYN or the SYN-ACK went twice, the
+handshake measured nothing, and the RTO starts at 3 s. An RTO can still run out before a late ACK:
+with `firmware/mqtt_session` at `rtt=ms(600)`, lwIP held its ACK of a PUBACK behind its next report
+for more than 1 s, and the network sent that PUBACK again at the RTO, as any server would, and the
+PUBACK behind it after the ACK, which F-RTO, the check of Linux that tells a spurious RTO apart,
+would have spared. A device that acknowledges nothing gets the
+same bytes 1, 3, 7, 15, 31, 63, 127 and 247 s after they first went, and then every 120 s; the
+RTO after the 15th, 1207 s after the first transmission, ends the connection. The transcript then
+logs `net: TCP 10.64.0.2:4000 → 203.0.113.153:1883 timed out: 15 retransmissions unacknowledged`
+for the device's connection, whose service sees it close (the broker records `"closed"`), and
+`lost: its 15 retransmissions went unacknowledged` for one the test opened, whose `state` is
+`"lost"`. A service's own deadline, as the broker's keepalive, usually ends it first. A device
+whose window stays zero, but which answers each RTO's byte, keeps its connection: its answer counts
+the retransmissions from 0 again, and the transcript counts the probes instead, as `sent again 1
+byte from sequence 65537, the 20th probe of a zero window, after an RTO of 120 s`.
+
+There is no fast retransmit, congestion control or SACK: lwIP sends no duplicate ACK for what it
+drops, so the RTO is what recovers it. While a connection waits for the path, for a blocked port
+or for the link ([below](#drop-every-datagram-and-restore-the-path)), its RTO is stopped, and it
+starts again when the wait ends. A connection whose device stack is gone, after a reset or the
+end of its link, gets nothing again.
 
 ### Drop every datagram, and restore the path
 
@@ -686,15 +748,18 @@ transcript logs each datagram dropped, as
 
 What the network's own TCP has to send waits while the path drops, and goes at the restore: a
 PUBLISH from `broker.publish`, a bridged service's bytes, the FIN of a connection the broker's
-keepalive closed. That is what a real network's retransmission would deliver; this TCP sends
-nothing again by itself but the SYN of a connection the test opened, which goes on its schedule
-into the black hole too, dropped, until one goes after the restore ([Open a TCP
-connection](#open-a-tcp-connection-to-the-device)). Two cases
+keepalive closed. That is what a real network's retransmission would deliver, without its
+backoff: the RTO of what the network's TCP sent before is stopped in the black hole, and starts
+again at the restore, so nothing goes into the black hole on an RTO and no retransmission counts
+there ([what goes again](#what-the-devices-stack-drops-goes-again)). The SYN of a connection the
+test opened goes on its schedule into the black hole too, dropped, until one goes after the restore
+([Open a TCP connection](#open-a-tcp-connection-to-the-device)). Two cases
 it would otherwise never get past are covered:
 
 - At the restore, each connection with bytes or a FIN unacknowledged or waiting gets one probe, a
   keepalive's empty ACK from one byte back (RFC 9293, 3.8.4). The device answers it with its ACK
   and its window, which the black hole may have swallowed, and what waited for room goes then.
+  The probe is no retransmission: it counts toward none of the 15.
   Behind a virtual station with no lease at the restore, the probe goes once it has one again.
 - A SYN that was on its way up when the path began to drop is accepted, and its SYN-ACK dropped.
   The device's SYN again on the same ports gets the SYN-ACK again, logged
@@ -1025,7 +1090,7 @@ writes before the device accepts a connection waits for the handshake.
 | `write(data)` | Send bytes, or `str` as UTF-8: now, once the connection is established and the device's window has room, else as soon as it does |
 | `close()` | Close the test's end, a FIN after what was written; a second call, or one after the connection ended, does nothing |
 | `received`, `text` | Every byte the device sent so far, in order; the same as UTF-8 with replacement |
-| `state` | `"connecting"`, `"established"`, then `"closed"` (both ends closed), `"refused"` (a RST answered the SYN), `"reset"` (a RST later), `"lost"` (the link went down, or the device's chip reset or lost its power) or `"timed out"` (none of its 7 SYNs got an answer, 127 s after the first) |
+| `state` | `"connecting"`, `"established"`, then `"closed"` (both ends closed), `"refused"` (a RST answered the SYN), `"reset"` (a RST later), `"lost"` (the link went down, the device's chip reset or lost its power, or [15 retransmissions](#what-the-devices-stack-drops-goes-again) went unacknowledged) or `"timed out"` (none of its 7 SYNs got an answer, 127 s after the first) |
 | `syns` | When each SYN went, a list of `Duration`: the first at `connect`, then each one sent again, until the device answered or the connection ended |
 | `unanswered()` | While the connection is `"connecting"`, what its SYNs got: each one sent again got no answer in its RTO, and the last has had none so far, as `the SYN at 1.032 s has had no answer in 0.5 s (no SYN-ACK, no RST)`, `the SYN at 1.032 s got no answer (no SYN-ACK, no RST), and the SYN at 2.032 s has had none in 0.25 s`, or `..., and the SYN at 2.032 s has just gone` at the instant it went; `None` once the device answered or the connection ended |
 | `established` | Condition returning when the device accepted the connection, a `Duration` |
@@ -1107,9 +1172,11 @@ The test's side is `10.64.0.1`, from ephemeral ports counted from 49152 and neve
 network's life, and its initial sequence number is fixed, so runs repeat. It offers an MSS of 1400
 and no other option, takes the device's MSS up to 1400 (536 when it offers none), and respects the
 device's window: a zero window holds what the test wrote until the device announces room, and
-nothing probes it but the restore of the path after a black hole ([Drop every
-datagram](#drop-every-datagram-and-restore-the-path)). It sends nothing again but its SYN, keeps no
-timer but the SYN's, and has no TIME_WAIT. A segment from the device ahead of its stream, which a link that loses nothing
+nothing probes it but the RTO, with 1 byte, while bytes the device has not acknowledged are out,
+and the restore of the path after a black hole ([Drop every
+datagram](#drop-every-datagram-and-restore-the-path)). It sends again its SYN, and what the device
+has not acknowledged when the RTO runs out ([what goes again](#what-the-devices-stack-drops-goes-again)),
+and has no TIME_WAIT. A segment from the device ahead of its stream, which a link that loses nothing
 cannot produce, fails the run: the transcript logs `net: TCP 10.64.0.1:49152 → 10.64.0.2:80: the
 device sent sequence 5, 4 bytes ahead of 1, which a link that loses nothing cannot produce`, and
 behind the access point the link's error is `wifi.receive raised OutOfOrder: ` and that line. Losing
@@ -1672,8 +1739,8 @@ A receive FIFO overflow on the modem's route immediately fails with
 `uart.modem: UART receive overflow (rxfifo_ovf) on GPIO 27: the simulated network requires a lossless route`.
 Other routes retain their existing overflow policy; frame errors remain fatal everywhere.
 The simulated TCP accepts connections and [opens the test's](#open-a-tcp-connection-to-the-device),
-but sends nothing again except the SYN of a connection the test opened, and does not recover
-packet loss. The path
+and sends again the SYN of a connection the test opened and, on its RTO, what the device's stack
+dropped ([what goes again](#what-the-devices-stack-drops-goes-again)). The path
 loses nothing ([packet loss is postponed](../decisions/harness.md#packet-loss-on-the-network-path-is-postponed)).
 Malformed packets are discarded or their application connection is closed; events help explain
 why the firmware stopped progressing. The test's `within=` and wall-time timeout still bound waits.
@@ -1819,4 +1886,4 @@ chips, WPA3-SAE, required PMF and hidden SSIDs are not supported. Renewal needs 
 machine; the radio features need esp32sim support. See the
 [decision](../decisions/harness.md#a-test-joins-the-devices-access-point-through-esp32sims-virtual-station-with-the-harness-as-the-host-behind-it).
 
-A virtual station waits for the Wi-Fi data link before starting DHCP. No DHCP retries run while disconnected. Rejoining starts a fresh exchange with the initial 4 s retry interval; it does not inherit the power-on backoff. Disconnection invalidates `network.lease`, ARP and queued traffic and marks the TCP connections the test opened lost. The device, the access point here, keeps its own stack when the station leaves: its connections stay as they were, and what a service writes or closes while the station is away waits for it, and reaches the device in order, its FIN last, once the station holds a lease again; one still in its handshake is dropped, as its SYN-ACK is not sent again, and so is one with bytes or a FIN the device had not acknowledged when the station left, or whose FIN it acknowledged without sending its own, as this TCP sends nothing again and has no timer. Reset and power cycling follow the same rule for the test's connections, and leave the device's open until their service gives up, as [behind the modem](#a-lost-link-and-the-will).
+A virtual station waits for the Wi-Fi data link before starting DHCP. No DHCP retries run while disconnected. Rejoining starts a fresh exchange with the initial 4 s retry interval; it does not inherit the power-on backoff. Disconnection invalidates `network.lease`, ARP and queued traffic and marks the TCP connections the test opened lost. The device, the access point here, keeps its own stack when the station leaves: its connections stay as they were, and what a service writes or closes while the station is away waits for it, and reaches the device in order, its FIN last, once the station holds a lease again; one still in its handshake is dropped, as its SYN-ACK is not sent again, and so is one with bytes or a FIN the device had not acknowledged when the station left, or whose FIN it acknowledged without sending its own, as the retransmission timer is stopped while the station is away and no timer gives up waiting for that FIN. Reset and power cycling follow the same rule for the test's connections, and leave the device's open until their service gives up, as [behind the modem](#a-lost-link-and-the-will).

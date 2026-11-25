@@ -303,3 +303,39 @@ def test_a_blocked_broker_port_drops_or_refuses_while_dns_answers(
     client = board.wait_until(reconnected, within=seconds(30))
     assert client.connection_id == 2
     assert board.link.warnings == []
+
+
+# 8 times the 16 messages a consumer saw stall esp-mqtt over TLS. Queued while the device was
+# offline, the burst goes right after CONNACK, each message a segment of its own, as far as the
+# device's window allows. On this route it never stalled, up to 256 messages of 900 bytes, and in
+# those trials the network's TCP sent nothing again: the modem's UART, at 115200 baud, takes about
+# 11.5 kB/s to the device, slower than the firmware reads and prints, so lwIP's recvmbox never
+# filled.
+BURST, BURST_SIZE = 128, 200
+
+
+def test_a_burst_of_queued_qos1_messages_is_delivered_and_acknowledged(
+    board: Esp32Sim, modem: Modem, broker: Broker, console: Console
+) -> None:
+    connected(board, broker)
+    reconnected = broker.next_connection()
+    assert broker.disconnect(CLIENT)
+    payloads = [f"burst {n:03d} ".ljust(BURST_SIZE, "x") for n in range(1, BURST + 1)]
+    retained = "retained".ljust(BURST_SIZE, "r")
+    broker.publish(COMMANDS, retained, qos=1, retain=True)
+    for payload in payloads:
+        broker.publish(COMMANDS, payload, qos=1)
+    last = console.line(rf"data dup=0 qos=1 id=\d+ topic=session/commands payload={payloads[-1]}")
+    board.wait_until(reconnected, within=seconds(30))
+    board.wait_until(last, within=seconds(60))
+    board.wait(seconds(2))
+    for payload in payloads:
+        [delivery] = [d for d in broker.deliveries if d.text == payload]
+        assert not delivery.dup and delivery.acknowledged_at is not None
+    # Queued, and again as the retained message each SUBSCRIBE matches: every one acknowledged.
+    again = [d for d in broker.deliveries if d.text == retained and d.connection_id == 2]
+    assert again and all(not d.dup and d.acknowledged_at is not None for d in again)
+    state = broker.session(CLIENT)
+    assert state is not None and state.queued == () and state.unacknowledged == ()
+    assert [end.by for end in broker.connection_ends] == ["test"]
+    assert board.link.warnings == []

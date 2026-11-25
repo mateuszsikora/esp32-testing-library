@@ -398,3 +398,36 @@ def test_a_wrong_block_is_refused_and_changes_nothing(
         call(net)
     assert str(refused.value) == message
     assert net.ip.blocked == {}
+
+
+# The RTO of what the device's stack dropped, held by the path or a blocked port.
+
+S = 1_000_000_000
+
+
+@pytest.mark.parametrize("hold", ["black hole", "blocked port"])
+def test_the_rto_stops_in_a_hold_and_starts_again_at_its_end(hold: str) -> None:
+    wire, peer = subscribed()
+    net = wire.net
+    net.broker.publish("a/b", "x")
+    net.poll(wire.now)  # the PUBLISH goes, and the device's stack drops it
+    assert net.ip.quiet_until() == wire.now + S
+    if hold == "black hole":
+        net.set_path(drop=True)
+    else:
+        net.block(1883, how="drop")
+    assert net.ip.quiet_until() is None
+    wire.now = 10 * S
+    wire.poll()
+    assert peer.read() == b""
+    if hold == "black hole":
+        net.set_path()
+    else:
+        net.unblock(1883)
+    wire.poll()  # the probe, which Peer does not answer
+    assert net.ip.quiet_until() == 11 * S
+    wire.now = 11 * S
+    wire.poll()
+    assert peer.read() == b"\x30\x06\x00\x03a/bx"
+    again = [line for line in lines(net) if "sent again" in line]
+    assert len(again) == 1 and again[0].endswith("the 1st time, after an RTO of 1 s")

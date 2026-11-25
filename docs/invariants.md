@@ -1338,7 +1338,7 @@ that references to its number keep their meaning.
     `tests/test_net_ppp.py::test_renegotiation_and_termination_invalidate_old_acknowledgments`
 - **91.** TCP honors the peer's receive window and MSS, delivers a retransmitted payload once, wraps
     sequence numbers, and notifies connection loss once. For the connections the test opens, see
-    225 and 226.
+    225 and 226; for what the network's TCP sends again, see 302.
     `tests/test_net_ip.py::test_tcp_handshake_data_duplicate_flow_control_fin_and_wrap`,
     `tests/test_net_ip.py::test_reset_notifies_once_and_unbound_port_refuses`
 - **92.** MQTT Will is emitted once on connection loss at the loss time, never after DISCONNECT.
@@ -2720,3 +2720,42 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_uart_rates.py::test_a_model_that_raises_on_its_frame_errors_fails_the_run`,
   `tests/test_uart_rates.py::test_after_a_power_loss_the_firmware_searches_for_the_part_s_rate`,
   `tests/test_uart_rates.py::test_the_same_part_without_frame_errors_fails_the_search`
+
+## What the device does not acknowledge
+
+- **302.** A segment the device does not acknowledge goes again on its RTO, on the board's clock:
+  1 s before an RTT sample, 3 s when the SYN or SYN-ACK went twice and gave none, then RFC 6298's
+  SRTT + 4 RTTVAR from segments sent once, at least 1 s, doubling with each retransmission up to
+  120 s. At the RTO one segment goes from the first byte unacknowledged, or 1 byte into a zero
+  window, and each ACK that moves `snd_una` lets what it acknowledged and a segment more of what
+  was unacknowledged go, its FIN behind the last byte; what the service writes meanwhile goes at
+  once and is not sent again in that recovery. The 15 count RTOs, and an ACK of a zero window that
+  moves nothing counts them from 0 again. The stream goes on in order; an ACK of part restarts the timer and an
+  ACK of all stops it. `Network.quiet_until` names each deadline.
+  After 15 retransmissions unacknowledged the RTO after the last ends the connection, `timed out:
+  15 retransmissions unacknowledged` for the device's, `lost` with `its 15 retransmissions went
+  unacknowledged` for the test's, whose `on_sent` saw the bytes once. A flow held by a port blocked
+  with `drop` or by a link that carries no IP sends nothing again and its timer starts again at the
+  release, where the probe counts as no retransmission; an orphaned flow keeps no timer. Two runs
+  send the same segments at the same times, and each retransmission is one line in the transcript.
+  On `mqtt_session`, a burst of 128 queued QoS 1 messages is delivered once and acknowledged.
+  `tests/test_net_ip.py::test_a_segment_the_device_drops_goes_again_one_rto_later_and_the_stream_goes_on`,
+  `tests/test_net_ip.py::test_an_ack_of_everything_stops_the_timer_and_nothing_goes_again`,
+  `tests/test_net_ip.py::test_an_ack_of_part_restarts_the_timer_from_the_ack`,
+  `tests/test_net_ip.py::test_the_rto_doubles_with_each_retransmission_up_to_its_limit`,
+  `tests/test_net_ip.py::test_a_device_that_never_acknowledges_times_out_after_the_last_retransmission`,
+  `tests/test_net_ip.py::test_a_fin_unacknowledged_goes_again_behind_the_data`,
+  `tests/test_net_ip.py::test_the_rto_follows_the_measured_rtt_and_a_retransmission_is_not_measured`,
+  `tests/test_net_ip.py::test_a_held_flow_retransmits_nothing_and_its_timer_starts_again_at_the_release`,
+  `tests/test_net_ip.py::test_a_black_hole_stops_the_timer_until_the_link_carries_again`,
+  `tests/test_net_ip.py::test_an_orphaned_flow_keeps_no_timer`,
+  `tests/test_net_ip.py::test_a_connection_the_test_opened_goes_again_once_and_is_lost_when_never_acknowledged`,
+  `tests/test_net_ip.py::test_two_runs_retransmit_the_same_segments_at_the_same_times`,
+  `tests/test_net_ip.py::test_after_an_rto_each_ack_lets_go_what_it_acknowledged_and_a_segment_more`,
+  `tests/test_net_ip.py::test_a_device_that_answers_each_rto_with_a_zero_window_keeps_its_connection`,
+  `tests/test_net_ip.py::test_what_the_service_writes_in_a_recovery_goes_at_once_and_is_not_sent_again_in_it`,
+  `tests/test_net_ip.py::test_an_rto_on_a_zero_window_sends_one_byte`,
+  `tests/test_net_ip.py::test_a_fin_goes_again_only_once_every_byte_before_it_has`,
+  `tests/test_net_ip.py::test_data_starts_with_an_rto_of_3_s_when_the_handshake_went_twice`,
+  `tests/test_net_drop.py::test_the_rto_stops_in_a_hold_and_starts_again_at_its_end`,
+  `tests/test_mqtt_session.py::test_a_burst_of_queued_qos1_messages_is_delivered_and_acknowledged`

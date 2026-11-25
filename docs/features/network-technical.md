@@ -127,7 +127,9 @@ does not parse is `<n> bytes`. The link's own frames never pass through `_uplink
 LCP, IPCP, ARP, DHCP and the virtual station's own DHCP go on as before.
 
 `_carries` is false while `_drop` is set, so `Network._flush` holds what a flow that is not orphaned
-has to send in `pending`, its FIN behind it, as it does while the link carries no IP; an orphaned
+has to send in `pending`, its FIN behind it, as it does while the link carries no IP, and its
+retransmission timer is stopped ([Retransmission](#retransmission)): nothing goes into the black
+hole on an RTO, and no retransmission is counted there; an orphaned
 flow's output reaches `_downlink` and is dropped, as it would reach no stack. The other segments
 `Network` sends are answers to the device's segments: in a black hole only to those that were on the
 uplink when the path began to drop, an ACK, a UDP answer or a SYN-ACK, which `_downlink` drops; and
@@ -138,7 +140,8 @@ tuple, with `seq + 1 == rcv_nxt`, is answered with the SYN-ACK again, from `ISN`
 (RFC 9293, 3.10.7.4). The service's `accept` ran once, at the first SYN, and is not run again.
 
 A call that clears `_drop` after it was set calls `Network.resume(probe=True)` after logging the
-path, which flushes every flow onto the new path at the board's instant; `_flush` still checks
+path, which restarts the retransmission timer of every flow (`_restart`) and flushes it onto the
+new path at the board's instant; `_flush` still checks
 `_carries`, so a link that is down or a station with no lease keeps holding. Then `resume` calls
 `Network.probe()`, `_probe` on every flow: the device's ACKs and window updates sent into the black
 hole are gone, so `snd_una` and `peer_window` may be stale, and with a full or a zero window
@@ -162,7 +165,8 @@ the same way first, so `unblock(True)` does not reach port 1, raises unless the 
 `blocked`, logs `net: unblock: TCP <port>` and calls `Network.unblock`.
 
 Both end in `Network._release(port, probe=)`, which flushes every flow of the device's whose network
-port is `port`, so a change from `"drop"` sends what was held. Only when the port was `"drop"`
+port is `port`, so a change from `"drop"` sends what was held; when the port was `"drop"` it first
+restarts their retransmission timers (`_restart`), which the block had stopped. Only when the port was `"drop"`
 before the call does it then call `_probe` with those flows, for the ACKs and windows the block
 swallowed: a `block(port, how="refuse")` of a port that was not blocked, or an `unblock` of a
 `"refuse"` port, swallowed nothing and sends no probe.
@@ -250,8 +254,9 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   UDP replies are checked against MRU (including 28 header bytes) before packing; an oversized
   reply is dropped and logged without fragmentation. TCP also handles
   receive sequence wrap, duplicate-data acknowledgments, FIN and reset. It opens connections
-  only for the test ([below](#connections-the-test-opens)), and sends nothing again but the
-  SYN of such a connection. Unbound TCP
+  only for the test ([below](#connections-the-test-opens)), and sends again what the device has
+  not acknowledged when its RTO runs out ([Retransmission](#retransmission)), and the SYN of a
+  connection the test opened. Unbound TCP
   ports return RST; unbound UDP is logged and dropped.
   Connections receive `on_close` once, also on RST, PPP loss and `Internet.stop`. There is no
   ICMP or IPv6. The UDP limit's log line names it `peer MRU` behind the access point too.
@@ -567,14 +572,121 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   describe events across the listener, not the lifecycle of a selected connection.
   Their representations name the desired event, and `__bool__` rejects unevaluated truth tests.
 
-These are a lossless test network, not a general Internet stack. TCP congestion control, packet
-reassembly, retransmission, MQTT QoS 2 and bridging UDP to host services
+These are a test network, not a general Internet stack: its path loses nothing the test does not
+drop, and its TCP sends again only on the RTO. TCP congestion control, fast retransmit, SACK, packet
+reassembly, MQTT QoS 2 and bridging UDP to host services
 are outside this implementation, and so are IPv6, VLANs, DHCP for more than one device, lease
 expiry and HTTP keep-alive or chunked bodies. Protocol references:
 [PPP](https://www.rfc-editor.org/rfc/rfc1661),
 [HDLC framing](https://www.rfc-editor.org/rfc/rfc1662),
 [MQTT 3.1.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html),
 [DHCP](https://www.rfc-editor.org/rfc/rfc2131), [HTTP/1.1](https://www.rfc-editor.org/rfc/rfc9112).
+
+## Retransmission
+
+The link to the device loses and reorders nothing, but the device's stack drops segments that reach
+it. In ESP-IDF v5.3.6 (lwIP `392707e`), `recv_tcp` posts each received pbuf to the netconn's
+`recvmbox`, `CONFIG_LWIP_TCP_RECVMBOX_SIZE` (6) deep, and returns `ERR_MEM` when it is full
+(`components/lwip/lwip/src/api/api_msg.c`). `tcp_input` then keeps that pbuf as the pcb's
+`refused_data` and, while it is there, drops every further segment that carries data, sending no
+ACK unless the window is zero (`components/lwip/lwip/src/core/tcp_in.c`). Before TCP,
+`pppos_input_tcpip` drops what `pbuf_alloc(PBUF_POOL)` has no buffer for, and `tcpip_inpkt` what
+the tcpip mailbox (`CONFIG_LWIP_TCPIP_RECVMBOX_SIZE`, 32) has no room for
+(`components/lwip/lwip/src/netif/ppp/pppos.c`). None of these draws a duplicate ACK, so `Network`
+keeps what it sent until the device acknowledges it, and sends it again when its retransmission
+timeout (RTO) runs out, as RFC 6298 says. Fast retransmit, congestion control and SACK are outside
+it: the RTO is what recovers a segment lwIP dropped.
+
+| Constant in `ip.py` | Value | What it is |
+|---|---|---|
+| `RTO_NS` | 1 s | The RTO before the first RTT sample (RFC 6298, 2.1) |
+| `RTO_MIN_NS` | 1 s | The least RTO (RFC 6298, 2.4). Linux's 200 ms (`TCP_RTO_MIN`) is below lwIP's delayed ACK, which waits for its fast timer (`TCP_TMR_INTERVAL`, 250 ms), so it would send again segments the device only acknowledged late |
+| `RTO_AFTER_SYN_NS` | 3 s | The RTO data starts with when the SYN or SYN-ACK went again and the handshake gave no sample (RFC 6298, 5.7) |
+| `RTO_MAX_NS` | 120 s | The most a doubling RTO reaches (Linux's `TCP_RTO_MAX`; RFC 6298, 2.5, asks for at least 60 s) |
+| `RETRIES` | 15 | Retransmissions unacknowledged before the connection times out (Linux's `tcp_retries2`) |
+
+`_Flow.unacked` holds what went and the device has not acknowledged, from `snd_una`, the FIN
+apart: `_flush` appends each piece as it sends it. `_sending`, before each new piece and before the
+FIN, times it unless a segment is timed already (`timing`, the sequence its ACK reaches and when it
+went) and starts the timer, `rto_at = now + rto`, unless it runs (RFC 6298, 5.1). The SYN-ACK of a
+device flow and the first SYN of a client flow are timed too; the SYN-ACK sent again (`SYN again,
+answered again`) and a SYN sent again leave nothing timed, as their answer could be to either
+(Karn's algorithm).
+
+An ACK above `snd_una`, in `_tcp`, goes through `_acked`: `_sample` takes the RTT when the ACK
+covers `timing`, the ACK's arrival less the time the segment went, then what the ACK covers leaves
+`unacked`, `retries` goes back to 0, and the timer restarts from the ACK, or stops (`rto_at =
+None`) once nothing is left to acknowledge (RFC 6298, 5.2 and 5.3). The client flow's SYN-ACK
+takes its sample in the handshake branch. `_sample` follows RFC 6298, 2.2 and 2.3, in integer
+nanoseconds: the first sample `R` sets SRTT to `R` and RTTVAR to `R / 2`; each later one sets RTTVAR
+to `(3 RTTVAR + |SRTT − R|) / 4`, then SRTT to `(7 SRTT + R) / 8`; the RTO is SRTT + 4 RTTVAR, at
+least `RTO_MIN_NS` and at most `RTO_MAX_NS`. A sample sets the RTO afresh, which ends a backoff.
+The path's `rtt` and rates so reach the RTO once they exceed the 1 s floor: a handshake answered
+3 s after the SYN-ACK gives an RTO of 9 s.
+
+`_rto_due(flow)` is `rto_at`, or `None` while the timer is stopped, while the flow is not
+established, not `_current` or `orphaned`, since no stack that holds it would acknowledge, and
+while it is `_stalled`: on a `"drop"` port (`_held`), or not orphaned while `_carries` is false.
+`Network.quiet_until()` is the earliest of these and of the SYNs' `_syn_due`, and
+`Network.poll()` calls `_retransmit` on each flow whose `_rto_due` has come, before the SYNs.
+`_retransmit` drops the flow once `retries` is already `RETRIES`: a device flow as
+`"unacknowledged"`, logged `net: TCP <device>:<port> → <ours>:<port> timed out: 15 retransmissions
+unacknowledged`, its service told by `on_close`, which the broker records as `"closed"`; a client
+flow as `"lost"` with the reason `UNACKNOWLEDGED`, `its 15 retransmissions went unacknowledged`.
+Otherwise it counts the retransmission, doubles `rto` up to `RTO_MAX_NS` (RFC 6298, 5.5), leaves
+nothing timed, and starts a recovery, as slow start does after an RTO (RFC 5681, 3.1): `cwnd`
+becomes one segment (`_segment_size`, the MSS or the MTU less 40, whichever is less), `recover` the
+end of what `unacked` holds and `recover_fin` whether the FIN went, and `rtx_nxt` goes back to
+`snd_una`. `_resend` then sends again from `rtx_nxt`, through `_segment(..., seq=)`, which moves no
+`snd_nxt`, up to `recover`, while what went again and is unacknowledged stays within `cwnd` and the
+device's window, or 1 byte when that window is zero, which probes it. The FIN goes again once every
+byte before it has gone again in the recovery, so behind a long `unacked` it waits for the ACKs.
+Each ACK that moves `snd_una` during the recovery adds a segment to `cwnd`, moves `rtx_nxt` up to
+the ACK and calls `_resend` again. One ACK so lets out what it acknowledged and a segment more,
+and what was unacknowledged comes back doubling per round trip: what lwIP dropped behind a hole
+comes back in a few round trips, not one RTO at a time. When the RTO was spurious and the ACKs are
+only late, as over a slow path, what was unacknowledged at the RTO still goes again, but paced by
+the device's ACKs rather than at once, and an RTO that runs out again behind those duplicates sends
+one segment, not the window, so the queue on the path does not grow in a cascade. There is no
+F-RTO (RFC 5682), which Linux uses to tell a spurious RTO apart. The recovery ends (`cwnd = None`) once the device acknowledges `recover` and,
+with `recover_fin`, the FIN. What the service writes in the meantime goes in `_flush` as the window
+allows, as before: `cwnd` limits only what goes again.
+
+Each `_resend` that sends anything logs one line,
+`net: TCP <ours>:<port> → <device>:<port>: sent again <n> bytes from sequence <seq>, the <nth>
+time, after an RTO of <rto>` at the RTO, `<rto>` being the RTO that ran out, and `…, after the
+device's ACK of sequence <ack>` for one an ACK let go, and `…, the <nth> probe of a zero window,
+after an RTO of <rto>` at an RTO that found the device's window zero and sent its 1 byte, counted in
+`probes`, apart from `retries`, which the device's answer sets back to 0, and from 0 again once an
+ACK moves `snd_una`; `<n> bytes and its FIN` or `its FIN` when the
+FIN went too, `<seq>` being where it started, on the wire. `_retransmit` then starts the timer with
+the doubled RTO. `retries`, and the 15, count RTOs only: what an ACK lets go counts toward none,
+and an ACK from the device that moves nothing while its window is zero, as its answer to the RTO's
+byte, sets `retries` back to 0, as Linux's persist state does, so a device that is alive but reads
+nothing keeps its connection. From an RTO of 1 s, the retransmissions go 1, 3, 7, 15, 31, 63, 127, 247 s and on
+every 120 s after the first transmission, and the connection times out at 1207 s. What goes again
+was handed to a client's `on_sent`, and recorded in `events`, once, when it first went: by the
+service's `_Traced` or by `TcpConnection.on_sent`, never by `_downlink`, and is neither again.
+
+When the handshake gave no sample because its SYN went again (a client flow's `syns` above 1) or
+its SYN-ACK did (`syn_ack_again`, set at `SYN again, answered again`), `_established` raises the
+RTO to `RTO_AFTER_SYN_NS`, 3 s, as RFC 6298, 5.7, says and Linux's `TCP_TIMEOUT_FALLBACK` does:
+with an RTT above 1 s, an RTO of 1 s would send the first data again before its ACK could come.
+
+On `firmware/mqtt_session` with `set_path(rtt=ms(600))`, in
+`tests/test_mqtt_session.py::test_a_qos1_backlog_follows_the_rtt`, lwIP acknowledged a PUBACK more
+than 1 s after it went, while Nagle held its next report: the network sent it again once at the RTO,
+and the PUBACK behind it after the ACK of the first, both spurious, as a server without F-RTO's
+would be. The rest of that file's runs, and the bursts of the [decision](../decisions/harness.md#the-networks-tcp-sends-again-what-the-device-does-not-acknowledge-on-its-rto),
+sent nothing again, measured with a probe on `_resend` that no test keeps.
+
+A hold stops the timer: `_rto_due` is `None` while the flow is `_stalled`. `_restart(flow)` starts
+it again from the instant, with the RTO it had, and leaves nothing timed, since the hold's time is
+no RTT. `Network.resume` calls it for every flow it keeps that is no longer stalled, before its
+`_flush`, and `_release` for each flow of a port that was `"drop"`. The probe of `_probe` is an ACK
+from `snd_nxt - 1` through `_segment(..., seq=)`: it counts no retransmission and changes no RTO.
+An orphaned flow keeps no timer: what its service writes still goes, and a RST of the new stack
+ends it, as before.
 
 ## Connections the test opens
 
@@ -619,15 +731,16 @@ until `established`, then pieces no larger than the device's MSS, its window les
 flight, and the MTU less 40 bytes, and for a client flow hands each piece to `on_sent` as it
 goes. A zero window leaves `pending` as it is until an ACK from the
 device raises `peer_window`; nothing probes it, but the restore of the path after a black hole
-([The black hole](#the-black-hole)).
+([The black hole](#the-black-hole)) and, while bytes the device has not acknowledged are out, the
+RTO's 1 byte ([Retransmission](#retransmission)).
 
 `_syn` sets `snd_nxt` back to `ISN`, so every SYN is the same segment, counts it in the flow's
 `syns` and keeps its time, `now()`, in `syn_at`, sends it and calls `on_syn`: the
 `TcpConnection` keeps the times of them all. `Network` takes `now` from `Internet.now`, the
 segment's or the held turn's time.
 
-The SYN is the one segment this TCP sends again, because the device's stack, not the link, drops
-it: lwIP's `ip4_input` drops a segment to an address its netif has not taken yet, and ESP-IDF's
+The SYN has a timer of its own, beside the RTO of [Retransmission](#retransmission), because the
+device's stack, not the link, drops it before there is a connection to time: lwIP's `ip4_input` drops a segment to an address its netif has not taken yet, and ESP-IDF's
 DHCP client takes a leased address only after its ARP check, about 1 s after the ACK. While a
 client flow is not `established`, `_syn_due(flow)` is `syn_at` plus `SYN_RTO_NS` (1 s, RFC 6298,
 2.1) shifted left by `syns - 1`: 1, 2, 4, 8, 16, 32 and, after the seventh SYN, 64 s.
@@ -681,13 +794,14 @@ ends. The device's own flows keep acknowledging such a segment again, as before.
 
 `_drop(flow, kind, why=None)` takes `"closed"`, `"refused"`, `"reset"`, `"lost"` (`Network.reset`,
 which no link calls and the unit tests use as a transport loss, and
-`Network.forget_device(why=None, *, address=None)`), for a client flow only `"timed out"`
-(`Network.poll`), or, for a device flow only, `"abandoned"`
-(`Network._close` on an orphaned flow, and `Network._unfinished`) and `"unanswered"`
-(`Network._unfinished`), and logs it
+`Network.forget_device(why=None, *, address=None)`, and `Network._retransmit` with `why`), for a
+client flow only `"timed out"` (`Network.poll`), or, for a device flow only, `"abandoned"`
+(`Network._close` on an orphaned flow, and `Network._unfinished`), `"unanswered"`
+(`Network._unfinished`) and `"unacknowledged"` (`Network._retransmit`), and logs it
 through `_ENDS`: `closed`, `refused by the device`, `reset by the device`, `link lost`, `closed by
 its service with no device to answer`, `lost before the device answered its SYN-ACK`, `timed out:
-no answer to 7 SYNs`, or `lost: <why>` when `why` is given. `_drop` removes the flow from `_flows` only while it is the one
+no answer to 7 SYNs`, `timed out: 15 retransmissions unacknowledged`, or `lost: <why>` when `why`
+is given. `_drop` removes the flow from `_flows` only while it is the one
 there for its key, and `_write`, `_close` and `_flush` do nothing for a flow that is not
 (`_current`): a service may call the `close` of a flow that has ended after the device opened
 another on the same addresses and ports, and that must not end the new one. A client flow's line
@@ -783,11 +897,13 @@ leaves: `_link_ended` calls `lose_link(orphan=False)` there, which loses the tes
 the device's still in their handshake, as `unanswered`, since their SYN-ACK is not sent again, and
 drops those with bytes or a FIN the device has not acknowledged, as `"gapped"`, logged `lost with
 what it had on its way when the link went`, since what was on the path or in the air is gone and
-nothing sends it again, drops those whose FIN the device acknowledged with no FIN back, as
+the retransmission timer is stopped while the link carries nothing (keeping such a flow for the RTO
+after the station's return is postponed), drops those whose FIN the device acknowledged with no FIN back, as
 `abandoned`, since they wait for that FIN with no timer to give up, and leaves the rest as they
 were. `Network` takes `carries`, `Internet._carries`: the network active and, behind a station, a
 lease. While it is false, `_flush` sends nothing on a flow that is not orphaned: what its service
-writes, and its FIN behind it, wait in `pending`, since this TCP sends nothing again, and
+writes, and its FIN behind it, wait in `pending`, since what went into a link that carries nothing
+would go again only on an RTO the hold has stopped, and
 `_station_changed` calls `Network.resume(lease.address)` when the station has a lease again, which
 flushes every flow from that address, so the bytes and the FIN reach the device in order, and drops
 as `lost` a flow from another, which the station no longer holds. Behind the access point,

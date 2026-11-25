@@ -1,19 +1,32 @@
 """The network the device reaches through its link: IPv4, UDP and TCP.
 
 Every destination address answers. A TCP connection goes to the service listening on its
-destination port, a UDP datagram to the one on its port, whatever the address: the device keeps
-the names and addresses it was built with, and the test decides what answers there. The test
-opens connections to the device too (`Network.connect`). The link to the device never loses or
-reorders bytes, so TCP needs no retransmission, no congestion control and no timers: a segment is
-acknowledged in the turn it arrives in, and a zero window waits for the device's update. The one
-timer is the SYN of a connection the test opened: the device's stack drops a SYN to an address it
-has not taken yet, silently, so the SYN goes again on the board's clock, 1 s after the first and
-each time twice as long after the last (RFC 6298's initial RTO doubling), 6 times as Linux's
-`tcp_syn_retries` does, and the connection times out 64 s after the last, 127 s after the first.
-While the link is down, the segments of a connection its end left open go nowhere, and the
-device's stack, which lost the connection too, never asks for them again. A port the test blocked
+destination port, a UDP datagram to the one on its port, whatever the address: the device keeps the
+names and addresses it was built with, and the test decides what answers there. The test opens
+connections to the device too (`Network.connect`). The link to the device never loses or reorders
+bytes, but the device's stack drops segments it has no room for: lwIP drops every segment with data
+while its application has not taken the last one (`refused_data`), and sends no duplicate ACK for
+it. So TCP keeps what it sent until the device acknowledges it, and when an RTO runs out with data
+or a FIN unacknowledged, it sends one segment again from `snd_una`, doubles the RTO, and with each
+ACK that moves `snd_una` adds a segment to what of the rest may go again, as slow start does after
+an RTO (RFC 5681, 3.1); what the service writes meanwhile goes as the window allows. The RTO is RFC
+6298's, on the board's clock: 1 s before the first sample, 3 s when the handshake went twice and
+gave none (5.7), then SRTT + 4 RTTVAR from one segment timed at a time and never a retransmitted
+one (Karn), at least 1 s (2.4: lwIP delays an ACK by up to 250 ms) and at most 120 s (Linux's
+`TCP_RTO_MAX`). After `RETRIES` (15, Linux's `tcp_retries2`) retransmissions unacknowledged, the
+RTO after the last ends the connection. There is no fast retransmit, no congestion control beyond
+that recovery and no SACK: lwIP's drops draw no duplicate ACK, so the RTO is what recovers them. A
+zero window waits for the device's update. The SYN of a connection the test opened has its timer
+too: the device's stack drops a SYN to an address it has not taken yet, silently, so the SYN goes
+again on the board's clock, 1 s after the first and each time twice as long after the last (RFC
+6298's initial RTO doubling), 6 times as Linux's `tcp_syn_retries` does, and the connection times
+out 64 s after the last, 127 s after the first. While the link is down, the segments of a
+connection its end left open go nowhere, and the device's stack, which lost the connection too,
+never asks for them again: an orphaned flow keeps no retransmission timer. A port the test blocked
 (`Network.block`) drops the device's segments, or refuses its SYNs, and what a connection on a
-dropped port has to send waits for `unblock` rather than be lost.
+dropped port has to send waits for `unblock` rather than be lost. While a flow is held so, by a
+blocked port, a path that drops every datagram or a link that carries no IP, its retransmission
+timer stops, and it starts again, with the RTO it had, when the hold ends.
 """
 
 import struct
@@ -29,6 +42,13 @@ MSS = 1400  # what we offer, and the most we take from the device's offer
 EPHEMERAL = 49152  # the first port of the connections the test opens (RFC 6335)
 SYN_RTO_NS = 1_000_000_000  # how long the first SYN waits for an answer (RFC 6298, 2.1)
 SYN_RETRIES = 6  # how many times a SYN goes again before the connection times out (Linux's)
+RTO_NS = 1_000_000_000  # the RTO before the first RTT sample (RFC 6298, 2.1)
+RTO_MIN_NS = 1_000_000_000  # the least RTO (RFC 6298, 2.4), above lwIP's delayed ACK of 250 ms
+RTO_MAX_NS = 120_000_000_000  # the most an RTO doubles to (Linux's TCP_RTO_MAX)
+RETRIES = 15  # retransmissions unacknowledged before the connection times out (tcp_retries2)
+# The RTO data starts with when the handshake gave no sample because its SYN or SYN-ACK went again
+# (RFC 6298, 5.7; Linux's TCP_TIMEOUT_FALLBACK).
+RTO_AFTER_SYN_NS = 3_000_000_000
 
 
 def checksum(data: bytes) -> int:
@@ -140,7 +160,10 @@ _ENDS = {
     "renewed": "reset: the device opened a new connection from its port",
     "gapped": "lost with what it had on its way when the link went",
     "timed out": f"timed out: no answer to {1 + SYN_RETRIES} SYNs",
+    "unacknowledged": f"timed out: {RETRIES} retransmissions unacknowledged",
 }
+# Why a connection the test opened was lost when its retransmissions went unacknowledged.
+UNACKNOWLEDGED = f"its {RETRIES} retransmissions went unacknowledged"
 
 
 @dataclass
@@ -167,6 +190,30 @@ class _Flow:
     orphaned: bool = False
     # What its service wrote, orphaned, that the device's window had no room for: not kept.
     discarded: int = 0
+    # What went and the device has not acknowledged, from `snd_una`, its FIN apart.
+    unacked: bytearray = field(default_factory=bytearray)
+    # The retransmission timer: when it runs out, `None` while stopped; the RTO it runs for;
+    # how many times what is unacknowledged went again.
+    rto_at: int | None = None
+    rto: int = RTO_NS
+    retries: int = 0
+    # RFC 6298's estimate, `None` before the first sample, and the segment being timed: the
+    # sequence its ACK reaches, and when it went.
+    srtt: int | None = None
+    rttvar: int = 0
+    timing: tuple[int, int] | None = None
+    # Whether the device's SYN-ACK went again (`SYN again, answered again`).
+    syn_ack_again: bool = False
+    # Recovery after an RTO, as slow start (RFC 5681, 3.1): `None` outside it, else how many bytes
+    # sent again may be unacknowledged, one segment at the RTO and one more with each ACK that
+    # moves `snd_una`. What goes again is what was unacknowledged at the RTO, up to `recover`,
+    # its FIN behind it when `recover_fin`; `rtx_nxt` is the next sequence to send again.
+    cwnd: int | None = None
+    recover: int = 0
+    recover_fin: bool = False
+    rtx_nxt: int = 0
+    # How many RTOs in a row found the device's window zero and sent their byte into it.
+    probes: int = 0
 
 
 class Network:
@@ -262,14 +309,24 @@ class Network:
 
     # TCP.
 
-    def _segment(self, flow: _Flow, flags: int, data: bytes = b"", options: bytes = b"") -> None:
+    def _segment(
+        self,
+        flow: _Flow,
+        flags: int,
+        data: bytes = b"",
+        options: bytes = b"",
+        *,
+        seq: int | None = None,
+    ) -> None:
+        """Send a segment from `snd_nxt`, which it moves on; from `seq`, a retransmission's, when
+        given, which moves nothing."""
         device, dport, ours, oport = flow.key
         offset = (20 + len(options)) // 4
         header = struct.pack(
             ">HHIIBBHHH",
             oport,
             dport,
-            flow.snd_nxt & 0xFFFFFFFF,
+            (flow.snd_nxt if seq is None else seq) & 0xFFFFFFFF,
             flow.rcv_nxt & 0xFFFFFFFF,
             offset << 4,
             flags,
@@ -281,7 +338,8 @@ class Network:
         sum_ = checksum(self._pseudo(ours, device, TCP, len(segment)) + segment)
         segment = segment[:16] + struct.pack(">H", sum_) + segment[18:]
         self._ip_send(ours, device, TCP, segment)
-        flow.snd_nxt += len(data) + (1 if flags & (SYN | FIN) else 0)
+        if seq is None:
+            flow.snd_nxt += len(data) + (1 if flags & (SYN | FIN) else 0)
 
     def connect(
         self, device: str, port: int, ours: str, client: TcpClient
@@ -305,6 +363,8 @@ class Network:
         flow.snd_nxt = ISN
         flow.syns += 1
         flow.syn_at = self._now()
+        # Only the first SYN is timed: the answer to one sent again could be to either (Karn).
+        flow.timing = (ISN + 1, flow.syn_at) if flow.syns == 1 else None
         self._segment(flow, SYN, options=struct.pack(">BBH", 2, 4, MSS))
         flow.client.on_syn()
 
@@ -319,8 +379,13 @@ class Network:
 
     def poll(self) -> None:
         """Send again each SYN of the test's whose RTO has run out by now, and time out the
-        connection whose last one has."""
+        connection whose last one has; then the same for what established connections sent and
+        the device has not acknowledged (`_retransmit`)."""
         now = self._now()
+        for flow in list(self._flows.values()):
+            due = self._rto_due(flow)
+            if due is not None and due <= now:
+                self._retransmit(flow)
         for flow in self._connecting():
             if self._syn_due(flow) > now:
                 continue
@@ -335,8 +400,139 @@ class Network:
             self._syn(flow)
 
     def quiet_until(self) -> int | None:
-        """When the next SYN of the test's goes again, or its connection times out."""
-        return min((self._syn_due(flow) for flow in self._connecting()), default=None)
+        """When the next SYN of the test's goes again, or its connection times out, or the next
+        retransmission timer runs out."""
+        syns = (self._syn_due(flow) for flow in self._connecting())
+        rtos = (self._rto_due(flow) for flow in self._flows.values())
+        return min((due for due in (*syns, *rtos) if due is not None), default=None)
+
+    def _stalled(self, flow: _Flow) -> bool:
+        """Whether what `flow` has to send waits: its port is blocked with `drop`, or the link
+        carries no IP. An orphaned flow sends into the link all the same."""
+        return self._held(flow) or (not flow.orphaned and not self._carries())
+
+    def _rto_due(self, flow: _Flow) -> int | None:
+        """When `flow`'s retransmission timer runs out; `None` while it is stopped: nothing is
+        unacknowledged, the flow is held, or orphaned, as nothing would acknowledge it."""
+        if flow.rto_at is None or flow.orphaned or not flow.established:
+            return None
+        if not self._current(flow) or self._stalled(flow):
+            return None
+        return flow.rto_at
+
+    def _retransmit(self, flow: _Flow) -> None:
+        """The RTO ran out: after `RETRIES` retransmissions the connection times out; else send
+        again one segment from `snd_una`, or its FIN, double the RTO (RFC 6298, 5.4 to 5.6), and
+        recover the rest as the device acknowledges it (`_resend`). What goes again is not timed
+        (Karn), not told to a client's `on_sent`, and not recorded again."""
+        if flow.retries >= RETRIES:
+            if flow.client is not None:
+                self._drop(flow, "lost", UNACKNOWLEDGED)
+            else:
+                self._drop(flow, "unacknowledged")
+            return
+        rto = flow.rto
+        flow.retries += 1
+        flow.rto = min(2 * flow.rto, RTO_MAX_NS)
+        flow.timing = None
+        flow.cwnd = self._segment_size(flow)
+        flow.recover = flow.snd_una + len(flow.unacked)
+        flow.recover_fin = flow.fin_sent
+        flow.rtx_nxt = flow.snd_una
+        if flow.peer_window:
+            flow.probes = 0
+            count = f"the {_ordinal(flow.retries)} time"
+        else:
+            # A device that answers keeps `retries` at 1: the probes are counted apart.
+            flow.probes += 1
+            count = f"the {_ordinal(flow.probes)} probe of a zero window"
+        self._resend(flow, f"{count}, after an RTO of {_seconds(rto)}")
+        flow.rto_at = self._now() + flow.rto
+
+    def _segment_size(self, flow: _Flow) -> int:
+        return max(1, min(flow.mss, self._mtu() - 40))
+
+    def _resend(self, flow: _Flow, why: str) -> None:
+        """Send again from `rtx_nxt` what `unacked` holds there, up to `recover`, while what went
+        again and is unacknowledged stays within `cwnd` and the device's window, or 1 byte, which
+        probes a zero window; then the FIN, once every byte before it went again. One line in the
+        log says what went, and `why`."""
+        assert flow.cwnd is not None
+        if self._stalled(flow):
+            return
+        limit = min(flow.cwnd, max(flow.peer_window, 1))
+        start, sent = flow.rtx_nxt, 0
+        while flow.rtx_nxt < flow.recover:
+            offset = flow.rtx_nxt - flow.snd_una
+            size = min(flow.recover - flow.rtx_nxt, self._segment_size(flow), limit - offset)
+            if size <= 0:
+                break
+            chunk = bytes(flow.unacked[offset : offset + size])
+            self._segment(flow, ACK | PSH, chunk, seq=flow.rtx_nxt)
+            flow.rtx_nxt += size
+            sent += size
+        fin = flow.recover_fin and flow.rtx_nxt == flow.recover
+        if fin:
+            self._segment(flow, FIN | ACK, seq=flow.rtx_nxt)
+            flow.rtx_nxt += 1
+        if not sent and not fin:
+            return
+        what = f"{sent} byte{'' if sent == 1 else 's'}" + (" and its FIN" if fin and sent else "")
+        what = "its FIN" if fin and not sent else what
+        device, dport, ours, oport = flow.key
+        self._log(
+            f"net: TCP {ours}:{oport} → {device}:{dport}: sent again {what} from sequence"
+            f" {start & 0xFFFFFFFF}, {why}"
+        )
+
+    def _sample(self, flow: _Flow, ack: int) -> None:
+        """Take the RTT of the segment being timed once `ack` covers it, and set the RTO from it
+        (RFC 6298, 2.2 and 2.3), which ends a backoff."""
+        if flow.timing is None or ack < flow.timing[0]:
+            return
+        r = self._now() - flow.timing[1]
+        flow.timing = None
+        if flow.srtt is None:
+            flow.srtt, flow.rttvar = r, r // 2
+        else:
+            flow.rttvar = (3 * flow.rttvar + abs(flow.srtt - r)) // 4
+            flow.srtt = (7 * flow.srtt + r) // 8
+        flow.rto = min(max(flow.srtt + 4 * flow.rttvar, RTO_MIN_NS), RTO_MAX_NS)
+
+    def _acked(self, flow: _Flow, ack: int) -> None:
+        """The device acknowledged up to `ack`, above `snd_una`: drop what it covers from
+        `unacked`, and restart the timer, or stop it when nothing is left (RFC 6298, 5.2, 5.3)."""
+        self._sample(flow, ack)
+        flow.snd_una = ack
+        data_end = flow.snd_nxt - (1 if flow.fin_sent else 0)
+        keep = max(0, data_end - ack)
+        del flow.unacked[: len(flow.unacked) - keep]
+        flow.retries = 0
+        flow.probes = 0
+        flow.rto_at = None if ack >= flow.snd_nxt else self._now() + flow.rto
+        if flow.cwnd is None:
+            return
+        if ack >= flow.recover + flow.recover_fin:
+            flow.cwnd = None  # recovered
+            return
+        flow.cwnd += self._segment_size(flow)
+        flow.rtx_nxt = max(flow.rtx_nxt, ack)
+        self._resend(flow, f"after the device's ACK of sequence {ack & 0xFFFFFFFF}")
+
+    def _established(self, flow: _Flow) -> None:
+        """The handshake is over: when its SYN or SYN-ACK went again and it gave no RTT sample,
+        data starts with an RTO of `RTO_AFTER_SYN_NS` (RFC 6298, 5.7)."""
+        flow.established = True
+        again = flow.syns > 1 if flow.client is not None else flow.syn_ack_again
+        if again and flow.srtt is None:
+            flow.rto = max(flow.rto, RTO_AFTER_SYN_NS)
+
+    def _restart(self, flow: _Flow) -> None:
+        """A hold ended: the timer of what is unacknowledged starts again with the RTO it had,
+        and the segment being timed, which waited through the hold, is not."""
+        flow.timing = None
+        if flow.rto_at is not None:
+            flow.rto_at = self._now() + flow.rto
 
     def _tcp(self, src: str, dst: str, segment: bytes) -> None:
         sport, dport, seq, ack, offset, flags, window = struct.unpack(">HHIIBBH", segment[:16])
@@ -364,9 +560,10 @@ class Network:
                 return
             flow.mss = max(1, min(mss, MSS))
             flow.rcv_nxt = (seq + 1) & 0xFFFFFFFF
+            self._sample(flow, ack)
             flow.snd_una = ack
             flow.peer_window = window
-            flow.established = True
+            self._established(flow)
             self._segment(flow, ACK)
             self._log(f"net: TCP {dst}:{dport} → {src}:{sport} established")
             flow.client.on_established()
@@ -398,9 +595,11 @@ class Network:
         ):
             # The device's SYN again, on a flow still waiting for the ACK of its SYN-ACK: that
             # SYN-ACK was lost, as in a black hole. Answered again, as in SYN-RECEIVED (RFC 9293,
-            # 3.10.7.4); nothing else does, since this TCP sends nothing again by itself.
+            # 3.10.7.4); nothing else does, since the SYN-ACK has no timer.
             self._log(f"net: TCP {src}:{sport} → {dst}:{dport} SYN again, answered again")
             flow.snd_nxt = ISN
+            flow.timing = None  # its ACK could answer either SYN-ACK (Karn)
+            flow.syn_ack_again = True
             self._segment(flow, SYN | ACK, options=struct.pack(">BBH", 2, 4, MSS))
             return
         if flags & SYN and flow is None:
@@ -417,6 +616,7 @@ class Network:
                 return
             self._flows[key] = flow
             self._log(f"net: TCP {src}:{sport} → {dst}:{dport} accepted")
+            flow.timing = (ISN + 1, self._now())
             self._segment(flow, SYN | ACK, options=struct.pack(">BBH", 2, 4, MSS))
             flow.connection = service.accept(
                 (src, sport), lambda out: self._write(flow, out), lambda: self._close(flow)
@@ -429,10 +629,15 @@ class Network:
             ack = flow.snd_una + ((ack - flow.snd_una) & 0xFFFFFFFF)
             if ack > flow.snd_nxt:
                 return
-            flow.snd_una = ack
-            if ack >= ISN + 1:
-                flow.established = True
             flow.peer_window = window
+            if ack > flow.snd_una:
+                self._acked(flow, ack)
+            elif not window and flow.snd_una < flow.snd_nxt:
+                # The device answers with its zero window, as to the RTO's byte: alive, it is
+                # owed no end for want of an ACK, as Linux's persist state counts none.
+                flow.retries = 0
+            if ack >= ISN + 1 and not flow.established:
+                self._established(flow)
         if not flow.established:
             return
         ahead = (seq - flow.rcv_nxt) & 0xFFFFFFFF
@@ -507,6 +712,8 @@ class Network:
                 return
             chunk = bytes(flow.pending[:size])
             del flow.pending[:size]
+            self._sending(flow, len(chunk))
+            flow.unacked += chunk
             self._segment(flow, ACK | PSH, chunk)
             if flow.client is not None:
                 flow.client.on_sent(chunk)
@@ -516,12 +723,23 @@ class Network:
             and flow.peer_window > flow.snd_nxt - flow.snd_una
         ):
             flow.fin_sent = True
+            self._sending(flow, 1)
             self._segment(flow, FIN | ACK)
+
+    def _sending(self, flow: _Flow, length: int) -> None:
+        """New data or a FIN of `length` goes from `snd_nxt`: time it unless a segment is being
+        timed already, and start the timer unless it runs (RFC 6298, 5.1)."""
+        now = self._now()
+        if flow.timing is None:
+            flow.timing = (flow.snd_nxt + length, now)
+        if flow.rto_at is None:
+            flow.rto_at = now + flow.rto
 
     def _drop(self, flow: _Flow, kind: str, why: str | None = None) -> None:
         """End `flow`: `kind` is `"closed"`, `"refused"`, `"reset"` or `"lost"`, and for a client's
         lost flow `why` says why, the link going down unless given; `"timed out"` is for the
-        test's flows only, and `"abandoned"` and `"unanswered"` for the device's only."""
+        test's flows only, and `"abandoned"`, `"unanswered"` and `"unacknowledged"` for the
+        device's only."""
         if self._current(flow):
             del self._flows[flow.key]
         device, dport, ours, oport = flow.key
@@ -597,6 +815,8 @@ class Network:
     def _release(self, port: int, *, probe: bool) -> None:
         flows = [f for f in self._flows.values() if f.client is None and f.key[3] == port]
         for flow in flows:
+            if probe and not self._stalled(flow):
+                self._restart(flow)
             self._flush(flow)
         if probe:
             self._probe(flows)
@@ -623,9 +843,7 @@ class Network:
                 continue
             waiting = flow.pending or (flow.fin_pending and not flow.fin_sent)
             if flow.snd_una < flow.snd_nxt or waiting:
-                flow.snd_nxt -= 1
-                self._segment(flow, ACK)
-                flow.snd_nxt += 1
+                self._segment(flow, ACK, seq=flow.snd_nxt - 1)
 
     def resume(self, local: str | None = None, *, probe: bool = False) -> None:
         """The link carries IP again: send what waited for it, on every flow from our `local`
@@ -635,6 +853,8 @@ class Network:
             if local is not None and flow.key[2] != local:
                 self._drop(flow, "lost")
             else:
+                if not self._stalled(flow):
+                    self._restart(flow)
                 self._flush(flow)
         if probe or self._owed:
             self._owed = False
@@ -643,10 +863,11 @@ class Network:
     def lose_link(self, *, orphan: bool = True) -> None:
         """The link ended. With `orphan`, the device's stack went with it: `forget_device`.
         Without, as when a virtual station leaves the device's access point, the device keeps
-        its connections: lose the test's, and drop those of the device's that this TCP cannot
-        finish, since it sends nothing again: one still in its handshake, whose SYN-ACK is not
-        sent again; one with bytes or a FIN the device has not acknowledged; and one whose FIN
-        was sent already, which waits for the device's FIN with no timer to give up. What the
+        its connections: lose the test's, and drop those of the device's that this TCP does not
+        finish: one still in its handshake, whose SYN-ACK has no timer; one with bytes or a FIN
+        the device has not acknowledged, whose RTO the station's absence stops (keeping it for
+        the RTO after the station's return is postponed); and one whose FIN was sent already,
+        which waits for the device's FIN with no timer to give up. What the
         rest have to send waits for the link (`carries`), their FIN behind it, and goes in
         `resume`."""
         if orphan:
@@ -659,7 +880,7 @@ class Network:
                 self._drop(flow, "unanswered")
             elif flow.snd_una < flow.snd_nxt:
                 # What it sent and the device has not acknowledged may be on the cleared path or
-                # in the air: nothing sends it again, and the stream would have a gap.
+                # in the air, and would go again only on an RTO after the station's return.
                 self._drop(flow, "gapped")
             elif flow.fin_sent:
                 self._drop(flow, "abandoned")
@@ -670,6 +891,18 @@ class Network:
         for flow in list(self._flows.values()):
             self._drop(flow, "lost")
         self._ident = 0
+
+
+def _ordinal(n: int) -> str:
+    """`1st`, `2nd`, `3rd`, `4th`, `11th`, `12th`, `13th`, `15th`."""
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def _seconds(ns: int) -> str:
+    """`1 s`, `2.5 s`, `0.4 s`: to the nanosecond, without trailing zeros."""
+    whole, part = divmod(ns, 1_000_000_000)
+    return f"{whole}.{part:09d}".rstrip("0").rstrip(".") + " s"
 
 
 def _mss(options: bytes) -> int | None:
