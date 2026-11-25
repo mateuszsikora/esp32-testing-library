@@ -238,6 +238,17 @@ describes how Codex discovers it. If the skill does not appear after the checkou
 restart Codex. The workflow needs authenticated `gh` access and network access to GitHub for
 its preflight, push and PR operations; the session's permissions must allow those commands.
 
+The `triage-feedback` skill takes a feedback report on esp32tl, a Markdown file a consumer wrote,
+and opens one issue for each point worth addressing that the code, the issues and the pull requests
+do not cover yet. In Codex, invoke `$triage-feedback <path>`; in Claude Code,
+`/triage-feedback <path>`. It verifies each point against `origin/main`, the issues and pull
+requests, `docs/decisions/` and the ESP-IDF sources of the reporter's version, drafts the issues in
+`.context/issues/<date>-<report>/`, opens them, and reports which points it did not turn into issues
+and why. Invoking it is consent to open the issues and nothing else: it does not comment, push, open
+pull requests or act upstream. It needs the same `gh` access, and Docker for the ESP-IDF sources.
+Edit [`.claude/skills/triage-feedback/SKILL.md`](../../.claude/skills/triage-feedback/SKILL.md) when
+changing the workflow; `.agents/skills/triage-feedback` links to it, as for `create-pr`.
+
 ## Layout
 
 | Path | Contents |
@@ -255,8 +266,8 @@ its preflight, push and PR operations; the session's permissions must allow thos
 | `docs/decisions/` | Why things are the way they are, one file per domain, with a generated index |
 | `docs/guides/` | How to work on the repository: this guide, [testing.md](testing.md), [documentation.md](documentation.md) |
 | `.github/` | The CI workflow (`workflows/ci.yml`) and the pull request template |
-| `.claude/` | Claude Code's rules and the `create-pr` skill shared with Codex through `.agents/skills/` |
-| `.agents/skills/` | Codex's repository skills; `create-pr` links to the shared skill under `.claude/skills/` |
+| `.claude/` | Claude Code's rules and the `create-pr` and `triage-feedback` skills shared with Codex through `.agents/skills/` |
+| `.agents/skills/` | Codex's repository skills; `create-pr` and `triage-feedback` link to the shared skills under `.claude/skills/` |
 | `AGENTS.md` | The contract for every agent working here; `CLAUDE.md` is a symlink to it |
 
 Git ignores what the builds leave behind: `.venv/`, `.cache/` (the ROM ELF and PlatformIO's core

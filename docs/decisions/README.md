@@ -71,6 +71,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The create-pr skill takes no arguments](docs.md#the-create-pr-skill-takes-no-arguments) | `docs.md` | decided (#44) |
 | [The squash settings stay as GitHub's defaults](docs.md#the-squash-settings-stay-as-githubs-defaults) | `docs.md` | decided (#44) |
 | [Codex discovers create-pr through a symlink to the existing skill](docs.md#codex-discovers-create-pr-through-a-symlink-to-the-existing-skill) | `docs.md` | decided (#89) |
+| [The triage-feedback skill opens the issues without a plan review](docs.md#the-triage-feedback-skill-opens-the-issues-without-a-plan-review) | `docs.md` | decided (25 November 2026) |
 | [Invariant numbers are bold text, not ordered-list markers](docs.md#invariant-numbers-are-bold-text-not-ordered-list-markers) | `docs.md` | decided (#113) |
 
 ## Validation firmware, ESP-IDF and the ROM ELF
