@@ -350,8 +350,11 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   handler raise `TypeError`, and with a body they make the `HttpResponse`. `HttpResponse` is a
   frozen dataclass with its own `__init__`, which `_fill` checks and sets through
   `object.__setattr__`: the status in `REASONS`, now with 206 and 416, the body text, encoded as
-  UTF-8, or bytes, none for a status in `NO_CONTENT`, no header holding CR, LF or, in its name,
-  `:`, no content type holding CR or LF, and `after` a `Duration` of 0 or more; `serve` calls
+  UTF-8, or bytes, none for a status in `NO_CONTENT`, headers of text, none holding CR, LF or, in
+  its name, `:`, no content type holding CR or LF, each of these that Latin-1 encodes, since
+  `_respond` writes the head in it (`_latin1`), and `after` a `Duration` of 0 or more: a handler's
+  response that fails these raises in the handler, which answers `500`, instead of in `_respond`,
+  where the device would get nothing; `serve` calls
   `_fill` itself, so that its errors say `http.serve:` and `HttpResponse`'s `HttpResponse:`. Each
   connection is an `_Exchange` that reads one request: the head up to
   `\r\n\r\n` (`MAX_HEAD`, 64 KiB, else 431), parsed by `_head` (else 400), `Transfer-Encoding`

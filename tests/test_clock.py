@@ -532,7 +532,15 @@ def test_a_console_expect_from_a_handler_names_itself(exact: bool) -> None:
 
 
 def test_what_drives_the_board_from_a_handler_names_itself(tmp_path: Path) -> None:
-    _, console = console_run()
+    run, console = console_run()
+    try:
+        drive_the_board_from_a_handler(console)
+    finally:
+        run.clock.stop()
+        run.runner.join(5)
+
+
+def drive_the_board_from_a_handler(console: Console) -> None:
     wifi = Wifi(now=lambda: 0, asked=lambda request: None)
     wifi.access_point("myssid", password="mypassword")
     lines = Lines(LILYGO.name, LILYGO.lines, lambda: 0)

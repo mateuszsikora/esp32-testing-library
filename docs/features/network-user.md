@@ -1151,10 +1151,13 @@ place of `HttpResponse` in the message: `ValueError` for a status the server has
 (`HttpResponse: status 418 is not one of [200, 201, 204, 206, 301, 302, 304, 400, 401, 403, 404, 413, 416, 431, 500, 501, 503]`),
 a header whose name is empty or holds `:`, or whose name or value holds a line break
 (`HttpResponse: 'X-A:B': '1' is not a header field`), a content type with a line break
-(`HttpResponse: 'text/plain\r\nX: 1' is not a content type`), a body with a `204` or `304`
+(`HttpResponse: 'text/plain\r\nX: 1' is not a content type`), a header or content type that
+Latin-1, which the head is sent in, cannot encode
+(`HttpResponse: 'X-Echo': '€' is not Latin-1, which the head is sent in: put it in the body`), a body with a `204` or `304`
 (`HttpResponse: a 204 response has no body`) and an `after` below 0
 (`HttpResponse: after takes a Duration of 0 or more, not -0.001 s`); `TypeError` for a body that is
-neither text nor bytes (`HttpResponse: the body is text or bytes, not 42`) and an `after` that is
+neither text nor bytes (`HttpResponse: the body is text or bytes, not 42`), a header name or value
+that is not text (`HttpResponse: 'X-N': 1 is not a header field of text`) and an `after` that is
 not a `Duration` (`HttpResponse: after takes a Duration, as seconds(5), not 5`).
 
 ## Addresses behind the access point

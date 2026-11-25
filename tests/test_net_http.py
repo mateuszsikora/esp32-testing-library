@@ -529,6 +529,29 @@ def test_a_response_is_checked_where_it_is_made() -> None:
         text.status = 404  # type: ignore[misc]
 
 
+def test_a_head_that_latin_1_cannot_encode_fails_in_the_handler_with_a_500() -> None:
+    errors: list[BaseException] = []
+    server = HttpServer(lambda: 42, test_error=errors.append)
+    # The request's body echoed into a header: text the head cannot carry.
+    server.serve("/echo", lambda request: HttpResponse(headers={"X-Echo": request.text}))
+    client = Client(server)
+    client.send("POST /echo HTTP/1.1\r\nContent-Length: 3\r\n\r\n€".encode())
+    assert client.head[0] == "HTTP/1.1 500 Internal Server Error" and client.closed
+    [error] = errors
+    assert str(error) == (
+        "HttpResponse: 'X-Echo': '€' is not Latin-1, which the head is sent in: put it in the body"
+    )
+    # Latin-1 goes as it is.
+    server.serve("/", HttpResponse(headers={"X-Name": "Zoë"}, content_type="text/plain; x=é"))
+    latin = Client(server)
+    latin.send(b"GET / HTTP/1.1\r\n\r\n")
+    assert b"X-Name: Zo\xeb" in latin.received and b"x=\xe9" in latin.received
+    with pytest.raises(ValueError, match=r"^HttpResponse: 'text/€' is not Latin-1"):
+        HttpResponse(content_type="text/€")
+    with pytest.raises(TypeError, match=r"^HttpResponse: 'X-N': 1 is not a header field of text$"):
+        HttpResponse(headers={"X-N": 1})  # type: ignore[arg-type]
+
+
 @pytest.mark.parametrize(
     ("response", "kind"),
     [(HttpResponse(), "an HttpResponse"), (lambda request: HttpResponse(), "a handler")],

@@ -113,13 +113,19 @@ def _fill(
         raise ValueError(f"{what}: a {status} response has no body")
     pairs = tuple((headers.items() if isinstance(headers, Mapping) else headers) or ())
     for name, value in pairs:
+        if not isinstance(name, str) or not isinstance(value, str):
+            raise TypeError(f"{what}: {name!r}: {value!r} is not a header field of text")
         if any(c in name + value for c in "\r\n") or ":" in name or not name:
             raise ValueError(f"{what}: {name!r}: {value!r} is not a header field")
+        # Checked here, not where the head is written: a handler's response fails in the handler,
+        # and the device gets its 500, instead of nothing at all.
+        _latin1(what, f"{name!r}: {value!r}", name + value)
     kind = content_type or (
         "text/plain; charset=utf-8" if isinstance(body, str) else "application/octet-stream"
     )
     if any(c in kind for c in "\r\n"):
         raise ValueError(f"{what}: {kind!r} is not a content type")
+    _latin1(what, repr(kind), kind)
     if after is not None:
         if not isinstance(after, Duration):
             raise TypeError(f"{what}: after takes a Duration, as seconds(5), not {after!r}")
@@ -133,6 +139,17 @@ def _fill(
         ("after", after),
     ]:
         object.__setattr__(response, field_, value_)
+
+
+def _latin1(what: str, shown: str, text: str) -> None:
+    """Raises `ValueError` for `text` of the head that Latin-1, which `_respond` writes the head
+    in, cannot encode; `shown` is what the message names."""
+    try:
+        text.encode("latin-1")
+    except UnicodeEncodeError:
+        raise ValueError(
+            f"{what}: {shown} is not Latin-1, which the head is sent in: put it in the body"
+        ) from None
 
 
 class HttpServer:
