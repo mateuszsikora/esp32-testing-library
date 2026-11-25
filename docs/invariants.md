@@ -252,6 +252,19 @@ that references to its number keep their meaning.
     `examples/sd_data_logger/tests/test_logger.py::test_a_failed_write_raises_the_error_pin_and_the_next_fix_writes_again`,
     `examples/sd_data_logger/tests/test_logger.py::test_a_slow_write_saves_its_row_later`,
     `examples/sd_data_logger/tests/test_logger.py::test_a_write_slower_than_the_driver_s_timeout_fails_on_the_board_s_clock`
+- **305.** `CardImage.blocks` names the sectors that hold the file's bytes on the current image:
+    on FAT12, FAT16 and FAT32 cards, for a file, a fragmented one, a directory and the root, the
+    blocks are those `mshowfat` gives, in chain order with neighbours merged, the bytes there are
+    the file's or the directory's entries, an empty file has none, a name resolves and fails as
+    the readers do and by its 8.3 alias too, and an image that starts with a partition table is
+    refused. `CardImage.layout` is what `minfo` says. On `sd_remount`, a rule on the root's
+    blocks, known before the firmware runs, sees the firmware create `LOG.TXT`, and every block a
+    rule on the whole card saw written is the file's, the root's or a FAT's on the final image.
+    `tests/test_card_image.py::test_blocks_name_the_sectors_that_hold_a_file_or_directory`,
+    `tests/test_card_image.py::test_the_layout_is_what_minfo_says_of_the_image`,
+    `tests/test_card_image.py::test_blocks_resolve_a_name_and_refuse_as_the_readers_do`,
+    `tests/test_card_image.py::test_an_image_without_a_fat_file_system_at_block_0_is_refused`,
+    `tests/test_sd_remount.py::test_a_rule_on_the_directory_s_blocks_sees_the_file_created_and_hits_map_back_to_it`
 - **67.** The runner gets the board profile's PSRAM as `--psram-mb`, in a test and in the `esp32tl`
     command: 0 on `esp32-devkitc`, 4 on `lilygo-t-a7670g-r2`.
     `tests/test_pytest_plugin.py::test_every_route_and_line_of_the_profile_is_on_the_link`,

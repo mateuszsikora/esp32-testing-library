@@ -13,7 +13,7 @@ import pytest
 
 from esp32tl.boards import SdCardRoute
 from esp32tl.interfaces import SourceError
-from esp32tl.interfaces.sd_card import FAT32_CLUSTERS, SdCard, fat32_clusters
+from esp32tl.interfaces.sd_card import FAT32_CLUSTERS, CardImage, SdCard, fat32_clusters
 
 
 @pytest.fixture
@@ -347,3 +347,194 @@ def test_invalid_fat_remains_a_tool_error(slot: SdCard) -> None:
         stream.write(b"\0" * 512)
     with pytest.raises(SourceError, match="mdir failed"):
         card.read_text("FILE.TXT")
+
+
+MTOOLS_ENV = {**os.environ, "MTOOLS_SKIP_CHECK": "1"}
+
+
+def mtools(*args: str) -> str:
+    return subprocess.run(args, check=True, capture_output=True, text=True, env=MTOOLS_ENV).stdout
+
+
+def sectors(card: CardImage, blocks: tuple[range, ...]) -> bytes:
+    """The bytes of the image at `blocks`, in order."""
+    with card.path.open("rb") as stream:
+        chunks = []
+        for run in blocks:
+            stream.seek(run.start * 512)
+            chunks.append(stream.read(len(run) * 512))
+    return b"".join(chunks)
+
+
+def shown(card: CardImage, name: str) -> tuple[range, ...]:
+    """The blocks of `name` from the clusters `mshowfat` gives, as `<5-141> <150>`."""
+    layout = card.layout
+    clusters: list[int] = []
+    for first, last in re.findall(
+        r"<(\d+)(?:-(\d+))?>", mtools("mshowfat", "-i", str(card.path), f"::{name}")
+    ):
+        clusters += range(int(first), int(last or first) + 1)
+    runs: list[range] = []
+    for cluster in clusters:
+        start = layout.data.start + (cluster - 2) * layout.cluster_blocks
+        if runs and runs[-1].stop == start:
+            runs[-1] = range(runs[-1].start, start + layout.cluster_blocks)
+        else:
+            runs.append(range(start, start + layout.cluster_blocks))
+    return tuple(runs)
+
+
+def fragmented(card: CardImage, tmp_path: Path) -> bytes:
+    """Writes `FRAG.BIN` so that its chain has a gap, into the hole a deleted file left, and
+    returns its bytes."""
+    hole = tmp_path / "hole.bin"
+    hole.write_bytes(b"h" * 3000)
+    mtools("mcopy", "-i", str(card.path), str(hole), "::HOLE.BIN")
+    mtools("mcopy", "-i", str(card.path), str(hole), "::AFTER.BIN")
+    mtools("mdel", "-i", str(card.path), "::HOLE.BIN")
+    if card.layout.root is None:
+        # FAT32's FSInfo says where the next free cluster is, past the hole: unknown, so that
+        # mcopy looks from the start.
+        with card.path.open("r+b") as stream:
+            stream.seek(512 + 492)
+            stream.write(struct.pack("<I", 0xFFFFFFFF))
+    contents = bytes(n % 251 for n in range(40000))
+    source = tmp_path / "frag.bin"
+    source.write_bytes(contents)
+    mtools("mcopy", "-i", str(card.path), str(source), "::FRAG.BIN")
+    return contents
+
+
+@pytest.mark.requires_mtools
+@pytest.mark.parametrize("size_mb", [1, 32, 512], ids=["fat12", "fat16", "fat32"])
+def test_blocks_name_the_sectors_that_hold_a_file_or_directory(
+    slot: SdCard, tmp_path: Path, size_mb: int
+) -> None:
+    binary = bytes(n % 253 for n in range(70000))
+    card = (
+        slot.image(size_mb=size_mb)
+        .with_bytes("B.BIN", binary)
+        .with_text("PLANS/A.TXT", "first plan\n")
+        .with_text("Plans/A Long Name.txt", "long\n")
+        .with_bytes("EMPTY.BIN", b"")
+        .build()
+    )
+    frag = fragmented(card, tmp_path)
+    layout = card.layout
+    for name, contents in [
+        ("B.BIN", binary),
+        ("plans/a.txt", b"first plan\n"),
+        ("plans/a long name.txt", b"long\n"),
+        ("FRAG.BIN", frag),
+    ]:
+        blocks = card.blocks(name)
+        assert blocks == shown(card, name), name
+        held = sectors(card, blocks)
+        # Whole clusters, the file's bytes first.
+        assert (
+            len(held)
+            == -(-len(contents) // (512 * layout.cluster_blocks)) * 512 * layout.cluster_blocks
+        )
+        assert held[: len(contents)] == contents, name
+    # The file written into the hole goes on past the file after it.
+    first, *rest = card.blocks("frag.bin")
+    assert rest and first.stop <= card.blocks("AFTER.BIN")[0].start < rest[0].start
+    assert card.blocks("EMPTY.BIN") == ()
+    # The 8.3 alias of a long name finds the file, as FatFs does; the readers know the long name.
+    assert card.blocks("plans/ALONGN~1.TXT") == card.blocks("plans/a long name.txt")
+    with pytest.raises(FileNotFoundError):
+        card.read_bytes("plans/ALONGN~1.TXT")
+
+    plans = card.blocks("plans")
+    assert plans == shown(card, "PLANS")
+    assert sectors(card, plans).startswith(b".          \x10")
+    assert b"A       TXT" in sectors(card, plans)
+
+    root = card.blocks("")
+    assert card.blocks("/") == root
+    if layout.root is None:
+        assert len(root) == 1 and root[0].start == layout.data.start
+        assert len(root[0]) == layout.cluster_blocks
+    else:
+        assert root == (layout.root,)
+    for entry in (b"B       BIN", b"PLANS      \x10", b"EMPTY   BIN", b"FRAG    BIN"):
+        assert entry in sectors(card, root)
+
+
+@pytest.mark.requires_mtools
+@pytest.mark.parametrize("size_mb", [1, 32, 512, 4096], ids=["fat12", "fat16", "fat32", "fat32-4g"])
+def test_the_layout_is_what_minfo_says_of_the_image(slot: SdCard, size_mb: int) -> None:
+    card = slot.image(size_mb=size_mb).build()
+    info = minfo(card)
+
+    def field(name: str) -> int:
+        match = re.search(rf"^{name}[:=] *(\d+)", info, re.MULTILINE)
+        assert match is not None, name
+        return int(match[1])
+
+    layout = card.layout
+    reserved, fats = field("reserved \\(boot\\) sectors"), field("fats")
+    fat = field("Big fatlen") if size_mb >= 512 else field("sectors per fat")
+    assert layout.fats == tuple(
+        range(reserved + n * fat, reserved + (n + 1) * fat) for n in range(fats)
+    )
+    roots = field("max available root directory slots")
+    first_data = reserved + fats * fat + roots * 32 // 512
+    if size_mb >= 512:
+        assert layout.root is None
+    else:
+        assert layout.root == range(reserved + fats * fat, first_data)
+    assert layout.data == range(first_data, size_mb << 11)
+    assert layout.cluster_blocks == field("cluster size")
+
+
+@pytest.mark.requires_mtools
+def test_blocks_resolve_a_name_and_refuse_as_the_readers_do(slot: SdCard) -> None:
+    card = slot.image().with_text("DIR/FILE.TXT", "content").build()
+    for name in ("MISSING.TXT", "dir/missing.txt", "missing/file.txt"):
+        with pytest.raises(FileNotFoundError) as missing:
+            card.blocks(name)
+        assert missing.value.filename == name
+    with pytest.raises(NotADirectoryError) as file:
+        card.blocks("dir/file.txt/child")
+    assert file.value.filename == "DIR/FILE.TXT"
+    for name in ("../OUT", "A/*", "[AB].TXT", "dir/"):
+        with pytest.raises(ValueError, match="invalid card file path"):
+            card.blocks(name)
+    assert card.blocks("dir/file.txt") == card.blocks("DIR/FILE.TXT")
+
+
+@pytest.mark.requires_mtools
+def test_an_image_without_a_fat_file_system_at_block_0_is_refused(slot: SdCard) -> None:
+    card = slot.image().with_text("FILE.TXT", "content").build()
+    with card.path.open("r+b") as stream:
+        stream.write(b"\0" * 512)
+    message = (
+        f"sd_card: {card.path} holds no FAT file system at block 0:"
+        " its boot sector has no 55 AA signature"
+    )
+    with pytest.raises(SourceError) as refused:
+        card.blocks("FILE.TXT")
+    assert str(refused.value) == message
+    with pytest.raises(SourceError) as refused:
+        _ = card.layout
+    assert str(refused.value) == message
+    # An MBR, as ESP-IDF writes before it formats the card: zeros but its table and signature.
+    mbr = bytearray(512)
+    mbr[446 + 4] = 0x0C  # FAT32 with LBA
+    mbr[446 + 8 : 446 + 16] = struct.pack("<II", 2048, (32 << 11) - 2048)
+    mbr[510:512] = b"\x55\xaa"
+    with card.path.open("r+b") as stream:
+        stream.write(mbr)
+    with pytest.raises(SourceError) as refused:
+        card.blocks("")
+    assert str(refused.value) == (
+        f"sd_card: {card.path} holds no FAT file system at block 0:"
+        " it starts with a partition table"
+    )
+    nothing = slot.owned_image()
+    with pytest.raises(SourceError, match="sd_card: no image at "):
+        nothing.blocks("")
+    slot.close()
+    with pytest.raises(SourceError, match="board is closed"):
+        card.blocks("")

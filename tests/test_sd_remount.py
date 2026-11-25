@@ -164,6 +164,55 @@ def test_a_card_swapped_with_the_supply_off_is_the_one_the_next_boot_finds(
     assert second.read_text("LOG.TXT").startswith(lines(1, 2))
 
 
+def test_a_rule_on_the_directory_s_blocks_sees_the_file_created_and_hits_map_back_to_it(
+    board: Esp32Sim, sd_card: SdCard, console: Console
+) -> None:
+    """`LOG.TXT` goes into the root directory, whose blocks are known before the firmware runs: a
+    rule on them sees the firmware create the file. After the run, from the image as it is then,
+    every block a rule on the whole card saw written is the file's, the root's or a FAT's (#337)."""
+    card = sd_card.image(size_mb=32).build()
+    layout = card.layout
+    # 32 MiB is FAT16: the root is the fixed region.
+    (root,) = card.blocks("")
+    assert root == layout.root
+    with pytest.raises(FileNotFoundError):
+        card.blocks("LOG.TXT")  # not created yet: no blocks
+    sd_card.insert(card)
+    directory = sd_card.observe("write", blocks=root)
+    every = sd_card.observe("write")
+    board.power_on()
+    console.expect_exact("sd_remount: wrote 3", timeout=TIMEOUT)
+    board.wait_until(lambda: directory.hits, within=seconds(TIMEOUT))
+
+    # the firmware wrote the file's entry into the root, and every write the rule saw is there
+    assert all(hit.written and hit.blocks.start in root for hit in directory.hits)
+    with card.path.open("rb") as image:
+        image.seek(root.start * 512)
+        assert b"LOG     TXT" in image.read(len(root) * 512)
+
+    log = card.blocks("LOG.TXT")
+    assert log
+
+    def owner(block: int) -> str | None:
+        if any(block in run for run in log):
+            return "LOG.TXT"
+        if block in root:
+            return "/"
+        if any(block in fat for fat in layout.fats):
+            return "FAT"
+        return None
+
+    owners = [owner(block) for hit in every.hits for block in hit.blocks]
+    assert None not in owners, [hit for hit in every.hits if None in map(owner, hit.blocks)]
+    assert {"LOG.TXT", "/", "FAT"} <= set(owners)
+    # the file's entry reached the root before any of its bytes reached the file: FatFs writes the
+    # root's sector out of its window when it moves to the FAT to give the file a cluster
+    assert owners.index("/") < owners.index("LOG.TXT")
+    # the two rules met the same writes of the root
+    in_root = [hit.at for hit in every.hits if hit.blocks.start in root]
+    assert in_root == [hit.at for hit in directory.hits]
+
+
 def test_a_card_the_runner_cannot_open_ends_the_run(pytester: pytest.Pytester) -> None:
     if not (SD_REMOUNT / "build" / "esp32tl-built").is_file():
         pytest.fail(f"{SD_REMOUNT}/build holds no finished build: run make firmware", pytrace=False)

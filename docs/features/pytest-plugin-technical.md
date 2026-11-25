@@ -817,18 +817,46 @@ an entry with the host's time, and two runs of a test gave its firmware cards th
 those bytes. Failed builds remove their partial directory. Duplicate and file/parent conflicts are
 checked case-insensitively.
 
-`CardImage` exposes `path`, `__fspath__`, `read_bytes`, `read_text` and `list_files`. Reads use
-`mtype`; listings use `mdir -b` and exclude directory entries. Before either operation,
-`_resolve` walks directory entries case-insensitively to check the requested path's existence and
-type. Missing entries raise `FileNotFoundError`, non-directory parents or listing targets raise
-`NotADirectoryError`, and reading a directory raises `IsADirectoryError`. This uses actual
-entries rather than parsing locale-dependent tool errors. `_path` rejects `*`, `?`, `[` and `]`
-for both builder and reader calls, preventing mtools from expanding a requested single path
-into several files. No FAT state or file contents are cached. All commands run without a shell and with `MTOOLS_SKIP_CHECK=1` and `TZ=UTC`; command failure becomes
-`SourceError` including stderr. Text encoding/decoding defaults to UTF-8 with no newline
-translation. `SdCard.close()` invalidates handles and removes only builder-owned directories;
-backends call it after stopping the run, including on teardown errors. The path of the card in the
-slot at the end stays in `image_path` for reporting, even after the owned image has been removed.
+`CardImage` exposes `path`, `__fspath__`, `read_bytes`, `read_text`, `list_files`, `blocks` and
+`layout`. Reads use `mtype`; listings use `mdir -b` and exclude directory entries. Before either
+operation, `_resolve` walks directory entries case-insensitively to check the requested path's
+existence and type. Missing entries raise `FileNotFoundError`, non-directory parents or listing
+targets raise `NotADirectoryError`, and reading a directory raises `IsADirectoryError`. This
+uses actual entries rather than parsing locale-dependent tool errors. `_path` rejects `*`, `?`,
+`[` and `]` for both builder and reader calls, preventing mtools from expanding a requested single
+path into several files. No FAT state or file contents are cached. All commands run without a
+shell and with `MTOOLS_SKIP_CHECK=1` and `TZ=UTC`; command failure becomes `SourceError` including
+stderr. Text encoding/decoding defaults to UTF-8 with no newline translation. `SdCard.close()`
+invalidates handles and removes only builder-owned directories; backends call it after stopping
+the run, including on teardown errors. The path of the card in the slot at the end stays in
+`image_path` for reporting, even after the owned image has been removed.
+
+`blocks` and `layout` run no tool: `_Volume` opens the image, reads its boot sector at block 0 and
+the FAT and the directories it needs from the file, then closes it, so that each call sees the
+image as it is (#337). The image is taken as a superfloppy, as the builder makes it, so a sector
+of the file system is the card's block of the same number. `_parse` refuses, with `SourceError`
+`sd_card: PATH holds no FAT file system at block 0: WHY`, a boot sector without `55 AA`, sectors
+other than 512 bytes, and a BIOS parameter block whose values no FAT has. Such a sector whose MBR
+table at offset 446 names a partition is `it starts with a partition table`: ESP-IDF's format
+(`f_fdisk`, then `f_mkfs`) writes the MBR into a zeroed sector, so its BIOS parameter block reads
+as sectors of 0 bytes. `_parse` takes the FAT type from the count of clusters, as Microsoft's FAT
+specification does (below 4085 FAT12, below 65525 FAT16, else FAT32), and refuses a fixed root on
+FAT32 or none on the others.
+
+`blocks` walks the path from the root through `_Volume.entries`, which reads the directory's
+region (the fixed root, or its cluster chain) and yields each live entry with its long name, when
+its pieces are whole and their checksum is the short entry's, and its 8.3 name, lowercased as the
+case bits at offset 12 say and decoded in code page 437, FatFs's in ESP-IDF; `.`, `..` and the
+volume label are skipped. A part of the path matches the first entry, in the directory's order,
+whose long or short name is the same case-insensitively. That is wider than `_resolve`, which
+matches only the names `mdir -b` lists, the long ones: `blocks("ALONGN~1.TXT")` finds a file that
+`read_bytes` does not, as FatFs on the firmware does. `chain` follows the first FAT from the
+entry's first cluster to an end-of-chain value (`0xFF8`, `0xFFF8` or `0x0FFFFFF8` and above);
+FAT32's active copy flag (`ext_flags`) is not read, since mformat and FatFs keep the copies
+mirrored. A free, reserved or out-of-range entry, or more links than the volume has clusters, is
+`sd_card: the cluster chain of NAME on the card is broken`. `runs` turns the chain into ranges of
+blocks, merging neighbouring clusters. A missing image is `sd_card: no image at PATH`, so that it
+is not taken for a missing file.
 
 From 512 MiB the builder forces FAT32 (`-F`), with 255 heads and 63 sectors per track, the geometry
 FAT32 volumes usually carry; below it, it leaves the FAT to mformat, with 64 heads and 32 sectors.
