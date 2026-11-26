@@ -4401,7 +4401,31 @@ a C3 or C6 with that console skips. The refusal stays for a console on UART0 on 
 `serial: the board profile {name} carries an {title} with its console on UART0; the serial backend
 runs the classic ESP32, and the ESP32-S3 with its console on USB-Serial/JTAG`.
 
-**Not yet:** pending a real board of each chip, and of each console, to validate on.
+An ESP32-C6 with its console on USB-Serial/JTAG was measured on 2026-11-26 and still skips: an
+ESP32-C6FH4 (QFN32) rev v0.2 with its native USB alone, on macOS, port `/dev/cu.usbmodem1101` (USB
+303a:1001), esptool 5.7.0 and pytest-embedded 2.9.3, `console_repl_usb` built for the C6.
+
+- `power_on` flushed the port (`reset_input_buffer`) before its reset. The boot that follows
+  flashing fills the macOS input queue, 1020 bytes, within 30 ms; flushed while full, the port
+  received nothing more, for 30 s and after any reset, until it was opened again, and every test
+  failed with `'console_repl>' on the console did not happen`. Reading what it held instead kept
+  it: 7190 bytes after two resets without a flush, 6170 after a read of 1020, 0 after a flush.
+  `power_on` now reads it away (`discard_input`), on every chip.
+- With that, `test_the_usb_console_takes_a_command_and_comes_back_after_a_reset` and
+  `test_a_tap_of_the_usb_console_records_both_ways` passed, but in 4 of 10 sessions of the file's
+  C6 tests a test lost the board: in the two whose output was kept, the USB device left the bus
+  0.36 s after `power_on` (`[Errno 6] Device not configured`) and the next test found no port;
+  after the fourth the chip stayed on the bus but answered nothing, esptool's connection included
+  (`No serial data received`), until the board was unplugged and plugged in again. A session of four tests with pytest-embedded alone, `dut.expect`
+  and `dut.serial.hard_reset()` with no esp32tl, met it in its first run. Scripts that opened the
+  port once and reset the chip through it many times did not.
+
+So the C6 keeps the skip: a backend that leaves the board needing to be plugged in again every few
+sessions is not one a test can rely on. The C6 has no UART bridge on that board, so UART0 was not
+measured.
+
+**Not yet:** a real board of each chip, and of each console, to validate on: the ESP32-C3, and a
+C6 whose sessions do not stop it, on another host or another board.
 
 ## Project defaults are esp32tl ini options that the markers override
 
