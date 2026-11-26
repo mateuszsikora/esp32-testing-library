@@ -386,7 +386,7 @@ defaults only for what an existing `sdkconfig` leaves unset, so an older one wou
 configuration), from the repository's root:
 
 ```sh
-rm -rf tools/hci_probe/build-probe
+rm -rf tools/hci_probe/build-probe &&
 docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp -v "$PWD":/w -w /w \
   espressif/idf:v5.3.6@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070 \
   idf.py -C tools/hci_probe -B tools/hci_probe/build-probe \
@@ -395,10 +395,12 @@ docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp -v "$PWD":/w -w /w \
 
 The container runs as the host's user, as `firmware/build.sh` runs it, so that the build directory
 is the user's and the next `rm -rf` removes it; run as root, on a Linux host, it would not, and the
-next chip's build would keep the last one's `sdkconfig`. `SDKCONFIG` is an absolute path: idf.py
-takes a relative one from the project's directory, `-C`,
-where `tools/hci_probe/build-probe/sdkconfig` does not exist, and kconfgen fails with
-`FileNotFoundError`. Then, on the host, from `tools/hci_probe/build-probe`, with esptool 5
+next chip's build would keep the last one's `sdkconfig`. The `&&` stops there if the removal fails.
+A directory an earlier build left owned by root, on a Linux host, takes
+`sudo rm -rf tools/hci_probe/build-probe` once; running as the host's user does not change what is
+there already. `SDKCONFIG` is an absolute path: idf.py takes a relative one from the project's
+directory, `-C`, where `tools/hci_probe/build-probe/sdkconfig` does not exist, and kconfgen fails
+with `FileNotFoundError`. Then, on the host, from `tools/hci_probe/build-probe`, with esptool 5
 (`python -m esptool --chip CHIP --port PORT write-flash @flash_args`; esptool 4, as ESP-IDF v5.3.6
 ships, spells it `write_flash`), read the console for 20 s after a reset. On the S3, check that the
 console says `BLE_INIT: Feature Config, …, BLE_50:0, …` before comparing what follows; the C6's
