@@ -1076,22 +1076,26 @@ esp32tl controller has, and `esp32tl/bluetooth/le.py`, the LE devices. `Controll
    and creation, calls `le_restart()`, which stops the advertiser and makes the LE defaults again,
    also the LE event mask, `0x1F`.
 7. **The guest on an LE-only chip.** `GuestController(name, link, address, *, chip="esp32")`, with
-   `chip` in `LE_CHIPS` (`esp32s3`, `esp32c3`, `esp32c6`), has `le_only` and what an ESP32-S3
-   answered `tools/hci_probe` (`tools/hci_probe/esp32s3.txt`): page 0 alone
-   (`lmp_features_max_page_number` 0) of `LE_ONLY_FEATURES`; `hci_version`, `lmp_version`
-   `LE_VERSION` (9), `hci_revision`, `lmp_subversion` `LE_REVISION` (`0x0016`),
-   `manufacturer_company_identifier` `ESPRESSIF` (`0x02E5`); `le_features` `LE_FEATURES` (`0xFF`);
-   `le_states` `LE_STATES` (`ffffffffff030000`);
-   `le_acl_data_packet_length` `LE_ACL_LENGTH` (251), `total_num_le_acl_data_packets`
-   `LE_ACL_PACKETS` (12); `filter_accept_list_size` 12, `resolving_list_size` 10;
-   `supported_max_tx_time` and `_rx_time` `LE_MAX_TIME_US` (17040); `advertising_channel_tx_power`
-   9, which its own `LE_Read_Advertising_Physical_Channel_Tx_Power` handler returns (Bumble's
-   returns 0). `Read_Local_Supported_Commands` returns `LE_SUPPORTED_COMMANDS`, the S3's 64 bytes;
+   `chip` in `LE_CHIPS`, the keys of `LE_CONTROLLERS` (`esp32s3` and `esp32c3` to `ESP32S3`, from
+   `tools/hci_probe/esp32s3.txt`; `esp32c6` to `ESP32C6`, from `tools/hci_probe/esp32c6.txt`), has
+   `le_only` and that chip's `LeController` in `le`: page 0 alone (`lmp_features_max_page_number`
+   0) of `LE_ONLY_FEATURES`; `hci_version`, `lmp_version` `le.version` (S3 9, C6 `0x0E`),
+   `hci_revision`, `lmp_subversion` `le.revision` (S3 `0x0016`, C6 0),
+   `manufacturer_company_identifier` `ESPRESSIF` (`0x02E5`); `le_features` `LE_FEATURES` (`0xFF`)
+   on every chip; `le_states` `LE_STATES` (`ffffffffff030000`); `le_acl_data_packet_length`
+   `le.acl_length` (S3 251; C6 `min(517, HCI_MAX - 5)`, 491), `total_num_le_acl_data_packets`
+   `le.acl_packets` (S3 12, C6 10); `filter_accept_list_size` 12, `resolving_list_size`
+   `le.resolving_list_size` (S3 10, C6 4); `supported_max_tx_time` and `_rx_time` `LE_MAX_TIME_US`
+   (17040); `advertising_channel_tx_power` 9, which its own
+   `LE_Read_Advertising_Physical_Channel_Tx_Power` handler returns (Bumble's returns 0).
+   `Read_Local_Supported_Commands` returns `le.supported_commands`, the chip's 64 bytes;
    `on_hci_command_packet` answers a command whose bit in it is clear, by
-   `hci.HCI_SUPPORTED_COMMANDS_MASKS`, with `_le_unknown`, which keeps it in `unknown_commands` and
-   sends `Command_Complete` with `UNKNOWN_HCI_COMMAND`, and so does `on_hci_command` for a command
-   with no handler and no mask; `send_hci_packet` puts `LE_COMMAND_PACKETS` (5) in every
-   `Command_Complete` and `Command_Status`. `on_hci_command` takes `SET_ADV_FLOW_CONTROL`
+   `hci.HCI_SUPPORTED_COMMANDS_MASKS`, and which is not in `le.also_known` (C6: `0x0C03`,
+   `0x0C63`, `0x0C7B`, `0x0C7C`, `0x041D`), with `_le_unknown`, and so does `on_hci_command` for a
+   command with no handler and no mask. `_le_unknown` keeps it in `unknown_commands` and sends
+   `UNKNOWN_HCI_COMMAND`: in `Command_Status` when `le.le_unknown_status` (C6) and the opcode's OGF
+   is `LE_OGF` (`0x08`), in `Command_Complete` otherwise. `send_hci_packet` puts
+   `le.command_packets` (S3 5, C6 1) in every `Command_Complete` and `Command_Status`. `on_hci_command` takes `SET_ADV_FLOW_CONTROL`
    (`0xFD09`: enable, credits, lost threshold), which sets `_report_credits` (`None` when off) and
    `_lost_threshold` and completes, and `ADV_REPORT_FLOW_CONTROL` (`0xFD0A`: credits), which adds
    them, answers nothing and calls `_tell_discarded`: with a credit and `_discarded` at the
@@ -1163,7 +1167,7 @@ esp32tl controller has, and `esp32tl/bluetooth/le.py`, the LE devices. `Controll
 | `Advertiser` | `esp32tl/bluetooth/link_layer.py`: Bumble's `LegacyAdvertiser`, `address` by `own_address` |
 | `ADVERTISING_UNIT_S`, `ADVERTISING_INTERVAL_MIN`, `ADVERTISING_INTERVAL_DEFAULT`, `SUPERVISION_UNIT_S`, `SUPERVISION_TIMEOUT_DEFAULT`, `RPA_TIMEOUT_DEFAULT_S`, `LE_EVENT_MASK_DEFAULT`, `ENHANCED_CONNECTION_COMPLETE`, `MAX_OCTETS`, `MAX_TIME_US`, `LEFT_OUT_FEATURES` | `0.000625`; `0x0020`; `0x0800`; `0.01`; `72`; `900`; `0x1F`; `1 << 9`; `251`; `2120`; extended and periodic advertising, the coded PHY |
 | `GuestController(name, link, address=ADDRESS, *, chip="esp32")` | also `chip`, `le_only`, `dropped_reports`, `admits_report()` |
-| `LE_CHIPS`, `LE_ONLY_FEATURES`, `LE_VERSION`, `LE_REVISION`, `ESPRESSIF`, `LE_FEATURES`, `LE_STATES`, `LE_ACL_LENGTH`, `LE_ACL_PACKETS`, `FILTER_ACCEPT_LIST_SIZE`, `RESOLVING_LIST_SIZE`, `LE_MAX_TIME_US`, `ADVERTISING_TX_POWER`, `LE_SUPPORTED_COMMANDS`, `LE_SUPPORTED`, `LE_COMMAND_PACKETS`, `SET_ADV_FLOW_CONTROL`, `ADV_REPORT_FLOW_CONTROL`, `DISCARD_REPORT` | `esp32tl/bluetooth/guest.py`: `esp32s3`, `esp32c3`, `esp32c6`; the S3's values above; `0xFD09`; `0xFD0A`; `0xF0` |
+| `LeController`, `ESP32S3`, `ESP32C6`, `LE_CONTROLLERS`, `LE_CHIPS`, `LE_OGF`, `LE_ONLY_FEATURES`, `ESPRESSIF`, `LE_FEATURES`, `LE_STATES`, `FILTER_ACCEPT_LIST_SIZE`, `LE_MAX_TIME_US`, `ADVERTISING_TX_POWER`, `SET_ADV_FLOW_CONTROL`, `ADV_REPORT_FLOW_CONTROL`, `DISCARD_REPORT` | `esp32tl/bluetooth/guest.py`: each chip's values above, `esp32c3` with the S3's; `esp32s3`, `esp32c3`, `esp32c6`; `0x08`; `0xFD09`; `0xFD0A`; `0xF0` |
 | `Radio` | `esp32tl/bluetooth/peer.py`: the base of `BluetoothDevice` and `BleDevice` |
 | `BleDevice`, `BlePeripheral(air, *, name, services=(), service_uuids=None, manufacturer_data=None, address=PERIPHERAL_ADDRESS, interval=INTERVAL, connectable=True, rssi=RSSI, io_capability="no_input_no_output", confirms=True, passkey=None, bonding=True)`, `BleCentral(air, *, name=CENTRAL_NAME, address=CENTRAL_ADDRESS, rssi=RSSI, io_capability="no_input_no_output", confirms=True, passkey=None, bonding=True)` | `esp32tl/bluetooth/le.py`, as the user document lists them; `role`, `"peripheral"` or `"central"` |
 | `GattService(uuid, characteristics=())`, `GattCharacteristic(uuid, value=b"", properties=("read",), encrypted=False)` | Frozen dataclasses; the sequences kept as tuples |

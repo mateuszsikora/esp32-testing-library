@@ -380,30 +380,39 @@ esp32sim --chip esp32 --board none --boot rom --console uart0 --flash-mb 4 --max
 
 `tools/hci_probe` runs on a real board, not on esp32sim: it asks the chip's own Bluetooth controller,
 through VHCI, what it reports, and prints every HCI packet both ways, `TX` and `RX` in hex, on the
-USB-Serial/JTAG console. For an ESP32-S3, in the v5.3.6 container, into a build directory of its
-own whose `sdkconfig` is made anew from `sdkconfig.defaults` (ESP-IDF reads the defaults only for
-what an existing `sdkconfig` leaves unset, so an older one would keep its host configuration):
+USB-Serial/JTAG console. For CHIP, `esp32s3` or `esp32c6`, in the v5.3.6 container, into a build
+directory of its own whose `sdkconfig` is made anew from `sdkconfig.defaults` (ESP-IDF reads the
+defaults only for what an existing `sdkconfig` leaves unset, so an older one would keep its host
+configuration), from the repository's root:
 
 ```sh
 rm -rf tools/hci_probe/build-probe
-idf.py -C tools/hci_probe -B tools/hci_probe/build-probe \
-  -D SDKCONFIG=tools/hci_probe/build-probe/sdkconfig -DIDF_TARGET=esp32s3 build
+docker run --rm -v "$PWD":/w -w /w \
+  espressif/idf:v5.3.6@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070 \
+  idf.py -C tools/hci_probe -B tools/hci_probe/build-probe \
+  -D SDKCONFIG=/w/tools/hci_probe/build-probe/sdkconfig -DIDF_TARGET=CHIP build
 ```
 
-then, on the host, from `tools/hci_probe/build-probe`, with esptool 5 (`python -m esptool --chip
-esp32s3 --port PORT write-flash @flash_args`; esptool 4, as ESP-IDF v5.3.6 ships, spells it
-`write_flash`), and read the console for 20 s after a reset. Check that the console says
-`BLE_INIT: Feature Config, …, BLE_50:0, …` before comparing what follows.
+`SDKCONFIG` is an absolute path: idf.py takes a relative one from the project's directory, `-C`,
+where `tools/hci_probe/build-probe/sdkconfig` does not exist, and kconfgen fails with
+`FileNotFoundError`. Then, on the host, from `tools/hci_probe/build-probe`, with esptool 5
+(`python -m esptool --chip CHIP --port PORT write-flash @flash_args`; esptool 4, as ESP-IDF v5.3.6
+ships, spells it `write_flash`), read the console for 20 s after a reset. On the S3, check that the
+console says `BLE_INIT: Feature Config, …, BLE_50:0, …` before comparing what follows; the C6's
+controller prints no such line, and answered the same with Bluedroid configured for BLE 5.0, and on
+ESP-IDF v5.5.4.
 Its `sdkconfig.defaults` configure Bluedroid as ESP-IDF's BLE 4.2 examples do, without starting it,
-so that the controller runs as under them; without Bluedroid in the build the controller runs with
-`BLE_50:1` and answers otherwise. The discard event of the flow control of advertising reports
+so that the controller runs as under them; without Bluedroid in the build the S3's controller runs
+with `BLE_50:1` and answers otherwise. Before its scan the probe sets the event mask Bluedroid
+sets, with LE Meta: the C6's controller sends no LE event without it, and the S3's capture, made
+before the probe set it, has none. The discard event of the flow control of advertising reports
 comes only when more legacy advertising than the 2 credits and the lost threshold of 3 reaches the
 3 s scan: a device that advertises in range, at an interval of a few hundred ms or less, is
 enough; on a quiet bench the event does not come. Its count is what the scan heard and dropped,
-104 in the capture below, not a constant. The ESP32-S3's
-answers, of 2026-11-19, are in `tools/hci_probe/esp32s3.txt`, its address masked and the
-advertising reports of the devices around left out; `esp32tl/bluetooth/guest.py` reports them for
-an LE-only chip.
+104 in the S3's capture, not a constant. The ESP32-S3's answers, of 2026-11-19, are in
+`tools/hci_probe/esp32s3.txt`, and the ESP32-C6's, of 2026-11-26, in `tools/hci_probe/esp32c6.txt`,
+their addresses masked and the advertising reports of the devices around left out;
+`esp32tl/bluetooth/guest.py` reports them for each chip.
 
 The production images, which are not in this repository, ran with `--flash-mb 4 --psram-mb 4` and
 `--flash-at` at `0x1000` (bootloader), `0x8000` (partition table), `0x10000` (otadata) and `0x20000`

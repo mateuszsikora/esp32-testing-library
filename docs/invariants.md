@@ -2609,16 +2609,22 @@ clones, and rejection of serial distributed execution before accessing hardware.
 ## Bluetooth LE
 
 - **268.** The firmware's controller is its chip's: on the ESP32-S3, the ESP32-C3 and the
-  ESP32-C6 it reports page 0 alone, `LE Supported (Controller)` and `BR/EDR Not Supported`, an LE
-  ACL buffer of 251 bytes and no extended advertising; on the classic ESP32 it keeps BR/EDR and no
-  LE.
-  On an LE-only chip it answers what the ESP32-S3 answered `tools/hci_probe`, the same bytes, and
+  ESP32-C6 it reports page 0 alone, `LE Supported (Controller)` and `BR/EDR Not Supported`, the
+  chip's LE ACL buffer (251 bytes on the S3 and the C3, 491 of the C6's 517 on the C6) and no
+  extended advertising; on the classic ESP32 it keeps BR/EDR and no LE.
+  On the S3 and the C3 it answers what the ESP32-S3 answered `tools/hci_probe`, the same bytes, and
   answers a command the S3's supported commands do not name with `Command_Complete` and
-  `UNKNOWN_HCI_COMMAND`.
+  `UNKNOWN_HCI_COMMAND`. On the C6 it answers what the ESP32-C6 answered, the same bytes but for
+  the LE features and the LE buffer; takes the commands the C6 answered though its supported
+  commands leave them out; and answers an LE command it does not know with `Command_Status`, any
+  other with `Command_Complete`.
   `tests/test_ble_peer.py::test_an_le_only_chip_s_controller_reports_le_and_no_br_edr`,
   `tests/test_ble_peer.py::test_the_classic_esp32_s_controller_keeps_br_edr_and_no_le`,
   `tests/test_ble_peer.py::test_an_le_only_chip_s_controller_answers_as_the_measured_esp32_s3`,
-  `tests/test_ble_peer.py::test_an_le_only_chip_s_controller_answers_what_it_does_not_know_with_command_complete`
+  `tests/test_ble_peer.py::test_an_le_only_chip_s_controller_answers_what_it_does_not_know_with_command_complete`,
+  `tests/test_ble_peer.py::test_an_esp32_c6_s_controller_answers_as_the_measured_one`,
+  `tests/test_ble_peer.py::test_an_esp32_c6_s_controller_answers_an_le_command_it_does_not_know_with_command_status`,
+  `tests/test_ble_peer.py::test_an_esp32_c6_s_controller_takes_commands_its_bitmap_leaves_out`
 - **269.** With Espressif's flow control of advertising reports on (`0xFD09`), the guest's
   controller sends its host no more `LE Advertising Report` events than the credits it has, and
   counts the rest in `dropped_reports`; a credit given back (`0xFD0A`) gets no command acknowledgment, and neither

@@ -362,6 +362,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A real receiver's capture or raw NMEA log is converted to the emulated clock, not modelled](harness.md#a-real-receivers-capture-or-raw-nmea-log-is-converted-to-the-emulated-clock-not-modelled) | `harness.md` | decided (#263) |
 | [Bluetooth LE peers on Bumble's LE link layer, with esp32tl's fixes](harness.md#bluetooth-le-peers-on-bumbles-le-link-layer-with-esp32tls-fixes) | `harness.md` | decided (#234) |
 | [An LE-only chip's controller reports LE alone and takes Espressif's report flow control](harness.md#an-le-only-chips-controller-reports-le-alone-and-takes-espressifs-report-flow-control) | `harness.md` | decided (#234) |
+| [The ESP32-C6's controller reports what a C6 measured, within what the link carries](harness.md#the-esp32-c6s-controller-reports-what-a-c6-measured-within-what-the-link-carries) | `harness.md` | decided (#234) |
 | [Extended advertising, LE Audio, the coded PHY and several connections wait](harness.md#extended-advertising-le-audio-the-coded-phy-and-several-connections-wait) | `harness.md` | postponed (#234) |
 | [An escape is a mode change, not a modem command](harness.md#an-escape-is-a-mode-change-not-a-modem-command) | `harness.md` | decided (#276) |
 | [The broker keeps how each connection ended in connection_ends, not on MqttClient](harness.md#the-broker-keeps-how-each-connection-ended-in-connection_ends-not-on-mqttclient) | `harness.md` | decided (#274) |

@@ -3,8 +3,8 @@
  * Bluedroid configured as ESP-IDF's BLE 4.2 examples are, and never started, so that the controller
  * runs as under those examples (`BLE_50:0`); the commands come in Bluedroid's start-up order where
  * it matters: Espressif's flow control of advertising reports right after `HCI_Reset`. The answers
- * esp32tl's guest controller reports on an LE-only chip came from an ESP32-S3 running this
- * (`esp32tl/bluetooth/guest.py`, `docs/stage0-findings.md`). */
+ * esp32tl's guest controller reports on an LE-only chip came from an ESP32-S3 and an ESP32-C6
+ * running this (`esp32tl/bluetooth/guest.py`, `docs/stage0-findings.md`). */
 #include <stdio.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -97,6 +97,12 @@ void app_main(void)
     command(0x0401, (uint8_t[]){ 0x33, 0x8b, 0x9e, 8, 0 }, 5, 100); /* HCI_Inquiry: BR/EDR */
     command(0x0c0d, (uint8_t[]){ 0, 0, 0 }, 2, 100);     /* Read_Stored_Link_Key: BR/EDR */
     command(0x0c7f, NULL, 0, 100);                       /* Write_Extended_Page_Timeout: BR/EDR */
+
+    /* Set_Event_Mask as Bluedroid sends it (`CLASSIC_EVENT_MASK`, `HCI_DUMO_EVENT_MASK_EXT`,
+     * `components/bt/host/bluedroid/device/controller.c`), with the LE Meta event, bit 61, which
+     * the specification's default leaves out: the ESP32-C6's controller sends no LE event without
+     * it, the ESP32-S3's sends them either way. */
+    command(0x0c01, (uint8_t[]){ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xbf, 0x3d }, 8, 100);
 
     /* Espressif's flow control of advertising reports: 2 credits, lost threshold 3, then a scan
      * of everything around for 3 s with no duplicate filter, then 2 credits back. */

@@ -5221,8 +5221,9 @@ builds it (`BLE_50:1`), got `UNKNOWN_HCI_COMMAND` for `0xFD09` and LE features `
 the unmodified `gatt_client` on the same board logged no error for `0xFD09`; the controller's mode
 follows the host's configuration at build time (`BT_CTRL_50_FEATURE_SUPPORT`,
 `components/bt/include/esp32c3/include/esp_bt.h`), so the values are those of a BLE 4.2 build,
-which all the BLE validation images are. The C3's controller is built from the same sources and the
-C6's is not; neither was measured, and both take the S3's values until they are (`TODO(owner)`).
+which all the BLE validation images are. The C3's controller is built from the same sources; it
+was not measured, and takes the S3's values until it is (`TODO(owner)`). The C6's is not, and has
+values of its own ([below](#the-esp32-c6s-controller-reports-what-a-c6-measured-within-what-the-link-carries)).
 
 It also takes Espressif's vendor commands `0xFD09` and `0xFD0A`, the flow control of advertising
 reports Bluedroid turns on for an LE controller, and keeps to the credits: Bluedroid asserts in
@@ -5239,6 +5240,43 @@ S3's controller built for BLE 5.0, with extended advertising, because the harnes
 carry extended advertising, and the validation images run it built for BLE 4.2. Also rejected:
 keeping Bumble's answers to the commands the S3 does not list, `Read_Buffer_Size` and `Inquiry`
 among them, because a host that sends one would then work here and not on the chip.
+
+## The ESP32-C6's controller reports what a C6 measured, within what the link carries
+
+Status: decided (#234)
+
+On the ESP32-C6 the guest's controller reports what an ESP32-C6 (ESP32-C6FH4, QFN32, revision v0.2)
+answered `tools/hci_probe` on 2026-11-26 (`tools/hci_probe/esp32c6.txt`), not the S3's: version
+6.0, revision 0, a resolving list of 4, its own supported commands and 1 command packet. Its
+controller is not the S3's (`components/bt/controller/esp32c6`), and answered otherwise in each of
+those. ESP-IDF v5.3.6's controller `18aafc6`, v5.5.4's `bc223ab`, which esp32sim's C6 hooks take
+(#229, G5), and the controller under Bluedroid built for BLE 5.0 answered the same, so unlike the
+S3's its answers do not follow the host's configuration. Three of its answers are not reported as
+they came:
+
+- Its LE features, `0x1B900F017FFF`, become the S3's `0xFF`: the link has no 2M or coded PHY and no
+  extended or periodic advertising ([below](#extended-advertising-le-audio-the-coded-phy-and-several-connections-wait)).
+- Its LE buffer, 517 bytes, becomes 491, `HCI_MAX - 5`: the runner refuses an `hci_rx` packet over
+  `HCI_MAX` bytes on every chip, so a 517-byte packet could not reach the firmware.
+- Its supported commands leave out `HCI_Reset`, `Set_Event_Mask_Page_2`, the authenticated payload
+  timeout's two and `Read_Remote_Version_Information`, which it answered (`also_known`): the
+  guest takes them, where it answers any other command its list leaves out as unknown.
+
+A command it does not know gets `UNKNOWN_HCI_COMMAND` as the C6 answered: `Command_Status` for an LE
+command (`LE_Read_Buffer_Size` v2, `LE_Read_Local_P-256_Public_Key`, `0x207B`, `0x20FF`),
+`Command_Complete` for any other (`Inquiry`, `Create_Connection`, `Read_Buffer_Size`,
+`Read_Stored_Link_Key`, `0x0CFF`). Two things the C6 does are not modelled: it sends no LE event
+until the host's event mask has LE Meta, bit 61, which the specification's default leaves out
+(Bluedroid sets it, `HCI_DUMO_EVENT_MASK_EXT`, and the guest sends LE events either way, as the
+S3's controller does), and its discard event `0xF0` carries one byte after the count, of another
+value at each run, which Bluedroid does not read (`btm_ble_process_adv_discard_evt`); the guest
+sends the S3's.
+
+**Rejected:** keeping the S3's values on the C6, because a host that reads the version, the list
+sizes or the supported commands would see another chip's, and one that sends a command the C6 does
+not know would get the S3's event for it. Also rejected: reporting the C6's supported commands
+alone, which would answer `HCI_Reset`, the first command Bluedroid sends, as unknown. Also rejected:
+reporting the 517-byte buffer, which the runner's `hci_rx` cannot carry.
 
 ## Extended advertising, LE Audio, the coded PHY and several connections wait
 
