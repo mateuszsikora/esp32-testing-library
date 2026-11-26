@@ -272,8 +272,9 @@ def test_a_refused_negotiation_leaves_the_modem_registered_and_a_dial_after_acce
         assert (dial.cause, refused.cause) == ("dial", "ppp refused")
         assert modem.registered and modem.powered and not modem.data_mode
         if stage == "lcp":
-            # modem_recovery gives up after 30 s and closes PPP: lwIP's Terminate-Request ends it
-            assert seconds(30) <= refused.at - dial.at < seconds(31)
+            # modem_recovery gives up after 30 s and closes PPP: lwIP's Terminate-Request ends it.
+            # The wait counts 10 ms ticks, so it may end up to one tick early (29.996 s in CI).
+            assert ms(29_990) <= refused.at - dial.at < seconds(31)
         if attempt == 1:
             # before the firmware dials again: the next dial is accepted
             modem.accept_ppp()
