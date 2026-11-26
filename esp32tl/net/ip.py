@@ -633,6 +633,9 @@ class Network:
                 lambda out: self._write(flow, out),
                 lambda *, reset=False: self._close(flow, reset=reset),
             )
+            if not self._current(flow):
+                # Its service reset it in `accept`, before the connection to tell existed.
+                self._notify(flow)
             return
         if flow is None:
             return

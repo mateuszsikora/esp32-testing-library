@@ -621,3 +621,24 @@ def test_a_reset_from_on_close_at_the_device_s_fin_resets_and_ends_once() -> Non
     assert not device.net._flows and device.echo.closed == 1
     assert device.lines[-1] == "net: TCP 10.64.0.2:4000 → 203.0.113.153:1883 reset by its service"
     assert not [line for line in device.lines if line.endswith(" closed")]
+
+
+def test_a_reset_during_accept_still_closes_the_connection_it_returns() -> None:
+    class Refuses(Echo):
+        def accept(
+            self, peer: tuple[str, int], write: Callable[[bytes], None], close: StreamClose
+        ) -> "Echo":
+            close(reset=True)
+            return self
+
+    sent: list[bytes] = []
+    lines: list[str] = []
+    net = Network(sent.append, lines.append)
+    service = Refuses()
+    net.tcp[1883] = service
+    net.receive(tcp(0, 0, 2, options=MSS_1400))
+    # The SYN-ACK, then the RST from past it, and the connection told once.
+    assert [d[33] for d in sent] == [0x12, 0x14]
+    assert int.from_bytes(sent[-1][24:28], "big") == ISN + 1
+    assert not net._flows and service.closed == 1
+    assert lines[-1] == "net: TCP 10.64.0.2:4000 → 203.0.113.153:1883 reset by its service"

@@ -912,7 +912,9 @@ whose `_notify` gives the service's connection its `on_close`. Nothing goes agai
 of `_flows`, so its timer is gone, and its `write` and `close` do nothing (`_current`); a reset
 from the service's `on_data` is the last segment of the flow, and a FIN that came with the data is
 not acknowledged after it, and so is one from `on_close` at the device's FIN, which ends the flow
-there. Once both FINs have crossed (`fin_sent` and `peer_closed`: CLOSING or LAST-ACK), RFC 9293's
+there. A reset in `accept` itself comes after the SYN-ACK, from `ISN + 1`, and `_tcp` gives the
+connection `accept` returned its `on_close` once it has it, since `_notify` found none during
+`accept`. Once both FINs have crossed (`fin_sent` and `peer_closed`: CLOSING or LAST-ACK), RFC 9293's
 ABORT only deletes the connection, as Linux's `tcp_need_reset` does: `_abort` sends nothing and
 drops the flow as `"closed"`. On a port
 blocked with `drop` (`_held`) the RST is not sent, logged `net: TCP <device>:<port> →

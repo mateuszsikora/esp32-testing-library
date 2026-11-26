@@ -2940,7 +2940,8 @@ clones, and rejection of serial distributed execution before accessing hardware.
   request's `at` on the board's clock when given, and a connection the device closes first gets
   nothing. A service's `close(reset=True)` drops what is queued or unacknowledged and sends one
   `RST|ACK` from `snd_nxt`, acknowledging `rcv_nxt`, and nothing goes again; a reset once both
-  FINs have crossed sends nothing and ends the connection as closed, once; TLS passes the reset
+  FINs have crossed sends nothing and ends the connection as closed, once; a reset in `accept`
+  still gives the connection it returns its `on_close`; TLS passes the reset
   through with no alert before it.
   `tests/test_net_http.py::test_a_hang_up_ends_the_connection_without_a_byte_and_keeps_the_request`,
   `tests/test_net_http.py::test_a_hang_up_after_ends_the_connection_that_much_later`,
@@ -2952,6 +2953,7 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_net_ip.py::test_a_reset_in_answer_to_data_with_a_fin_is_the_last_segment`,
   `tests/test_net_ip.py::test_a_reset_once_both_fins_have_crossed_sends_nothing_and_ends_closed`,
   `tests/test_net_ip.py::test_a_reset_from_on_close_at_the_device_s_fin_resets_and_ends_once`,
+  `tests/test_net_ip.py::test_a_reset_during_accept_still_closes_the_connection_it_returns`,
   `tests/test_net_tls.py::test_a_hang_up_behind_tls_passes_its_reset_through_and_writes_no_alert`,
   `tests/test_http_request.py::test_a_hang_up_ends_the_connection_with_no_response`,
   `tests/test_http_request.py::test_a_hang_up_with_after_ends_the_connection_that_much_later`,
