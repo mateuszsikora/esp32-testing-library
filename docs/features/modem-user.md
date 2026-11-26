@@ -324,7 +324,8 @@ Terminate-Request (`FSM_DEFMAXCONFREQS` and `FSM_DEFTIMEOUT` in lwIP's `ppp_opts
 The network sets no deadline of its own: such a call stays in data mode until the device escapes
 or closes PPP. `firmware/modem_recovery` waits 30 s for its address, then closes PPP. Under
 `"lcp"` that sends lwIP's Terminate-Request, so its refused calls end 30 s after their dial, less
-up to one 10 ms FreeRTOS tick of the tick-based wait: 29.996 s on the emulator. Under
+up to one 10 ms FreeRTOS tick of the tick-based wait. Measured on the emulator, the gap is
+29.996 s (29.995523387 s), the same in every run. Under
 `"ipcp"` the call ends at lwIP's Terminate-Ack, right after `CONNECT`, and the firmware leaves data
 mode at its own 30 s. Either way it then finds the modem registered and dials again.
 
