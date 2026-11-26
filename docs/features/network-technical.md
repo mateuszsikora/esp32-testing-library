@@ -358,14 +358,18 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   captures the length of `leases` at construction and returns a `Condition` reading the entry at
   that index, named `the next DHCP lease`. `find_lease()` reads the first lease.
 - `http.py`: `HttpServer(now, log, *, test_error=reraise)`, a `StreamService` on TCP 80 of every
-  network (RFC 9110, 9112). `serve(path, response, *, status, content_type, headers)` stores per
+  network (RFC 9110, 9112). `serve(path, response, *, status, content_type, headers, reason)` stores per
   path an `HttpResponse` or a handler, `Callable[[HttpRequest], HttpResponse]` (`Handler`), after
   checking that the path starts with `/` and holds no `?`, since a request is looked up by its
-  path without the query; `status`, `content_type` and `headers` with an `HttpResponse` or a
+  path without the query; `status`, `content_type`, `headers` and `reason` with an `HttpResponse` or a
   handler raise `TypeError`, and with a body they make the `HttpResponse`. `HttpResponse` is a
   frozen dataclass with its own `__init__`, which `_fill` checks and sets through
-  `object.__setattr__`: the status in `REASONS`, now with 206 and 416, the body text, encoded as
-  UTF-8, or bytes, none for a status in `NO_CONTENT`, headers of text, none holding CR, LF or, in
+  `object.__setattr__`: the status an `int`, not a `bool`, in `FINAL`, `range(200, 600)`, since
+  the server has no interim response; `reason` the given phrase, text with no CR or LF that
+  Latin-1 encodes, or else `_phrase(status)`: `_RFC9110`'s phrase for 413, 414, 416 and 422,
+  which Python 3.13 renamed in `http.HTTPStatus` to those, so that 3.11 sends the same line, then
+  `HTTPStatus(status).phrase`, then `""` for a status `HTTPStatus` does not have; the body text, encoded as
+  UTF-8, or bytes, none for a status in `BODILESS`, 204, 205 (RFC 9110 15.3.6) and 304, headers of text, none holding CR, LF or, in
   its name, `:`, no content type holding CR or LF, each of these that Latin-1 encodes, since
   `_respond` writes the head in it (`_latin1`), and `after` a `Duration` of 0 or more: a handler's
   response that fails these raises in the handler, which answers `500`, instead of in `_respond`,
@@ -391,10 +395,12 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   the board's `now`, every one due by then, earliest first, and `quiet_until()` is the earliest
   due, or `None`. `on_close` of a waiting exchange, the device's FIN or the flow's end, drops it and
   logs `http: <method> <target>: the connection closed before its response, due at <due>: nothing written`.
-  A refusal logs `http: refused a request: <status> <reason>` and is not appended.
-  `_respond` writes the status line, `Content-Type` and `Content-Length` (not for a status in
+  A refusal (`_fail`) logs `http: refused a request: <status> <reason>`, `_phrase(status)`, and
+  is not appended. `_respond` writes the status line, `HTTP/1.1 <status> <reason>` with the space
+  before an empty reason too (RFC 9112 4), `Content-Type` and `Content-Length` (not for a status in
   `NO_CONTENT`, 204 and 304, whose response ends with its head, RFC 9112 6.3), `Connection: close`,
-  the test's headers and the body (not for `HEAD`; `HttpResponse` refuses one for 204 and 304), then
+  the test's headers and the body (not for `HEAD`; `HttpResponse` refuses one for 204, 205 and 304,
+  and a 205 goes with `Content-Length: 0`), then
   closes; later data on the connection is
   ignored. `next_request(path, method=...)` captures the length of `requests` at construction and
   returns a `Condition` whose `FirstFrom` scans from that index for an exact `path` and `method`

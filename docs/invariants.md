@@ -2915,6 +2915,23 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_clock.py::test_a_wait_that_ends_at_a_delayed_http_response_finds_it_written`,
   `tests/test_http_request.py::test_a_response_with_after_arrives_no_earlier_than_after_past_the_request`
 
+## The HTTP server's statuses
+
+- **315.** Every final status from 200 to 599 is sent as given, from a fixed response, `serve`
+  with a body or a handler, as `HTTP/1.1 <status> <reason>`: the test's `reason`, else
+  `http.HTTPStatus`'s phrase, with RFC 9110's for 413, 414, 416 and 422 on every Python, else an
+  empty one after the space. A status below 200 or above 599, a `bool` or what is not an `int`
+  is refused with `ValueError` (`HttpResponse: status 100 is not a final status, from 200 to 599`),
+  and so is a reason with a line break or that Latin-1 cannot encode; a 205, as a 204 and a 304,
+  takes no body.
+  `tests/test_net_http.py::test_each_status_from_200_to_599_is_sent_as_given_served_fixed_with_a_body_or_handled`,
+  `tests/test_net_http.py::test_every_final_status_is_sent_with_its_phrase`,
+  `tests/test_net_http.py::test_a_429_carries_its_retry_after_and_a_body_s_status_its_phrase`,
+  `tests/test_net_http.py::test_a_handler_answers_429_then_201`,
+  `tests/test_net_http.py::test_a_status_that_is_not_final_is_refused_with_the_range`,
+  `tests/test_net_http.py::test_a_reason_is_text_of_one_latin_1_line`,
+  `tests/test_net_http.py::test_a_205_takes_no_body_and_is_sent_with_a_length_of_zero`
+
 ## A refused PPP negotiation
 
 - **310.** With `modem.refuse_ppp("lcp")` every dial from the next connects and the far end answers
