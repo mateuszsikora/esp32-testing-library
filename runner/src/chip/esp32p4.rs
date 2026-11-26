@@ -36,6 +36,9 @@ pub const PROFILE: Profile = Profile {
     // the in-package PSRAM of the ESP32-P4NRW16X and P4NRW32X; esp32sim's AP Memory part has
     // the size the bus is given
     psram_mb: &[16, 32],
+    reset_causes: &[
+        3, 5, 7, 9, 11, 12, 13, 15, 16, 18, 19, 20, 22, 23, 24, 26, 27,
+    ],
 };
 
 /// The MAC esp32sim gives the P4 (`cli/src/lib.rs`, `setup_p4`).
@@ -161,6 +164,10 @@ impl<R: esp32p4::Revision> Guest for P4<R> {
     }
     fn reset_hint(&mut self) -> u32 {
         super::read_reset_hint(&mut self.bus, RESET_HINT)
+    }
+    fn request_reset(&mut self, cause: u32, hint: u32) {
+        super::write_reset_hint(&mut self.bus, RESET_HINT, hint);
+        esp_soc::SocBus::request_reset(&mut self.bus, cause);
     }
     fn power_on_reset(&mut self, rom: &[u8]) -> u32 {
         use esp32p4::bus::*;

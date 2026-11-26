@@ -23,6 +23,7 @@ pub const PROFILE: Profile = Profile {
     bt: true,
     usb_serial_jtag: true,
     psram_mb: &[],
+    reset_causes: &[3, 5, 6, 7, 8, 9, 11, 12, 13, 15, 16, 17, 18, 20, 21, 22, 24],
 };
 
 /// The MAC esp32sim gives the C6 (`cli/src/lib.rs`, `setup_c6`).
@@ -114,6 +115,10 @@ impl Guest for esp32c6::Machine {
     }
     fn reset_hint(&mut self) -> u32 {
         super::read_reset_hint(&mut self.bus, RESET_HINT)
+    }
+    fn request_reset(&mut self, cause: u32, hint: u32) {
+        super::write_reset_hint(&mut self.bus, RESET_HINT, hint);
+        esp_soc::SocBus::request_reset(&mut self.bus, cause);
     }
     fn power_on_reset(&mut self, rom: &[u8]) -> u32 {
         use esp32c6::bus::*;

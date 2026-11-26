@@ -36,7 +36,7 @@ from esp32tl.boards.capabilities import CapabilityError, Request
 from esp32tl.flash import FlashSnapshot, Namespaces
 from esp32tl.interfaces import BoardOff, NeverHappened, RunEnded, SourceError
 from esp32tl.interfaces.bluetooth import Bluetooth
-from esp32tl.interfaces.board import Board, Boot, Sleep
+from esp32tl.interfaces.board import Board, Boot, ResetKind, Sleep, warm_reset
 from esp32tl.interfaces.condition import waiting
 from esp32tl.interfaces.console import ConsoleLines
 from esp32tl.interfaces.gnss import Gnss
@@ -322,8 +322,14 @@ class Serial(Board):
     def power_off(self) -> None:
         self._skip("serial: the backend cannot switch the board's power")
 
-    def reset(self) -> None:
-        """Pulses EN through the adapter's RTS, as power_on does."""
+    def reset(self, kind: ResetKind = "en") -> None:
+        """Pulses EN through the adapter's RTS, as power_on does. Any other `kind` skips the
+        test: a warm reset cannot be caused from the wires."""
+        if warm_reset(kind) is not None:
+            self._skip(
+                f"serial: board.reset(kind={kind!r}) cannot be caused from the wires;"
+                " only kind='en' pulses EN"
+            )
         self._on()
         if self._closed:
             raise BoardOff("serial: the board is closed: the port is pytest-embedded's again")

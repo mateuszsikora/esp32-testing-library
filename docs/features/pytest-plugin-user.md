@@ -464,8 +464,9 @@ On esp32sim, the boot and sleep histories (`board.boots`, `board.sleeps`) and th
   the GNSS receiver model's sentences are dated from it. On a board that is on it raises
   `BoardOff: the board is on already: call board.power_off() first`. After `board.power_off()` it
   switches the supply back on ([resets and power cycles](#resets-and-power-cycles)).
-- `board.reset()` and `board.power_off()` reset the chip and switch the board's supply off, at
-  the board's time now; `board.boots` and `board.boot` are the chip's boots
+- `board.reset()` and `board.power_off()` reset the chip, through EN or warm as a panic, a
+  watchdog or a brownout would (`kind`), and switch the board's supply off, at the board's time
+  now; `board.boots` and `board.boot` are the chip's boots
   ([resets and power cycles](#resets-and-power-cycles)).
 - `board.powered` is whether the supply is on, from `power_on()` to `power_off()`;
   `board.started`, whether the test has called `power_on()` at all.
@@ -619,6 +620,50 @@ def test_the_count_survives_a_power_cut(board: Board):
 - `board.reset()` pulses the chip's EN pin, as a board's reset button does: the ESP32 alone
   restarts, through a power-on reset, and the rest of the board keeps its power. On a board that
   is off it raises `BoardOff: the board is off: board.reset() resets a board that is on`.
+- `board.reset(kind=...)` resets the chip warm instead, as the event `kind` names would, at the
+  board's time now: the chip restarts as after its own panic, watchdog or brownout, and SRAM, the
+  RTC memories (`RTC_NOINIT_ATTR`) and the RTC registers keep what the firmware wrote there. The
+  next boot finds the reset cause and the reset-reason hint ESP-IDF's own path leaves, so its
+  `esp_reset_reason()` and `board.boot.idf_reason` are the kind's. `kind="en"`, the default, is
+  the EN pulse above. A crash counter or a boot-loop guard in RTC memory, a clock carried across
+  the reset, an OTA image that must roll back after it crashes, a report of the reset reason: a
+  test reaches each of them without making the firmware panic or hang.
+
+  | `kind` | ESP-IDF's path | Cause (the ROM's) | Hint | `boot.idf_reason` |
+  |---|---|---|---|---|
+  | `"en"` | the EN pin | 1, `POWERON_RESET` | 0 | `ESP_RST_POWERON` |
+  | `"panic"` | the panic handler | 12, `SW_CPU_RESET` | `ESP_RST_PANIC` | `ESP_RST_PANIC` |
+  | `"task_wdt"` | the task watchdog's panic | 12 | `ESP_RST_TASK_WDT` | `ESP_RST_TASK_WDT` |
+  | `"int_wdt"` | the interrupt watchdog's panic | 12 | `ESP_RST_INT_WDT` | `ESP_RST_INT_WDT` |
+  | `"rtc_wdt"` | the RTC watchdog, as the bootloader arms it | 16, `RTCWDT_RTC_RESET` | none, 0 | `ESP_RST_WDT` |
+  | `"brownout"` | the brownout handler (`CONFIG_ESP_BROWNOUT_DET`) | 3, `SW_RESET` | `ESP_RST_BROWNOUT` | `ESP_RST_BROWNOUT` |
+
+  The causes are the same on every chip esp32tl emulates (`RESET_REASON_CPU0_SW`,
+  `RESET_REASON_SYS_RTC_WDT` and `RESET_REASON_CORE_SW` of each chip's
+  `components/soc/<chip>/include/soc/reset_reasons.h`), and so is each kind's `idf_reason`. The
+  hint is written as ESP-IDF writes it, `h | h << 16 | 0x80000000`. The firmware's handler does
+  not run: the console shows no backtrace, no `Rebooting...` and no `Brownout detector was
+  triggered`, and nothing the firmware does before such a reset, its shutdown handlers included,
+  happens. `esp_restart()` is no kind for that reason: a test that wants it makes the firmware
+  call it. The run's log says `board.reset(kind='panic')`. On the ESP32-S31, esp32sim makes SRAM
+  and the LP memory again at every reset of the chip, the firmware's own too, so nothing in RAM
+  or RTC memory survives one there. `"rtc_wdt"` is a reset of the RTC domain on the chip, which
+  clears its registers and its timer; esp32sim's chip reset does not tell it from the others, so
+  here the RTC registers and the RTC timer keep what they had, all but the hint register, which
+  reads 0 as on the chip. A firmware that reads an RTC register or the RTC timer after `ESP_RST_WDT`
+  sees here what it would not on the chip. TODO(owner): whether RTC memory (`RTC_NOINIT_ATTR`)
+  survives the RTC watchdog's reset on the chip; esp32sim keeps it. Any other `kind` raises
+  `ValueError: board.reset: kind is 'en', 'panic', 'task_wdt', 'int_wdt', 'rtc_wdt' or 'brownout',
+  not 'sw'`, and resets nothing.
+
+  ```python
+  def test_a_panic_counts_in_rtc_memory(board: Board):
+      board.power_on()
+      board.console.expect_exact("crashes: 0")
+      board.reset(kind="panic")
+      board.console.expect_exact("crashes: 1")
+      assert board.boot.idf_reason == "ESP_RST_PANIC"
+  ```
 - `board.power_off()` switches the board's supply off. The chip stops; the SD card in the slot,
   and the parts of the board a model stands for, the GNSS receiver and the modem, lose their power
   with it. The board's clock runs on: `board.wait` and `board.wait_until` work as before, and the
@@ -641,7 +686,8 @@ def test_the_count_survives_a_power_cut(board: Board):
   the ROM reports for it (`RESET_REASON` in ESP-IDF's `esp32/rom/rtc.h`); and `reason`, its name,
   as the ROM prints it, such as `POWERON_RESET` (1) or `SW_CPU_RESET` (12, `esp_restart()`). The
   first boot is at 0 with cause 1; every reset adds one, whoever caused it: `board.reset()` and
-  `power_on()` give cause 1, the firmware and its watchdogs their own. `board.boot` is the last.
+  `power_on()` give cause 1, `board.reset(kind=...)` its kind's, the firmware and its watchdogs
+  their own. `board.boot` is the last.
   A boot is there once the board has run into it: right after `board.reset()`, or the
   `power_on()` that follows a `power_off()`, `board.boot` is still the one before, until the test
   lets the board run, for as little as `board.wait(ms(1))`.
@@ -660,7 +706,8 @@ def test_the_count_survives_a_power_cut(board: Board):
   register holds. On esp32sim the runner reads the register at each reset
   ([protocol 5.5](../protocol.md#55-reset)), and on the classic ESP32 `firmware/reset_reasons`
   checks five of them against what the firmware printed: a power-on, `esp_restart()`, a panic, a
-  task watchdog's panic and a wake from deep sleep. A cause ESP-IDF does not map is
+  task watchdog's panic and a wake from deep sleep; on the classic ESP32, the S3, the C3 and the C6
+  it checks each warm kind of `board.reset(kind=...)` too. A cause ESP-IDF does not map is
   `ESP_RST_UNKNOWN`, as `esp_reset_reason()` reports it: on the classic ESP32 4 (`OWDT_RESET`), 10
   (`INTRUSION_RESET`) and 14 (`EXT_CPU_RESET`, the APP CPU reset by the PRO CPU), on the S3 and
   the C3 6, 19 and 23 among others, on the P4 6, 8, 17, 21 and 27 among others. Where a chip's tables differ:
@@ -815,14 +862,14 @@ def test_the_count_survives_a_power_cut(board: Board):
 
 What each kind of restart keeps, on esp32sim:
 
-| | The firmware restarts (`esp_restart()`, a watchdog) | `board.reset()` | `board.power_off()`, `board.power_on()` |
+| | The firmware restarts (`esp_restart()`, a watchdog), or `board.reset(kind=...)` | `board.reset()` | `board.power_off()`, `board.power_on()` |
 |---|---|---|---|
-| Reset cause | the firmware's, 12 for `esp_restart()` | 1, `POWERON_RESET` | 1, `POWERON_RESET` |
+| Reset cause | the firmware's, 12 for `esp_restart()`; the kind's | 1, `POWERON_RESET` | 1, `POWERON_RESET` |
 | Flash: the app, NVS, OTA data, what the firmware wrote | kept | kept | kept |
-| RAM, `.noinit` (`__NOINIT_ATTR`) included | kept | zeroed | zeroed |
-| RTC memory (`RTC_NOINIT_ATTR`) | kept | zeroed | zeroed |
+| RAM, `.noinit` (`__NOINIT_ATTR`) included | kept, but on the ESP32-S31 | zeroed | zeroed |
+| RTC memory (`RTC_NOINIT_ATTR`) | kept, but on the ESP32-S31 | zeroed | zeroed |
 | PSRAM | zeroed | zeroed | zeroed |
-| The RTC timer | runs on | starts at 0 | starts at 0 |
+| The RTC timer | runs on, after `"rtc_wdt"` too, which resets it on the chip | starts at 0 | starts at 0 |
 | SD card: its files | kept | kept | kept |
 | SD card: its state | kept | kept | uninitialised: the driver mounts it again |
 | GNSS receiver model | sends on | sends on | silent while off; then sends again, with the fix the test gave it |
@@ -845,8 +892,9 @@ a sentence that was on the line when the chip reset or the power went. Every int
 profile is on the board's supply ([board profiles](board-profiles-user.md#the-profiles-esp32tl-ships)).
 
 On [serial](serial-backend-user.md#power-on-time-and-console), `board.reset()` pulses EN through
-the adapter, and `board.power_off()`, `board.boots`, `board.next_boot()`,
-`board.wait_for_wake()`, `board.sleeps` and `board.next_sleep()` skip the test.
+the adapter, and `board.reset(kind=...)` with any kind but `"en"`, `board.power_off()`,
+`board.boots`, `board.next_boot()`, `board.wait_for_wake()`, `board.sleeps` and
+`board.next_sleep()` skip the test.
 
 `console` is the firmware's console, read and written on the board's clock: its UART0, or the
 chip's USB-Serial/JTAG controller on a board profile with `console = "usb-serial-jtag"`

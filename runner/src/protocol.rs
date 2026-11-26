@@ -155,9 +155,12 @@ pub enum Incoming {
         t: u64,
         on: bool,
     },
-    /// The chip's EN pin pulsed: a power-on reset of the chip alone (5.18).
+    /// The chip's EN pin pulsed, a power-on reset of the chip alone; with `cause`, a warm reset
+    /// with that cause for the ROM and `hint` in the reset-reason hint register (5.18).
     ChipReset {
         t: u64,
+        cause: Option<u32>,
+        hint: u32,
     },
     /// A fault rule for the SD card of `--sd-rw` (5.20).
     SdFault {
@@ -274,9 +277,7 @@ pub fn parse(line: &str) -> Result<Incoming, String> {
             t: field("t").time()?,
             on: field("on").boolean()?,
         },
-        "chip_reset" => Incoming::ChipReset {
-            t: field("t").time()?,
-        },
+        "chip_reset" => chip_reset(&field)?,
         "sd_fault" => Incoming::SdFault {
             t: field("t").time()?,
             fault: sd_fault(&field)?,
@@ -298,6 +299,31 @@ pub fn parse(line: &str) -> Result<Incoming, String> {
         "adc" => Incoming::NotYet("adc"),
         _ => return Err(format!("unknown type {kind:?}")),
     })
+}
+
+/// A `chip_reset`: EN without `cause` and `hint`, a warm reset with a `cause`, the ROM's, and the
+/// `hint` it leaves, 0 when absent (5.18). Whether the chip's ROM has the cause is the session's
+/// to check: it knows the chip.
+fn chip_reset<'a>(field: &impl Fn(&'static str) -> Field<'a>) -> Result<Incoming, String> {
+    let t = field("t").time()?;
+    let word = |key: &'static str| -> Result<Option<u32>, String> {
+        let f = field(key);
+        f.optional()?
+            .map(|v| u32::try_from(v).map_err(|_| f.error("is over 32 bits")))
+            .transpose()
+    };
+    let (cause, hint) = (word("cause")?, word("hint")?);
+    match (cause, hint) {
+        (None, Some(_)) => Err("chip_reset: a \"hint\" without a \"cause\"".into()),
+        (Some(1), _) => Err(
+            "chip_reset: cause 1 is a power-on's; a chip_reset without a \"cause\" is one".into(),
+        ),
+        (cause, hint) => Ok(Incoming::ChipReset {
+            t,
+            cause,
+            hint: hint.unwrap_or(0),
+        }),
+    }
 }
 
 /// The rule of an `sd_fault`, checked as far as it can be without the card (5.20).

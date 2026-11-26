@@ -225,6 +225,10 @@ run's time does not restart. While the supply is off the guest runs nothing, and
 still passes from one turn of the peer to the next. The flash is the runner's copy of the
 `--flash-at` files: the files are read once, at the start, and never written.
 [The protocol](../protocol.md#517-power-ext-105) says what a power cycle keeps and what it clears.
+A `chip_reset` with a `cause` is a warm reset instead, as `board.reset(kind=...)` gives one: the
+chip resets as after its own panic, watchdog or brownout, keeping SRAM, the RTC memories and the
+RTC registers, with the peer's cause for the ROM and its reset-reason hint for ESP-IDF
+([protocol 5.18](../protocol.md#518-chip_reset-ext-105)).
 
 A chip in deep sleep runs nothing either, and its RTC goes on: the runner moves the RTC through the
 sleep in long steps, up to just before the alarm of a timer wake, and the chip wakes at the alarm's
@@ -622,7 +626,8 @@ instead. Everything the runner says goes to stderr, on lines that start with
   `esp_restart()` does: T in emulated seconds with six decimals, CAUSE the reset cause the ROM
   reports, in hex (`0x...`). The runner restarts the guest from the ROM, as the chip would, and
   the run goes on. With `--board`, the peer gets a `reset` message as well. The same line, with
-  cause `0x1`, follows the peer's `chip_reset` and its `power` that switches the supply back on;
+  cause `0x1`, follows the peer's `chip_reset` and its `power` that switches the supply back on,
+  and, with the peer's cause, its warm `chip_reset`;
 - `esp32tl-runner: power off at T s` when the peer switches the board's supply off.
   the run goes on. With `--board`, the peer gets a `reset` message as well.
 - `esp32tl-runner: cannot write the flash: PATH: ERROR` when the end of the run cannot write the

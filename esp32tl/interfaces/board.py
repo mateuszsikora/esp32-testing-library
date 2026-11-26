@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from functools import cached_property
 from pathlib import Path
-from typing import TypeVar, cast
+from typing import Literal, TypeVar, cast, get_args
 
 from esp32tl.boards import BoardProfile
 from esp32tl.flash import FlashSnapshot, Namespaces
@@ -111,6 +111,57 @@ _IDF_RESET_REASONS: dict[str, dict[int, str]] = {
 }
 # The hints a software reset takes as its reason; any other is ESP_RST_SW (get_reset_reason).
 _HINTED = {4: "ESP_RST_PANIC", 5: "ESP_RST_INT_WDT", 6: "ESP_RST_TASK_WDT", 9: "ESP_RST_BROWNOUT"}
+
+
+# The kinds of reset `board.reset(kind=...)` gives. "en" pulses the chip's EN pin, a power-on
+# reset; each other is a warm reset, which keeps SRAM, the RTC memories and the RTC registers, as
+# ESP-IDF's own path through the event it names leaves it.
+ResetKind = Literal["en", "panic", "task_wdt", "int_wdt", "rtc_wdt", "brownout"]
+RESET_KINDS: tuple[ResetKind, ...] = get_args(ResetKind)
+
+
+def reset_hint(reason: int) -> int:
+    """The value of the reset-reason hint register for `esp_reset_reason_t` `reason`, as
+    `esp_reset_reason_set_hint` writes it (`components/esp_system/port/soc/<chip>/
+    reset_reason.c`)."""
+    return reason | reason << 16 | 0x8000_0000
+
+
+@dataclass(frozen=True)
+class WarmReset:
+    """A warm reset of one kind: the `cause` the ROM reports, the `hint` the register holds, and
+    what `esp_reset_reason()` makes of the two, `idf_reason`."""
+
+    cause: int
+    hint: int
+    idf_reason: str
+
+
+# What ESP-IDF v5.3.6 to v6.1 leaves before each warm reset, the same on every chip of
+# _IDF_RESET_REASONS. A panic sets the hint ESP_RST_PANIC, a task watchdog's ESP_RST_TASK_WDT and
+# an interrupt watchdog's ESP_RST_INT_WDT (components/esp_system/panic.c, esp_panic_handler) and
+# resets the CPU, 12, RESET_REASON_CPU0_SW (port/soc/<chip>/system_internal.c, esp_restart_noos);
+# the brownout handler, with CONFIG_ESP_BROWNOUT_DET, sets ESP_RST_BROWNOUT and resets the system,
+# 3, RESET_REASON_CORE_SW (esp_rom_software_reset_system in brownout.c). The bootloader's RTC
+# watchdog resets the RTC too, 16, RESET_REASON_SYS_RTC_WDT (WDT_STAGE_ACTION_RESET_RTC in
+# bootloader_init.c), and with it the hint register. Causes of
+# components/soc/<chip>/include/soc/reset_reasons.h.
+_WARM_RESETS: dict[str, WarmReset] = {
+    "panic": WarmReset(12, reset_hint(4), "ESP_RST_PANIC"),
+    "task_wdt": WarmReset(12, reset_hint(6), "ESP_RST_TASK_WDT"),
+    "int_wdt": WarmReset(12, reset_hint(5), "ESP_RST_INT_WDT"),
+    "rtc_wdt": WarmReset(16, 0, "ESP_RST_WDT"),
+    "brownout": WarmReset(3, reset_hint(9), "ESP_RST_BROWNOUT"),
+}
+
+
+def warm_reset(kind: str) -> WarmReset | None:
+    """The cause and hint of a reset of `kind`, one of `RESET_KINDS`: `None` for "en", the EN
+    pulse, which is a power-on reset; `ValueError` for any other string."""
+    if kind not in RESET_KINDS:
+        kinds = ", ".join(repr(k) for k in RESET_KINDS[:-1])
+        raise ValueError(f"board.reset: kind is {kinds} or {RESET_KINDS[-1]!r}, not {kind!r}")
+    return _WARM_RESETS.get(kind)
 
 
 def idf_reset_reason(chip: str, cause: int, hint: int) -> str | None:
@@ -259,7 +310,7 @@ class Board(ABC):
     def power_off(self) -> None: ...
 
     @abstractmethod
-    def reset(self) -> None: ...
+    def reset(self, kind: ResetKind = "en") -> None: ...
 
     @property
     @abstractmethod

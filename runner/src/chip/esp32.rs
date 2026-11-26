@@ -29,6 +29,7 @@ pub const PROFILE: Profile = Profile {
     // no USB-Serial/JTAG on the classic chip
     usb_serial_jtag: false,
     psram_mb: &[4],
+    reset_causes: &[3, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16],
 };
 
 /// The MAC esp32sim gives the classic chip, so a run here and the same run in esp32sim agree.
@@ -98,7 +99,7 @@ const DEEPSLEEP_RESET: u32 = 5;
 /// ends at `esp32::bus::DRAM_HIGH` (`esp32/src/bus.rs`, `SocBus::memory`).
 const CACHE_RAM: u32 = 0x4007_0000;
 const RTC_FAST: u32 = 0x3ff8_0000;
-const RTC_SLOW: u32 = 0x5000_0000;
+pub(crate) const RTC_SLOW: u32 = 0x5000_0000;
 
 /// RTC_CNTL, as esp32sim keeps it: offsets into its register RAM (`esp32/src/periph.rs`,
 /// `ClassicRtc`), which keeps WAKEUP_STATE, at 0x38 on the bus, at 0x34. The registers are ESP-IDF
@@ -223,6 +224,10 @@ impl Guest for esp32::Machine {
     }
     fn reset_hint(&mut self) -> u32 {
         super::read_reset_hint(&mut self.bus, RESET_HINT)
+    }
+    fn request_reset(&mut self, cause: u32, hint: u32) {
+        super::write_reset_hint(&mut self.bus, RESET_HINT, hint);
+        esp_soc::SocBus::request_reset(&mut self.bus, cause);
     }
     fn power_on_reset(&mut self, rom: &[u8]) -> u32 {
         // the cores, the digital peripherals and PSRAM, as at any reset

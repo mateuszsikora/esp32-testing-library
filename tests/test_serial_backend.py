@@ -307,6 +307,9 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
         def test_power_off(board):
             board.power_on()
             board.power_off()
+        def test_warm_reset(board):
+            board.power_on()
+            board.reset(kind="panic")
         def test_boots(board):
             board.power_on()
             board.boot
@@ -341,7 +344,7 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
     """)
     )
     result = run_serial(pytester, "-rs")
-    result.assert_outcomes(skipped=33)
+    result.assert_outcomes(skipped=34)
     result.stdout.fnmatch_lines(
         [
             "*serial: uart.gnss takes no model source on this backend, only real*",
@@ -368,6 +371,8 @@ def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: 
             "*serial: wifi takes no model source on this backend, only real*",
             "*serial: bluetooth takes no model source on this backend*",
             "*serial: the backend cannot switch the board's power*",
+            "*serial: board.reset(kind='panic') cannot be caused from the wires; only kind='en'"
+            " pulses EN*",
             "*serial: the backend does not see the chip's resets*",
             "*serial: the backend does not see the chip's resets*",
             "*serial: the backend does not see the chip's resets*",

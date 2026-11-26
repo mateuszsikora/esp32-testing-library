@@ -2644,6 +2644,46 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `runner/src/chip/tests.rs::the_p4_keeps_its_reset_hint`,
   `runner/src/chip/tests.rs::the_s31_keeps_its_reset_hint`
 
+## Warm resets from the test
+
+- **313.** `board.reset(kind=...)` with `"panic"`, `"task_wdt"`, `"int_wdt"`, `"rtc_wdt"` or
+  `"brownout"` resets the chip warm: the next boot's ROM cause is 12, 12, 12, 16 or 3, its hint
+  `ESP_RST_PANIC`'s, `ESP_RST_TASK_WDT`'s, `ESP_RST_INT_WDT`'s, none or `ESP_RST_BROWNOUT`'s, and
+  its `Boot.idf_reason`, and the firmware's `esp_reset_reason()`, `ESP_RST_PANIC`,
+  `ESP_RST_TASK_WDT`, `ESP_RST_INT_WDT`, `ESP_RST_WDT` or `ESP_RST_BROWNOUT`, on every chip with a
+  reset table. RAM and RTC memory keep what the boot before wrote (but on the S31, whose memories
+  esp32sim makes again at every chip reset), and `board.reset()` after it, the EN pulse, still
+  clears them. The runner writes the peer's hint into the chip's hint register and resets it with
+  the peer's cause as after the guest's own reset; with the supply off it does nothing.
+  `tests/test_reset_reasons.py::test_each_warm_reset_boots_with_the_reason_its_event_leaves`,
+  `tests/test_chips.py::TestOnESP32S3::test_each_warm_reset_boots_with_the_reason_its_event_leaves`,
+  `tests/test_chips.py::TestOnESP32C3::test_each_warm_reset_boots_with_the_reason_its_event_leaves`,
+  `tests/test_chips.py::TestOnESP32C6::test_each_warm_reset_boots_with_the_reason_its_event_leaves`,
+  `tests/test_power.py::test_a_warm_reset_keeps_ram_and_rtc_memory_and_board_reset_clears_them`,
+  `tests/test_reset_reasons.py::test_each_warm_reset_reads_as_its_idf_reason_on_every_chip`,
+  `tests/test_bluetooth_guest.py::test_a_warm_board_reset_sends_its_cause_and_hint_and_resets_the_controller`,
+  `runner/src/session/tests.rs::a_chip_reset_with_a_cause_is_a_warm_reset_with_the_peers_hint`,
+  `runner/src/chip/tests.rs::the_classic_chip_resets_warm_with_the_peers_cause_and_hint`,
+  `runner/src/chip/tests.rs::the_s3_resets_warm_with_the_peers_cause_and_hint`,
+  `runner/src/chip/tests.rs::the_c3_resets_warm_with_the_peers_cause_and_hint`,
+  `runner/src/chip/tests.rs::the_c6_resets_warm_with_the_peers_cause_and_hint`,
+  `runner/src/chip/tests.rs::the_p4_resets_warm_with_the_peers_cause_and_hint`,
+  `runner/src/chip/tests.rs::the_s31_resets_warm_with_the_peers_cause_and_hint`
+- **314.** A `chip_reset` carries `cause` and `hint` only when warm: without them it is the EN
+  pulse, and the runner refuses a `hint` without a `cause`, cause 1, a value over 32 bits and a
+  cause the chip's ROM does not report; the harness's decoder refuses the first three too.
+  `board.reset` takes only the kinds `"en"`, `"panic"`, `"task_wdt"`, `"int_wdt"`, `"rtc_wdt"` and
+  `"brownout"`, and any other raises `ValueError` and sends nothing; on serial any kind but `"en"`
+  skips the test.
+  `tests/test_link_protocol.py::test_a_chip_reset_carries_a_cause_and_a_hint_only_when_warm`,
+  `tests/test_link_protocol.py::test_a_chip_reset_the_runner_would_refuse_does_not_decode`,
+  `tests/test_reset_reasons.py::test_en_is_a_power_on_reset_and_any_other_kind_is_refused`,
+  `tests/test_bluetooth_guest.py::test_a_board_reset_of_an_unknown_kind_sends_nothing`,
+  `tests/test_serial_backend.py::test_serial_capabilities_skip_at_the_call`,
+  `runner/src/protocol/tests.rs::refuses_a_chip_reset_that_cannot_be`,
+  `runner/src/session/tests.rs::a_chip_reset_with_a_cause_the_chips_rom_lacks_is_a_protocol_error`,
+  `runner/src/chip/tests.rs::every_chip_takes_the_causes_of_a_panic_a_watchdog_and_a_brownout`
+
 ## Bluetooth LE
 
 - **268.** The firmware's controller is its chip's: on the ESP32-S3, the ESP32-C3 and the

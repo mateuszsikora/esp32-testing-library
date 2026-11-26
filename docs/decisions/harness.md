@@ -5968,3 +5968,46 @@ before each of them still counts the attempt.
 Configure-Requests without a Terminate-Request, and such a call stays in data mode until the device
 escapes or closes PPP. No source found says when a SIMCom modem or a network gives up on an
 unanswered LCP; with one, the modem could hang up on its own.
+
+## A test resets the chip warm by naming the event, not the cause
+
+Status: decided (#358)
+
+`board.reset(kind=...)` takes `"en"`, the EN pulse it always was and the default, or one of
+`"panic"`, `"task_wdt"`, `"int_wdt"`, `"rtc_wdt"` and `"brownout"`: a warm reset that keeps SRAM,
+the RTC memories and the RTC registers and leaves the cause and the reset-reason hint ESP-IDF's
+own path through that event leaves, read in each chip's `reset_reasons.h`, `panic.c`,
+`system_internal.c`, `brownout.c` and `bootloader_init.c` of the pinned containers (v5.3.6, v5.5.4,
+v6.1): cause 12 and the panic's, the task watchdog's or the interrupt watchdog's hint; cause 16 and
+no hint; cause 3 and `ESP_RST_BROWNOUT`. The causes are the same on all six chips. The firmware's
+handler does not run, so the console shows none of what it prints before the reset, and the
+documentation says so.
+
+**Rejected:** a raw `cause` and `hint` in the test's API. What a test means is the event its
+firmware must survive, and the pair that stands for it is ESP-IDF's to choose, per version: a
+test that names cause 12 and hint `0x80040004` says nothing a reader recognises, and can name a
+pair no ESP-IDF path leaves. The wire carries the raw pair, so that the runner stays a chip and
+not an ESP-IDF model; the kind table lives beside `_IDF_RESET_REASONS`, which a unit test holds
+the two to.
+
+**Rejected:** a kind for `esp_restart()`. Injected, it would skip the shutdown handlers and the
+rest of what the firmware's own call does before the reset, so the boot after it would not be the
+one an `esp_restart()` leaves; a test that wants one makes the firmware call it.
+
+**Rejected:** printing what the handler would, a backtrace, `Rebooting...` or `Brownout detector
+was triggered`, on the console. The runner would make up output the firmware never wrote, and a
+test that matched it would pass on a firmware with another handler.
+
+**Rejected:** the timer-group watchdogs' own causes (7 and 8) for `"task_wdt"` and `"int_wdt"`.
+ESP-IDF arms both watchdogs to interrupt at their first stage, and the interrupt panics, so the
+chip resets as after a panic, cause 12 with their hint (`int_wdt.c`,
+`task_wdt_impl_timergroup.c`). Their second stage resets the system only when the panic handler
+does not finish in time, a hang inside the handler, not the watchdog event a test means.
+
+**Postponed:** resetting the RTC domain for `"rtc_wdt"`. On the chip cause 16 resets the RTC
+registers and the RTC timer, which esp32sim's chip reset keeps for every cause; the runner sends
+the hint 0 the chip leaves, and the user documentation says the rest stays. Clearing them would
+need each chip's RTC register map in the runner, and no test has needed it yet.
+
+**Postponed:** a kind for the second stage, causes 7 and 8. No test has needed a hang inside the
+panic handler yet; the protocol already carries the cause, so it is a row in the kind table.

@@ -231,8 +231,17 @@ first, before what the interfaces send ([protocol 5.17 and 5.18](../protocol.md#
 Their `t` is that turn's, so `BoardLink`'s check that a board input is not stamped before its turn
 cannot fail with this backend; it is there for another caller:
 
-- `reset()`, with the supply on, queues `ChipReset(now)` and logs `board.reset()`; otherwise
-  `BoardOff` (`the board is off: board.reset() resets a board that is on`).
+- `reset(kind="en")` takes the kind's `WarmReset` from `warm_reset(kind)`
+  (`esp32tl/interfaces/board.py`) first, which raises `ValueError` for a kind outside
+  `RESET_KINDS` and gives `None` for `"en"`. With the supply on, it resets the Bluetooth
+  controller (`Bluetooth.chip_reset(now)`) and queues `ChipReset(now)` for `"en"`, logged as
+  `board.reset()`, or `ChipReset(now, cause, hint)` for a warm kind, logged as
+  `board.reset(kind='panic')` ([protocol 5.18](../protocol.md#518-chip_reset-ext-105)); otherwise
+  `BoardOff` (`the board is off: board.reset() resets a board that is on`). `ChipReset` puts
+  `cause` and `hint` on the wire only when they are not `None`. `_WARM_RESETS` beside
+  `_IDF_RESET_REASONS` holds each warm kind's cause, hint and `idf_reason`, the same on every chip;
+  `tests/test_reset_reasons.py` checks that `idf_reset_reason` of each row gives its `idf_reason`
+  on every chip with a table.
 - `power_off()`, once started and with the supply on, and `power_on()` after it, go through
   `_switch(on)`: `Power(now, on)`, `_supply`, for `power_off()`
   `Internet.device_reset(now, "the device lost its power")` on every simulated network the test
@@ -608,7 +617,7 @@ repository makes.
 |---|---|
 | `Esp32Sim(dut, app_path, msg_queue, meta, profile, directory=None, skip=None, *, build_dir=None)` | The board, off. Attributes: `name = "esp32sim"`, `clock` (`"emulated-fifo-write"`, or `"wall"` with a real source on a route or a bridge on a network: the clock the runner's `hello` must name, a replayed recording must be on, and a tap's recording is on), `dut`, `profile` (the `BoardProfile`), `directory`, `app` (the `Build`), `console_output` (a `bytearray`), `console_lines` (a `ConsoleLines`), `log` (the `RunLog`), `process` (the `RunnerPopen`, `None` until power-on), `link` (the `BoardLink`, complete once `close` returns) |
 | `Esp32Sim.power_on(utc=None)` | The first time, starts the runner; after `power_off`, switches the supply back on (no `utc`); `BoardOff` with the supply on |
-| `Esp32Sim.power_off()`, `Esp32Sim.reset()` | The supply off; a pulse of EN. Both at the held clock's `now`, sent with the turn the link is held at; `BoardOff` when the board is not in the state they need, `RunEnded` once the run has ended |
+| `Esp32Sim.power_off()`, `Esp32Sim.reset(kind="en")` | The supply off; a pulse of EN, or a warm reset with the kind's cause and hint. Both at the held clock's `now`, sent with the turn the link is held at; `BoardOff` when the board is not in the state they need, `RunEnded` once the run has ended |
 | `Esp32Sim.flash()` | A `FlashSnapshot` of the runner's flash at the board's time now, or as the run left it; `BoardOff` before the first `power_on` |
 | `Esp32Sim.nvs(namespaces, partition="nvs", *, merge=False)` | The test's keys in the named NVS partition: for the runner's start before the first `power_on`, into its flash while the supply is off after it; with `merge`, over the partition's values now; `BoardOff` with the supply on, `RunEnded` once the run has ended |
 | `Esp32Sim.powered`, `Esp32Sim.started` | Whether the supply is on, from `power_on` to `power_off`; whether `power_on` has started the runner |
@@ -718,6 +727,7 @@ In the test body:
 | `the board is on already: call board.power_off() first` | `BoardOff` | `power_on()` with the supply on |
 | `the board is off already: call board.power_on() to switch it on` | `BoardOff` | `power_off()` with the supply off |
 | `the board is off: board.reset() resets a board that is on` | `BoardOff` | `reset()` before power-on or with the supply off |
+| `board.reset: kind is 'en', 'panic', 'task_wdt', 'int_wdt', 'rtc_wdt' or 'brownout', not 'sw'` | `ValueError` | `reset(kind=...)` with a kind outside `RESET_KINDS`, before anything is checked or sent |
 | `board.nvs: the board is on: call board.power_off() first, and write the flash while it is off` | `BoardOff` | `nvs()` with the supply on, also once the run has ended with it on, as `reset()` and `power_off()` check the supply first |
 | `board.nvs: the runner cannot write the flash: {error}` | `BackendError` | The runner's `flash_write_ack` says why it wrote nothing |
 | `board.nvs: the runner cannot dump the flash to merge over it: {error}` | `BackendError` | With `merge` between boots, the runner's `flash_dump_ack` says why it wrote no flash file |

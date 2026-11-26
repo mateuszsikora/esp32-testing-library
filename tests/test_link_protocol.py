@@ -128,6 +128,8 @@ EVERY_MESSAGE: list[tuple[Sender, Message]] = [
     ("harness", Power(7_000_000_000, False)),
     ("harness", Power(8_000_000_000, True)),
     ("harness", ChipReset(9_000_000_000)),
+    ("harness", ChipReset(9_000_000_000, 12, 0x8004_0004)),
+    ("harness", ChipReset(9_000_000_000, 16)),
     ("harness", SdFault(2_500_000_000, 1, "write", "error", count=1)),
     ("harness", SdFault(0, 2, "read", "delay", 50_000_000, None, (0, 63))),
     ("harness", SdFault(0, 3, "erase", "observe", None, 4, (8, 15))),
@@ -370,6 +372,29 @@ def test_ethernet_frames_are_14_to_1518_bytes_and_switches_are_true_or_false(
 )
 def test_an_sd_fault_the_runner_would_refuse_does_not_decode(fields: str, error: str) -> None:
     line = f'{{"type":"sd_fault","t":0,"id":1,{fields}}}'.encode()
+    with pytest.raises(ProtocolError, match=re.escape(error)):
+        decode(line, "harness")
+
+
+def test_a_chip_reset_carries_a_cause_and_a_hint_only_when_warm() -> None:
+    assert encode(ChipReset(5)) == b'{"type":"chip_reset","t":5}\n'
+    assert encode(ChipReset(5, 12, 0x8004_0004)) == (
+        b'{"type":"chip_reset","t":5,"cause":12,"hint":2147745796}\n'
+    )
+    assert decode(b'{"type":"chip_reset","t":5,"cause":16}', "harness") == ChipReset(5, 16)
+
+
+@pytest.mark.parametrize(
+    ("fields", "error"),
+    [
+        ('"hint":0', "a hint without a cause"),
+        ('"cause":1', "cause 1 is a power-on's; a chip_reset without a cause is one"),
+        ('"cause":12,"hint":4294967296', "hint is over 32 bits: 4294967296"),
+        ('"cause":4294967308', "cause is over 32 bits: 4294967308"),
+    ],
+)
+def test_a_chip_reset_the_runner_would_refuse_does_not_decode(fields: str, error: str) -> None:
+    line = f'{{"type":"chip_reset","t":0,{fields}}}'.encode()
     with pytest.raises(ProtocolError, match=re.escape(error)):
         decode(line, "harness")
 

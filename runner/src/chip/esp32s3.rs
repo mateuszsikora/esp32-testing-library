@@ -29,6 +29,9 @@ pub const PROFILE: Profile = Profile {
     usb_serial_jtag: true,
     // quad or octal PSRAM; esp32sim's MR2 reports the density (`--psram-mb`)
     psram_mb: &[2, 4, 8],
+    reset_causes: &[
+        3, 5, 7, 8, 9, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+    ],
 };
 
 /// The MAC esp32sim gives the S3 (`cli/src/lib.rs`, `setup_s3`).
@@ -129,6 +132,10 @@ impl Guest for esp32s3::Machine {
     }
     fn reset_hint(&mut self) -> u32 {
         super::read_reset_hint(&mut self.bus, RESET_HINT)
+    }
+    fn request_reset(&mut self, cause: u32, hint: u32) {
+        super::write_reset_hint(&mut self.bus, RESET_HINT, hint);
+        esp_soc::SocBus::request_reset(&mut self.bus, cause);
     }
     fn power_on_reset(&mut self, rom: &[u8]) -> u32 {
         use esp32s3::bus::*;

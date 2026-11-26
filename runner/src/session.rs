@@ -21,8 +21,11 @@
 //!
 //! The peer can also pulse the chip's EN pin (`chip_reset`) and switch the board's supply
 //! (`power`). Either way the chip comes back through a power-on reset, which the peer sees as
-//! `reset` with cause 1. While the supply is off the guest runs nothing and its time still passes:
-//! the slices go on, without the guest, so that the peer's turns and inputs keep their times.
+//! `reset` with cause 1. A `chip_reset` with a `cause` is a warm reset instead, as a panic, a
+//! watchdog or a brownout gives: the chip resets as after one the guest asks for, with that cause
+//! and the peer's reset-reason hint, which `reset` reports. While the supply is off the guest runs
+//! nothing and its time still passes: the slices go on, without the guest, so that the peer's
+//! turns and inputs keep their times.
 //!
 //! With `--sd-rw` the peer's fault rules go to the SD card when they come due (`sd_fault`,
 //! `sd_clear`), and what they did comes back through the board's log (`sd_op`).
@@ -84,6 +87,11 @@ pub trait Guest {
     fn reset_hint(&mut self) -> u32 {
         0
     }
+    /// A warm reset the peer asks for (`chip_reset` with a `cause`, protocol 5.18): `hint` into
+    /// the reset-reason hint register, and `cause` for the ROM, through esp32sim's
+    /// `SocBus::request_reset`, as the board's reset button would give it. `reset_hint` and
+    /// `chip_reset` follow, as after `Stop::SwReset`.
+    fn request_reset(&mut self, cause: u32, hint: u32);
     /// The chip's power-on reset, from EN or from the board's supply coming back: SRAM, the RTC
     /// memories and the RTC registers start again as at the run's first power-on, and the flash
     /// keeps what the guest wrote to it. `rom` is the mask ROM's ELF. Returns the cause the ROM
@@ -495,7 +503,11 @@ enum Open {
 
 /// A queued input (protocol §8).
 enum Input {
-    Uart { pin: u8, baud: u32, data: Vec<u8> },
+    Uart {
+        pin: u8,
+        baud: u32,
+        data: Vec<u8>,
+    },
     Gpio(Vec<(u8, bool)>),
     Release(Vec<u8>),
     Eth(Vec<u8>),
@@ -503,7 +515,8 @@ enum Input {
     Console(Vec<u8>),
     WifiAp(bool),
     Power(bool),
-    ChipReset,
+    /// EN with `None`; a warm reset with its cause and hint.
+    ChipReset(Option<(u32, u32)>),
     SdFault(sd_card::Fault),
     SdClear(Option<Vec<u64>>),
     SdCard(Option<String>),
@@ -985,6 +998,20 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         }
         // a power-on clears the RTC registers, the hint's among them
         self.reset(cause, 0);
+    }
+
+    /// A warm reset from the peer (`chip_reset` with a `cause`): the chip resets as after one the
+    /// guest asks for, keeping SRAM, the RTC memories and the RTC registers, with `cause` for the
+    /// ROM and `hint` in the reset-reason hint register, which `reset` reports as it reads them
+    /// back.
+    fn warm_reset(&mut self, cause: u32, hint: u32) {
+        // what the guest did before the reset goes out before it
+        self.collect();
+        self.count_wifi_drops();
+        self.guest.request_reset(cause, hint);
+        let hint = self.guest.reset_hint();
+        let cause = self.guest.chip_reset();
+        self.reset(cause, hint);
     }
 
     /// The board's supply goes off: the guest stops where it is, no pad is driven and no UART
@@ -1489,9 +1516,21 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     check(t, Vec::new())?;
                     inputs.push((t, Input::Power(on)));
                 }
-                Incoming::ChipReset { t } => {
+                Incoming::ChipReset { t, cause, hint } => {
                     check(t, Vec::new())?;
-                    inputs.push((t, Input::ChipReset));
+                    let profile = crate::chip::selected();
+                    if let Some(cause) = cause
+                        && !profile.reset_causes.contains(&cause)
+                    {
+                        return Err(protocol_error(
+                            &format!(
+                                "chip_reset: cause {cause} is not one the ROM of {} reports",
+                                profile.title
+                            ),
+                            &line,
+                        ));
+                    }
+                    inputs.push((t, Input::ChipReset(cause.map(|cause| (cause, hint)))));
                 }
                 Incoming::SdFault { t, fault } => {
                     check(t, Vec::new())?;
@@ -1703,11 +1742,15 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                     }
                     reset = true;
                 }
-                Input::ChipReset if !self.off => {
+                Input::ChipReset(None) if !self.off => {
                     self.power_on_reset();
                     reset = true;
                 }
-                Input::Power(_) | Input::ChipReset => {}
+                Input::ChipReset(Some((cause, hint))) if !self.off => {
+                    self.warm_reset(cause, hint);
+                    reset = true;
+                }
+                Input::Power(_) | Input::ChipReset(_) => {}
                 // the transactions from here on meet them (take_turn checked for the card)
                 Input::SdFault(fault) => {
                     if let Some(card) = &self.opts.card {

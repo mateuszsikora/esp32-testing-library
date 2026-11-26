@@ -141,7 +141,27 @@ fn parses_the_peer_messages() {
     );
     assert_eq!(
         parse(r#"{"type": "chip_reset", "t": 10}"#),
-        Ok(Incoming::ChipReset { t: 10 })
+        Ok(Incoming::ChipReset {
+            t: 10,
+            cause: None,
+            hint: 0
+        })
+    );
+    assert_eq!(
+        parse(r#"{"type": "chip_reset", "t": 10, "cause": 12, "hint": 2147745796}"#),
+        Ok(Incoming::ChipReset {
+            t: 10,
+            cause: Some(12),
+            hint: 0x8004_0004
+        })
+    );
+    assert_eq!(
+        parse(r#"{"type": "chip_reset", "t": 10, "cause": 16, "hint": null}"#),
+        Ok(Incoming::ChipReset {
+            t: 10,
+            cause: Some(16),
+            hint: 0
+        })
     );
     assert_eq!(
         parse(
@@ -322,6 +342,35 @@ fn refuses_an_sd_fault_that_cannot_be() {
     }
     assert!(parse(r#"{"type":"sd_fault","t":0,"op":"read","action":"error"}"#).is_err());
     assert!(parse(r#"{"type":"sd_clear","t":0,"ids":[true]}"#).is_err());
+}
+
+#[test]
+fn refuses_a_chip_reset_that_cannot_be() {
+    let reset = |rest: &str| format!(r#"{{"type":"chip_reset","t":0,{rest}}}"#);
+    for (rest, error) in [
+        (r#""hint":0"#, "chip_reset: a \"hint\" without a \"cause\""),
+        (
+            r#""cause":1"#,
+            "chip_reset: cause 1 is a power-on's; a chip_reset without a \"cause\" is one",
+        ),
+        (r#""cause":-3"#, "chip_reset: \"cause\" is negative"),
+        (
+            r#""cause":"panic""#,
+            "chip_reset: \"cause\" is not an integer",
+        ),
+        (
+            r#""cause":12,"hint":4294967296"#,
+            "chip_reset: \"hint\" is over 32 bits",
+        ),
+        (
+            r#""cause":4294967308"#,
+            "chip_reset: \"cause\" is over 32 bits",
+        ),
+    ] {
+        let line = reset(rest);
+        let found = parse(&line).unwrap_err();
+        assert!(found.contains(error), "{line}: {found}");
+    }
 }
 
 #[test]

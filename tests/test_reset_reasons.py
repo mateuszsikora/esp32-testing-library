@@ -1,13 +1,21 @@
 """firmware/reset_reasons through a power-on, `esp_restart()`, a panic, a task watchdog's panic
 and a wake from deep sleep: each boot's `Boot.idf_reason` is what the firmware's
-`esp_reset_reason()` printed, also for the three software resets the ROM cannot tell apart; and,
-without firmware, how `idf_reset_reason` names each chip's causes. Needs `make firmware`
-(reset_reasons) for the first test."""
+`esp_reset_reason()` printed, also for the three software resets the ROM cannot tell apart; then
+through each warm `board.reset(kind=...)`; and, without firmware, how `idf_reset_reason` names
+each chip's causes and each kind's. Needs `make firmware` (reset_reasons) for the first two
+tests."""
 
 import pytest
 
 from esp32tl.backends.esp32sim import Esp32Sim
-from esp32tl.interfaces.board import DEEPSLEEP_RESET, POWERON_RESET, idf_reset_reason
+from esp32tl.interfaces.board import (
+    DEEPSLEEP_RESET,
+    POWERON_RESET,
+    RESET_KINDS,
+    ResetKind,
+    idf_reset_reason,
+    warm_reset,
+)
 from esp32tl.interfaces.console import Console
 
 pytestmark = pytest.mark.app_path("../firmware/reset_reasons")
@@ -20,6 +28,16 @@ def hint(reason: int) -> int:
     return reason | reason << 16 | 0x8000_0000
 
 
+# Each warm kind of board.reset(): the ROM's cause, the hint and esp_reset_reason(), as ESP-IDF's
+# panic handler, its brownout handler and the bootloader's RTC watchdog leave them.
+WARM = {
+    "panic": (12, hint(4), "ESP_RST_PANIC"),
+    "task_wdt": (12, hint(6), "ESP_RST_TASK_WDT"),
+    "int_wdt": (12, hint(5), "ESP_RST_INT_WDT"),
+    "rtc_wdt": (16, 0, "ESP_RST_WDT"),
+    "brownout": (3, hint(9), "ESP_RST_BROWNOUT"),
+}
+
 BOOT = rb"reset_reasons: reason=(\w+) rom=(\d+)"
 # The ROM's reason after esp_restart() and after a panic alike (RESET_REASON in esp32/rom/rtc.h).
 SW_CPU_RESET = 12
@@ -30,6 +48,30 @@ REASONS = [
     "ESP_RST_TASK_WDT",
     "ESP_RST_DEEPSLEEP",
 ]
+
+
+# The kinds in an order where each boot ends where the firmware waits, done or in a deep sleep,
+# before the next reset: a panic's boot panics again as the task watchdog, whose boot sleeps.
+WARM_ORDER: list[ResetKind] = ["brownout", "rtc_wdt", "int_wdt", "panic", "task_wdt"]
+
+
+def check_warm_resets(board: Esp32Sim, console: Console, settled: bytes) -> None:
+    """From a boot that waits, each warm kind of `board.reset`: the boot after it prints the
+    kind's `esp_reset_reason()` and the ROM's cause, which its `Boot` has too, and the firmware
+    goes on to the next boot that waits, which prints `settled`."""
+    for kind in WARM_ORDER:
+        cause, _, reason = WARM[kind]
+        before = len(board.boots)
+        board.reset(kind=kind)
+        printed = console.expect(BOOT, timeout=2).groups()
+        assert (printed[0].decode(), int(printed[1])) == (reason, cause), kind
+        # the boot the reset began; a panic's is followed by the one its own panic begins
+        reset = board.boots[before]
+        assert (reset.cause, reset.idf_reason) == (cause, reason), kind
+        console.expect(settled, timeout=2)
+    log = board.report(run=True)
+    assert "board.reset(kind='panic')" in log
+    assert "SW_CPU_RESET, ESP_RST_PANIC (reset cause 12)" in log
 
 
 def printed_reasons(console: Console, count: int, timeout: float) -> list[tuple[str, int]]:
@@ -59,6 +101,14 @@ def test_each_boot_is_named_as_the_firmware_s_esp_reset_reason(
         SW_CPU_RESET,
         DEEPSLEEP_RESET,
     ]
+
+
+def test_each_warm_reset_boots_with_the_reason_its_event_leaves(
+    board: Esp32Sim, console: Console
+) -> None:
+    board.power_on()
+    console.expect_exact("reset_reasons: done", timeout=2)
+    check_warm_resets(board, console, rb"reset_reasons: done")
 
 
 @pytest.mark.parametrize("chip", CHIPS)
@@ -124,6 +174,26 @@ def test_any_other_cause_ignores_the_hint(chip: str) -> None:
 )
 def test_each_chip_names_its_own_causes(chip: str, cause: int, reason: str) -> None:
     assert idf_reset_reason(chip, cause, 0) == reason
+
+
+@pytest.mark.parametrize("chip", CHIPS)
+def test_each_warm_reset_reads_as_its_idf_reason_on_every_chip(chip: str) -> None:
+    for kind, (cause, value, reason) in WARM.items():
+        warm = warm_reset(kind)
+        assert warm is not None, kind
+        assert (warm.cause, warm.hint, warm.idf_reason) == (cause, value, reason), kind
+        assert idf_reset_reason(chip, warm.cause, warm.hint) == warm.idf_reason, kind
+
+
+def test_en_is_a_power_on_reset_and_any_other_kind_is_refused() -> None:
+    assert ("en", *WARM) == RESET_KINDS
+    assert warm_reset("en") is None
+    with pytest.raises(ValueError) as refused:
+        warm_reset("sw")
+    assert str(refused.value) == (
+        "board.reset: kind is 'en', 'panic', 'task_wdt', 'int_wdt', 'rtc_wdt' or 'brownout',"
+        " not 'sw'"
+    )
 
 
 def test_a_chip_without_a_table_has_no_reason() -> None:

@@ -436,7 +436,8 @@ a chip whose UARTs have no pins ([Chips](#chips)), the same goes for UART0: `col
 `Guest::uart0_console_input`; `stats` has `console_rx_lost` then too.
 
 `Session` runs the protocol over two traits, `Guest` (the machine: cycles, `run_until`,
-`chip_reset`, `reset_hint`, whose default is a guest that writes no hint, `power_on_reset`, `idle_until`, `uart_route`, `rx_pending`, `uart_receive`, `uart_frame_error`,
+`chip_reset`, `reset_hint`, whose default is a guest that writes no hint, `request_reset`,
+`power_on_reset`, `idle_until`, `uart_route`, `rx_pending`, `uart_receive`, `uart_frame_error`,
 `gpio_drive`, `take_gpio_inputs`, for `--console-port usb` `take_usb_console` and
 `usb_console_input`, whose defaults are a chip without the controller, for a UART0 without pins
 `take_uart0_console` and `uart0_console_input`, whose defaults are a chip whose UART0 has them, and for Wi-Fi `take_eth_frames`, `eth_input`,
@@ -539,11 +540,40 @@ keeps it on the classic chip, the S3 (RTC_CNTL's `ram`), the C6 (`lpsys`) and th
 makes it anew, zero, on the C3, whose `reboot` makes a new `RtcCntl` and keeps only its
 `reset_cause`, and on the S31, whose `reboot` makes a new `S31Bus`, its `lp_store` with it. Their
 `chip_reset` reads the register before `reboot` and writes it back after, with
-`chip::keep_reset_hint`, so that the firmware's `esp_reset_reason()` reads what it would on the
+`chip::write_reset_hint`, so that the firmware's `esp_reset_reason()` reads what it would on the
 chip; nothing else of RTC_CNTL or LP_SYS is put back. `chip::run_free`, the run without a peer,
 resets the chip through `Guest::chip_reset` too. `chip::tests` checks each chip's register before
 and after a chip reset and after a power-on, and that esp32sim alone forgets it on the C3 and the
 S31.
+
+#### A warm reset from the peer
+
+`protocol::parse` turns a `chip_reset` into `Incoming::ChipReset { t, cause, hint }`: `cause`
+`None` is the EN pulse, and `hint` is 0 when absent. It refuses a `hint` without a `cause`, cause
+1 and a value over 32 bits; `Session::take_turn` refuses a cause outside the chip's
+`Profile::reset_causes`, the causes of ESP-IDF's `components/soc/<chip>/include/soc/
+reset_reasons.h` but 1 ([protocol 5.18](../protocol.md#518-chip_reset-ext-105)), and queues
+`Input::ChipReset(Some((cause, hint)))`. When it comes due with the supply on, `apply_inputs`
+calls `Session::warm_reset`: `collect` and `count_wifi_drops`, as before any reset, then
+`Guest::request_reset(cause, hint)`, then the steps of a `Stop::SwReset`, `reset_hint`,
+`chip_reset` and `Session::reset(cause, hint)`, so that the `reset` the peer gets has the cause
+`reboot` returned and the hint read back. Each chip's `request_reset` writes `hint` at its
+`RESET_HINT` with `chip::write_reset_hint` and calls esp32sim's `SocBus::request_reset(cause)`,
+the board's reset button, which sets the chip's `sw_reset` and its reset cause; `reboot`, through
+`chip_reset`, takes that cause (`rtc.reset_cause`, `lpsys.reset_cause`, `lp.reset_cause`, the
+S31's `reset_cause`) and clears `sw_reset` with the peripherals it makes again, so the guest does
+not stop at the next round. On the C3 and the S31, `chip_reset` reads the peer's hint before
+`reboot` and writes it back after, as it does the guest's.
+
+The reset keeps what `reboot` keeps: SRAM, the RTC memories and the RTC registers on the classic
+chip, the S3, the C3, the C6 and the P4. On the S31 esp32sim's `reboot` makes `S31Bus` again,
+SRAM and LP memory with it, as at every chip reset there, the guest's own included; only the hint
+is put back. A cause-16 reset (the RTC watchdog's, which resets the RTC domain on the chip) keeps
+the RTC registers too: esp32sim's `reboot` does not tell the causes apart, and the peer's hint, 0
+for it, is what the firmware reads in the register. `chip::tests` resets each chip warm with
+cause 12 and a panic's hint and checks the cause, the hint and its RTC or LP memory (none on the
+S31), then with cause 16 and hint 0; `session::tests` checks the run loop's `request_reset` and
+`reset` and the refusals.
 
 #### Received bytes
 
