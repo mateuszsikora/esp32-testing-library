@@ -187,9 +187,10 @@ cleanup; the bound does not cover its calls or a blocked USB driver.
 
 ## A board whose console is USB-Serial/JTAG
 
-An ESP32-S3 or ESP32-C3 board without a USB-to-UART bridge has one port, the chip's own USB-Serial/JTAG
-device (USB 303a:1001, `/dev/cu.usbmodem…` on macOS, `/dev/ttyACM…` on Linux), and its profile
-says `console = "usb-serial-jtag"` ([board profiles](board-profiles-user.md#a-console-on-usb-serialjtag)).
+An ESP32-S3 or ESP32-C3 board without a USB-to-UART bridge has one port, the chip's own
+USB-Serial/JTAG device (USB 303a:1001, `/dev/cu.usbmodem…` on macOS, `/dev/ttyACM…` on Linux),
+and its profile says `console = "usb-serial-jtag"`
+([board profiles](board-profiles-user.md#a-console-on-usb-serialjtag)).
 Pass that port as `--port`; the test is the one that runs on esp32sim:
 
 ```sh
@@ -349,6 +350,11 @@ backend, `test_the_usb_console_takes_a_command_and_comes_back_after_a_reset` and
 `test_a_tap_of_the_usb_console_records_both_ways` of `tests/test_usb_console.py`, **2 passed**, 2
 skipped (a tap of `uart.uart0` and the power switch, which the backend does not give). The details
 are in [physical validation](serial-backend-technical.md#an-esp32-s3-on-its-usb-serialjtag-port).
+
+An ESP32-C3 (QFN32) revision v0.4 with 4 MB of embedded flash on its USB-Serial/JTAG port passed
+on 2026-11-26 on macOS: `firmware/console_repl_usb` built for the C3, the same two tests, **2
+passed**, 2 skipped, in 27 sessions in a row. The details are in
+[physical validation](serial-backend-technical.md#an-esp32-c3-on-its-usb-serialjtag-port).
 
 ## See also
 

@@ -218,7 +218,7 @@ from pytest-embedded propagate with their original messages.
 | `serial: {build} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin` | Missing build metadata |
 | `serial: {build} …` from a PlatformIO build | The PlatformIO checks of [builds](builds-technical.md#failure-modes): files, images, table, chip and flash encryption |
 | `serial: {build} is built for {target}; the board's chip is {chip}: build for {chip} or choose a board profile with that chip` | A build for another chip than the profile's; `check_artifact` and `PlatformioApp` load the build for the profile's chip |
-| `serial: the board profile {name} carries an {title} with its console on UART0; the serial backend runs the classic ESP32, and the ESP32-S3 and the ESP32-C3 with their console on USB-Serial/JTAG` | A profile whose `chip` is not `esp32` and whose console is not one `SERIAL_CHIPS` gives the chip; `serial_chip` in `esp32tl/pytest_plugin.py`, from `serial_artifact`, fails the test before the port is checked or the build loaded |
+| `serial: the board profile {name} carries an {title} with its console on UART0; the serial backend runs the classic ESP32, and the ESP32-S3 and the ESP32-C3 with their console on USB-Serial/JTAG` | A profile whose `chip` is not `esp32` and whose console is UART0; `serial_chip` in `esp32tl/pytest_plugin.py`, from `serial_artifact`, fails the test before the port is checked or the build loaded |
 | `serial: the board profile {name} has its console on the {title}'s USB-Serial/JTAG controller, which the serial backend has been validated on with the ESP32-S3 and the ESP32-C3 only` | A profile for the ESP32-C6 with `console = "usb-serial-jtag"`; `serial_chip` skips the test, before the port is opened |
 | `serial: {build} asks for flash encryption, which serial does not support` | Encryption outside the supported workflow |
 | `serial: {build} is not a finished build, missing {files}` | Missing files listed for flashing |
@@ -351,11 +351,10 @@ firmware. Backup binaries and device logs remain private and are not repository 
 
 On 2026-11-17, a user-identified ESP32-S3 board with no USB-to-UART bridge connected, through its
 native port, `/dev/cu.usbmodem1101` (USB 303a:1001, `USB JTAG/serial debug unit`). esptool
-identified an ESP32-S3 (QFN56) revision v0.2, `USB mode: USB-Serial/JTAG`, MAC
-`44:1b:f6:ec:e7:a8`, 16 MB of flash; the user allowed its flash to be overwritten, and it was not
-backed up or restored. The images were `firmware/console_repl_usb` built for the S3 and
-`arduino_shell`'s `esp32s3_usb` environment, with the repository's pinned containers; the profile
-was `tests/boards/esp32-s3-usb.toml`.
+identified an ESP32-S3 (QFN56) revision v0.2, `USB mode: USB-Serial/JTAG`, 16 MB of flash; the
+user allowed its flash to be overwritten, and it was not backed up or restored. The images were
+`firmware/console_repl_usb` built for the S3 and `arduino_shell`'s `esp32s3_usb` environment, with
+the repository's pinned containers; the profile was `tests/boards/esp32-s3-usb.toml`.
 
 ```sh
 env -u ESPPORT .venv/bin/pytest -p no:cacheprovider tests/test_usb_console.py \
@@ -392,8 +391,8 @@ again, until it was unplugged.
 #### An ESP32-C3 on its USB-Serial/JTAG port
 
 On 2026-11-26, a user-identified ESP32-C3 board with its native USB alone connected as
-`/dev/cu.usbmodem1101` (USB 303a:1001). esptool identified an ESP32-C3 (QFN32) revision v0.4, MAC
-`44:7b:30:88:60:d8`, 4 MB of embedded flash (XMC); its flash was overwritten and not restored. The
+`/dev/cu.usbmodem1101` (USB 303a:1001). esptool identified an ESP32-C3 (QFN32) revision v0.4, 4 MB
+of embedded flash (XMC); its flash was overwritten and not restored. The
 image was `firmware/console_repl_usb` built for the C3 in the pinned v5.3.6 container
 (`firmware/build.sh --chips console_repl_usb@esp32c3`); the profile was
 `tests/boards/esp32-c3-usb.toml`.

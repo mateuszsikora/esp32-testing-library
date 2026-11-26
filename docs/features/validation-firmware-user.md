@@ -156,8 +156,8 @@ profile with `console = "usb-serial-jtag"`
 
 From power-on its console holds the ROM's banner, the second-stage bootloader and the
 application; UART0 gets the ROM's banner alone. `tests/test_usb_console.py` runs it on the three
-chips, and on a real ESP32-S3 through the serial backend; `tests/test_chips.py` runs it on the P4
-and the S31.
+chips, and on a real ESP32-S3 and ESP32-C3 through the serial backend; `tests/test_chips.py` runs
+it on the P4 and the S31.
 
 ## `modem_at`
 

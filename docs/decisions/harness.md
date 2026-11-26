@@ -4867,7 +4867,7 @@ a backend that reads the port's input away before its first reset (`discard_inpu
   3 s pause after the banner's first line did not come.
 - Opening the port again: 20 times, a script opened it with pyserial's default DTR and RTS,
   closed it, opened it with both released and pulsed RTS, and got the prompt each time; esptool
-  connected afterwards. The S3 stopped answering twice so.
+  connected afterwards, where the S3 twice stopped answering.
 
 The board has no UART bridge, so UART0 was not measured.
 
@@ -5282,8 +5282,8 @@ follows the host's configuration at build time (`BT_CTRL_50_FEATURE_SUPPORT`,
 which all the BLE validation images are. The C3's controller is built from the same sources, and
 an ESP32-C3 (QFN32, revision v0.4), on 2026-11-26 with the same controller library `51d9dfd`,
 answered every command of the probe as the S3 did, but for its address and the count of the
-discard event (`tools/hci_probe/esp32c3.txt`); so the C3 keeps the S3's values. The C6's is not, and has
-values of its own ([below](#the-esp32-c6s-controller-reports-what-a-c6-measured-within-what-the-link-carries)).
+discard event (`tools/hci_probe/esp32c3.txt`); so the C3 keeps the S3's values. The C6's is not,
+and has values of its own ([below](#the-esp32-c6s-controller-reports-what-a-c6-measured-within-what-the-link-carries)).
 
 It also takes Espressif's vendor commands `0xFD09` and `0xFD0A`, the flow control of advertising
 reports Bluedroid turns on for an LE controller, and keeps to the credits: Bluedroid asserts in

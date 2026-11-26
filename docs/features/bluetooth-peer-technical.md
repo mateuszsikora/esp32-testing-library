@@ -1077,7 +1077,8 @@ esp32tl controller has, and `esp32tl/bluetooth/le.py`, the LE devices. `Controll
    also the LE event mask, `0x1F`.
 7. **The guest on an LE-only chip.** `GuestController(name, link, address, *, chip="esp32")`, with
    `chip` in `LE_CHIPS`, the keys of `LE_CONTROLLERS` (`esp32s3` and `esp32c3` to `ESP32S3`, from
-   `tools/hci_probe/esp32s3.txt`, which `tools/hci_probe/esp32c3.txt` matches; `esp32c6` to `ESP32C6`, from `tools/hci_probe/esp32c6.txt`), has
+   `tools/hci_probe/esp32s3.txt`, which `tools/hci_probe/esp32c3.txt` matches; `esp32c6` to
+   `ESP32C6`, from `tools/hci_probe/esp32c6.txt`), has
    `le_only` and that chip's `LeController` in `le`: page 0 alone (`lmp_features_max_page_number`
    0) of `LE_ONLY_FEATURES`; `hci_version`, `lmp_version` `le.version` (S3 9, C6 `0x0E`),
    `hci_revision`, `lmp_subversion` `le.revision` (S3 `0x0016`, C6 0),

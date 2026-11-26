@@ -267,7 +267,8 @@ rx = 44
 baud = 115200
 ```
 
-On the serial backend a profile with this console runs on an ESP32-S3 only
+On the serial backend a profile with this console runs on an ESP32-S3 or an ESP32-C3; one for
+the ESP32-C6 skips
 ([serial backend](serial-backend-user.md#a-board-whose-console-is-usb-serialjtag)).
 
 ### What a route's baud does
