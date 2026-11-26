@@ -6,6 +6,7 @@ board's time, for the test to look at.
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from http import HTTPStatus
 
 from esp32tl.interfaces.condition import Condition, FirstFrom
 from esp32tl.interfaces.history import History
@@ -14,29 +15,36 @@ from esp32tl.units import Duration
 
 # The statuses whose response ends with its head (RFC 9112 6.3): no body, and no Content-Length.
 NO_CONTENT = (204, 304)
+# The statuses that take no body: those, and 205 Reset Content (RFC 9110 15.3.6), which is sent
+# with its Content-Length of 0.
+BODILESS = (204, 205, 304)
+# The final statuses a response takes (RFC 9110 15): the server has no interim, 1xx, responses.
+FINAL = range(200, 600)
 
 # The longest request head, and the longest body, the server takes.
 MAX_HEAD = 64 * 1024
 MAX_BODY = 1024 * 1024
-REASONS = {
-    200: "OK",
-    201: "Created",
-    204: "No Content",
-    206: "Partial Content",
-    301: "Moved Permanently",
-    302: "Found",
-    304: "Not Modified",
-    400: "Bad Request",
-    401: "Unauthorized",
-    403: "Forbidden",
-    404: "Not Found",
+
+# RFC 9110's phrases for the statuses whose `HTTPStatus` phrase Python 3.13 changed to them, so
+# that 3.11 and 3.12 send the status line 3.13 does.
+_RFC9110 = {
     413: "Content Too Large",
+    414: "URI Too Long",
     416: "Range Not Satisfiable",
-    431: "Request Header Fields Too Large",
-    500: "Internal Server Error",
-    501: "Not Implemented",
-    503: "Service Unavailable",
+    422: "Unprocessable Content",
 }
+
+
+def _phrase(status: int) -> str:
+    """The reason phrase a response with `status` is sent with by default: `http.HTTPStatus`'s,
+    RFC 9110's where Python 3.11 has an older one, and an empty one for a status Python does
+    not know (RFC 9112 4)."""
+    if status in _RFC9110:
+        return _RFC9110[status]
+    try:
+        return HTTPStatus(status).phrase
+    except ValueError:
+        return ""
 
 
 @dataclass(frozen=True)
@@ -63,13 +71,15 @@ class HttpRequest:
 
 @dataclass(frozen=True, init=False)
 class HttpResponse:
-    """What the server answers: `status`, one of `REASONS`, and `body`, text as UTF-8 with
+    """What the server answers: `status`, any final one from 200 to 599, sent with `reason`,
+    `http.HTTPStatus`'s phrase unless the test names another, and `body`, text as UTF-8 with
     `text/plain; charset=utf-8` and bytes with `application/octet-stream` unless `content_type`
-    names another, then `headers`, a dict or name and value pairs, as given. A 204 or 304 takes
-    no body. With `after`, the response is written that much later on the board's clock than
-    the request came, as a slow server's."""
+    names another, then `headers`, a dict or name and value pairs, as given. A 204, 205 or 304
+    takes no body. With `after`, the response is written that much later on the board's clock
+    than the request came, as a slow server's."""
 
     status: int
+    reason: str
     body: bytes
     content_type: str
     headers: tuple[tuple[str, str], ...]
@@ -83,8 +93,9 @@ class HttpResponse:
         content_type: str | None = None,
         headers: Mapping[str, str] | Iterable[tuple[str, str]] | None = None,
         after: Duration | None = None,
+        reason: str | None = None,
     ) -> None:
-        _fill(self, "HttpResponse", status, body, content_type, headers, after)
+        _fill(self, "HttpResponse", status, body, content_type, headers, after, reason)
 
 
 # A handler: the response to each request for its path, made from the request.
@@ -99,17 +110,27 @@ def _fill(
     content_type: str | None,
     headers: Mapping[str, str] | Iterable[tuple[str, str]] | None,
     after: Duration | None,
+    reason: str | None = None,
 ) -> None:
     """Checks the parts of `response` and sets them; `what` names the call in the errors."""
-    if isinstance(status, bool) or not isinstance(status, int) or status not in REASONS:
-        raise ValueError(f"{what}: status {status!r} is not one of {sorted(REASONS)}")
+    if isinstance(status, bool) or not isinstance(status, int) or status not in FINAL:
+        raise ValueError(f"{what}: status {status!r} is not a final status, from 200 to 599")
+    if reason is None:
+        phrase = _phrase(status)
+    elif not isinstance(reason, str):
+        raise TypeError(f"{what}: the reason is text, not {reason!r}")
+    elif any(c in reason for c in "\r\n"):
+        raise ValueError(f"{what}: {reason!r} is not a reason phrase, which holds no line break")
+    else:
+        _latin1(what, f"the reason {reason!r}", reason)
+        phrase = reason
     if isinstance(body, str):
         data = body.encode()
     elif isinstance(body, bytes | bytearray | memoryview):
         data = bytes(body)
     else:
         raise TypeError(f"{what}: the body is text or bytes, not {body!r}")
-    if status in NO_CONTENT and data:
+    if status in BODILESS and data:
         raise ValueError(f"{what}: a {status} response has no body")
     pairs = tuple((headers.items() if isinstance(headers, Mapping) else headers) or ())
     for name, value in pairs:
@@ -133,6 +154,7 @@ def _fill(
             raise ValueError(f"{what}: after takes a Duration of 0 or more, not {after}")
     for field_, value_ in [
         ("status", status),
+        ("reason", phrase),
         ("body", data),
         ("content_type", kind),
         ("headers", pairs),
@@ -184,14 +206,15 @@ class HttpServer:
         status: int | None = None,
         content_type: str | None = None,
         headers: Mapping[str, str] | None = None,
+        reason: str | None = None,
     ) -> None:
         """Answers every request for `path`, from now on, replacing what was served there.
         `response` is an `HttpResponse`; a handler, called with each request once it has been
         read in full, at its `at` on the board's clock, which returns the `HttpResponse`; or the
-        body of one with `status`, `content_type` and `headers`, as `HttpResponse` takes them:
-        text goes as UTF-8, `text/plain` unless `content_type` says otherwise, bytes as
-        `application/octet-stream`. A 204 or 304 takes no body, and is sent without
-        `Content-Type` and `Content-Length`."""
+        body of one with `status`, `content_type`, `headers` and `reason`, as `HttpResponse`
+        takes them: text goes as UTF-8, `text/plain` unless `content_type` says otherwise, bytes
+        as `application/octet-stream`. A 204, 205 or 304 takes no body; a 204 or 304 is sent
+        without `Content-Type` and `Content-Length`."""
         if not path.startswith("/"):
             raise ValueError(f"http.serve: {path!r} is not a path, which starts with /")
         if "?" in path:
@@ -206,6 +229,7 @@ class HttpServer:
                     ("status", status),
                     ("content_type", content_type),
                     ("headers", headers),
+                    ("reason", reason),
                 ]
                 if value is not None
             ]
@@ -225,6 +249,7 @@ class HttpServer:
             content_type,
             headers,
             None,
+            reason,
         )
         self._served[path] = fixed
 
@@ -382,12 +407,14 @@ class _Exchange:
 
     def _fail(self, status: int) -> None:
         self._done = True
-        self._server._log(f"http: refused a request: {status} {REASONS[status]}")
-        self._respond(HttpResponse(status, f"{REASONS[status].lower()}\n"), head_only=False)
+        phrase = _phrase(status)
+        self._server._log(f"http: refused a request: {status} {phrase}")
+        self._respond(HttpResponse(status, f"{phrase.lower()}\n"), head_only=False)
 
     def _respond(self, response: HttpResponse, *, head_only: bool) -> None:
         self._unwait()
-        lines = [f"HTTP/1.1 {response.status} {REASONS[response.status]}"]
+        # With the space before an empty reason too (RFC 9112 4): `HTTP/1.1 599 `.
+        lines = [f"HTTP/1.1 {response.status} {response.reason}"]
         if response.status not in NO_CONTENT:
             lines += [
                 f"Content-Type: {response.content_type}",

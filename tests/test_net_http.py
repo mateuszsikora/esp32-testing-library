@@ -1,5 +1,6 @@
 """The HTTP server's side of one connection, without TCP: what it answers and keeps."""
 
+import re
 from collections.abc import Callable
 
 import pytest
@@ -190,7 +191,7 @@ def test_what_it_cannot_take_is_refused_and_not_kept(
     "call",
     [
         lambda s: s.serve("relative", "x"),
-        lambda s: s.serve("/", "x", status=299),
+        lambda s: s.serve("/", "x", status=600),
         lambda s: s.serve("/", "x", headers={"X": "a\r\nb"}),
         lambda s: s.serve("/", "x", headers={"X:Y": "a"}),
     ],
@@ -238,6 +239,95 @@ def test_the_path_follows_the_form_of_the_target(
     server.serve("/proxy/http://example.com/fw.bin", "firmware")
     Client(server).send(f"GET {target} HTTP/1.1\r\nHost: test\r\n\r\n".encode())
     assert server.requests[-1].path == path
+
+
+@pytest.mark.parametrize(
+    ("response", "line"),
+    [
+        (HttpResponse(409, "exists\n"), "HTTP/1.1 409 Conflict"),
+        (HttpResponse(418), "HTTP/1.1 418 I'm a Teapot"),
+        (HttpResponse(422), "HTTP/1.1 422 Unprocessable Content"),
+        (HttpResponse(502), "HTTP/1.1 502 Bad Gateway"),
+        (HttpResponse(504), "HTTP/1.1 504 Gateway Timeout"),
+        # a status Python does not know: an empty phrase, after its space (RFC 9112 4)
+        (HttpResponse(599), "HTTP/1.1 599 "),
+        (HttpResponse(409, reason="Already Enrolled"), "HTTP/1.1 409 Already Enrolled"),
+        (HttpResponse(200, reason=""), "HTTP/1.1 200 "),
+        (HttpResponse(299, reason="Zoë"), "HTTP/1.1 299 Zo\xeb"),
+    ],
+)
+def test_every_final_status_is_sent_with_its_phrase(
+    server: HttpServer, response: HttpResponse, line: str
+) -> None:
+    server.serve("/", response)
+    client = Client(server)
+    client.send(b"GET / HTTP/1.1\r\n\r\n")
+    assert bytes(client.received).split(b"\r\n")[0] == line.encode("latin-1")
+    assert response.reason == line.split(" ", 2)[2]
+
+
+def test_a_429_carries_its_retry_after_and_a_body_s_status_its_phrase(server: HttpServer) -> None:
+    server.serve("/enroll", HttpResponse(429, "slow down\n", headers={"Retry-After": "30"}))
+    server.serve("/x", "busy", status=503)
+    server.serve("/gone", "", status=410, reason="Gone For Good")
+    client = Client(server)
+    client.send(b"POST /enroll HTTP/1.1\r\n\r\n")
+    assert client.head[0] == "HTTP/1.1 429 Too Many Requests"
+    assert "Retry-After: 30" in client.head and client.body == b"slow down\n"
+    busy = Client(server)
+    busy.send(b"GET /x HTTP/1.1\r\n\r\n")
+    assert busy.head[0] == "HTTP/1.1 503 Service Unavailable" and busy.body == b"busy"
+    gone = Client(server)
+    gone.send(b"GET /gone HTTP/1.1\r\n\r\n")
+    assert gone.head[0] == "HTTP/1.1 410 Gone For Good"
+
+
+def test_a_handler_answers_429_then_201(server: HttpServer) -> None:
+    def enroll(request: HttpRequest) -> HttpResponse:
+        if len(server.requests) == 1:
+            return HttpResponse(429, headers={"Retry-After": "5"})
+        return HttpResponse(201, "enrolled\n")
+
+    server.serve("/enroll", enroll)
+    first, second = Client(server), Client(server)
+    first.send(b"POST /enroll HTTP/1.1\r\n\r\n")
+    second.send(b"POST /enroll HTTP/1.1\r\n\r\n")
+    assert first.head[0] == "HTTP/1.1 429 Too Many Requests" and "Retry-After: 5" in first.head
+    assert second.head[0] == "HTTP/1.1 201 Created" and second.body == b"enrolled\n"
+
+
+@pytest.mark.parametrize("status", [100, 101, 103, 199, 600, 999, -1, True, "409", 409.0])
+def test_a_status_that_is_not_final_is_refused_with_the_range(status: object) -> None:
+    message = rf"^HttpResponse: status {re.escape(repr(status))} is not a final status, from 200"
+    with pytest.raises(ValueError, match=message + " to 599$"):
+        HttpResponse(status)  # type: ignore[arg-type]
+
+
+def test_a_reason_is_text_of_one_latin_1_line(server: HttpServer) -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"^HttpResponse: 'A\\r\\nX: 1' is not a reason phrase, which holds no line break$",
+    ):
+        HttpResponse(409, reason="A\r\nX: 1")
+    with pytest.raises(ValueError, match=r"^http\.serve: 'A\\n' is not a reason phrase"):
+        server.serve("/", "x", reason="A\n")
+    with pytest.raises(
+        ValueError,
+        match=r"^HttpResponse: the reason '€' is not Latin-1, which the head is sent in",
+    ):
+        HttpResponse(409, reason="€")
+    with pytest.raises(TypeError, match=r"^HttpResponse: the reason is text, not 1$"):
+        HttpResponse(409, reason=1)  # type: ignore[arg-type]
+
+
+def test_a_205_takes_no_body_and_is_sent_with_a_length_of_zero(server: HttpServer) -> None:
+    with pytest.raises(ValueError, match=r"^http\.serve: a 205 response has no body$"):
+        server.serve("/", "payload", status=205)
+    server.serve("/", status=205)
+    client = Client(server)
+    client.send(b"GET / HTTP/1.1\r\n\r\n")
+    assert client.head[0] == "HTTP/1.1 205 Reset Content"
+    assert "Content-Length: 0" in client.head and client.body == b""
 
 
 @pytest.mark.parametrize("status", [204, 304])
@@ -511,8 +601,10 @@ def test_a_response_is_checked_where_it_is_made() -> None:
     assert (text.body, text.content_type) == ("é".encode(), "text/plain; charset=utf-8")
     pairs = HttpResponse(headers=[("Set-Cookie", "a=1"), ("Set-Cookie", "b=2")])
     assert pairs.headers == (("Set-Cookie", "a=1"), ("Set-Cookie", "b=2"))
-    with pytest.raises(ValueError, match=r"^HttpResponse: status 418 is not one of \[200, 201"):
-        HttpResponse(418)
+    with pytest.raises(
+        ValueError, match=r"^HttpResponse: status 100 is not a final status, from 200 to 599$"
+    ):
+        HttpResponse(100)
     with pytest.raises(ValueError, match=r"^HttpResponse: a 304 response has no body$"):
         HttpResponse(304, "x")
     with pytest.raises(ValueError, match=r"^HttpResponse: 'X:Y': 'a' is not a header field$"):
@@ -563,3 +655,7 @@ def test_serve_takes_status_and_headers_with_a_body_only(
         TypeError, match=rf"^http\.serve: status, headers with {kind}: the HttpResponse carries"
     ):
         server.serve("/", response, status=200, headers={"X": "1"})  # type: ignore[arg-type]
+    with pytest.raises(
+        TypeError, match=rf"^http\.serve: reason with {kind}: the HttpResponse carries"
+    ):
+        server.serve("/", response, reason="Fine")  # type: ignore[arg-type]

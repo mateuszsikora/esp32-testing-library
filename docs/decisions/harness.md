@@ -3249,7 +3249,7 @@ Wi-Fi network, which would make tests of one firmware differ by its link.
 
 ## An HTTP server answers on port 80 of every simulated network
 
-Status: decided (#31), responses amended (#338)
+Status: decided (#31), responses amended (#338), statuses amended (#356)
 
 `network.http` is an HTTP/1.1 server on TCP 80, behind the modem and behind the access point alike,
 as the broker is on 1883: `serve(path, body)` says what a path answers, `requested(...)` is a
@@ -3270,6 +3270,16 @@ the link and the run alone: nothing of the device's caused the error, and the de
 after a `500` is worth seeing. A wait on the board from a handler raises at once: the link's
 thread, which runs the handler, is the one that would run the board.
 
+Since #356 a response takes any final status, an `int` from 200 to 599, where it took 17 from a
+table: the statuses outside it, `409`, `429` with `Retry-After`, `502`, `504`, are the ones that
+decide a firmware's retry, back-off and give-up paths, and the next API a firmware talks to sends
+yet another. The status line carries `http.HTTPStatus`'s phrase, with RFC 9110's for 413, 414,
+416 and 422, which Python renamed in 3.13, so that the line does not change with the Python the
+test runs on, and an empty one for a status Python does not know, as RFC 9112 4 allows; `reason=`
+sends the test's. A `1xx` is refused: the server answers one request with one final response and
+has no interim ones. A `205` takes no body, as `204` and `304` do (RFC 9110 15.3.6), but keeps
+its `Content-Length: 0`.
+
 **Rejected:** a server the test has to install with `network.listen(80, ...)` first, because a
 test of a firmware that fetches would always do so; and keep-alive, chunked transfer and TLS by
 default, until a firmware's test needs them (TLS is `network.listen(443, network.http, tls=ca)`
@@ -3278,6 +3288,10 @@ response or a function keeps one answer per path, which a later `serve` replaces
 kind, where two methods for one path would leave open which one wins; a handler that returns the body alone, because then status,
 headers and delay would need a type of their own anyway; and a handler's exception failing the
 link, as `connection_policy`'s does, because the run would end before the device got its `500`.
+For #356: adding `409` and `429` to the table, because the next firmware needs another status;
+a table of every registered status of the server's own, because `http.HTTPStatus` already has
+them and only four of its phrases differ between Pythons; and interim `1xx` responses, until a
+firmware's test needs `100 Continue`.
 
 ## The HTTP client opens one plain connection per request
 

@@ -978,11 +978,11 @@ address, as `network.http`. Until the test serves a path, every request gets `40
 
 | HTTP server API | Meaning |
 |---|---|
-| `serve(path, response=b"", *, status=None, content_type=None, headers=None)` | Answer every request for `path` from now on, replacing what was served there before, a handler included. `response` is an `HttpResponse`, a handler (below), or the body of an `HttpResponse` with `status` (200 when not given), `content_type` and `headers` (a dict), so that `serve("/", "text")` is `serve("/", HttpResponse(body="text"))` |
+| `serve(path, response=b"", *, status=None, content_type=None, headers=None, reason=None)` | Answer every request for `path` from now on, replacing what was served there before, a handler included. `response` is an `HttpResponse`, a handler (below), or the body of an `HttpResponse` with `status` (200 when not given), `content_type`, `headers` (a dict) and `reason`, so that `serve("/", "text")` is `serve("/", HttpResponse(body="text"))` |
 | `next_request(path=None, *, method=None)` | Condition returning the first request, for `path` and with `method` when given, recorded **after this method call** |
 | `find_request(path=None, *, method=None)` | Immediate history query returning the first recorded request with the same filters, or `None` |
 | `requests` | Every request recorded, in order; refused requests are not |
-| `HttpResponse(status=200, body=b"", *, content_type=None, headers=None, after=None)` | A response, from `esp32tl`. A `str` body goes as UTF-8 with `text/plain; charset=utf-8`, `bytes` with `application/octet-stream`, unless `content_type` names another; `headers` (a dict, or name and value pairs, which may repeat a name) are added as given; `after` (a `Duration`) writes it that much later on the board's clock than the request came |
+| `HttpResponse(status=200, body=b"", *, content_type=None, headers=None, after=None, reason=None)` | A response, from `esp32tl`. `status` is any final status, from 200 to 599 ([below](#any-final-status)); `reason` is the phrase of its status line, `http.HTTPStatus`'s for the status, with RFC 9110's for four of them ([below](#any-final-status)), unless given, and `HttpResponse(...).reason` reads it. A `str` body goes as UTF-8 with `text/plain; charset=utf-8`, `bytes` with `application/octet-stream`, unless `content_type` names another; `headers` (a dict, or name and value pairs, which may repeat a name) are added as given; `after` (a `Duration`) writes it that much later on the board's clock than the request came |
 
 A request (`HttpRequest`) has `at` (`Duration`), `method`, `target` (as sent), `path` (an
 origin-form target such as `/a?b` without its query, `://` in it or not; an absolute-form one such
@@ -1016,10 +1016,33 @@ did not happen although the firmware sent it, and only the transcript's
 The server takes one request per connection. It answers `HTTP/1.1 <status> <reason>`,
 `Content-Type`, `Content-Length`, `Connection: close` and the test's headers, then the body (none
 for `HEAD`, whose `Content-Length` is still the body's), and closes the connection. A `204` or
-`304` ends with its head: no body, and no `Content-Type` or `Content-Length` (RFC 9112 6.3). A path nobody
+`304` ends with its head: no body, and no `Content-Type` or `Content-Length` (RFC 9112 6.3). A
+`205 Reset Content` takes no body either (RFC 9110 15.3.6), and is sent with its `Content-Type` and `Content-Length: 0`. A path nobody
 serves gets `404 Not Found` with the body `not found\n`, and is kept in `requests`. The transcript
 logs each answer as `http: GET / → 200`. For HTTPS, put the same server behind TLS on another port:
 `network.listen(443, network.http, tls=ca)` ([TLS](#dns-time-and-services)).
+
+### Any final status
+
+A response takes any final status from 200 to 599, so a test can send what decides a firmware's
+retry, back-off and give-up paths, `409`, `429` with its `Retry-After`, `502` or `504`, from a
+fixed response or from a handler:
+
+```python
+network.http.serve("/enroll", HttpResponse(409, '{"error": "exists"}', content_type="application/json"))
+network.http.serve("/report", HttpResponse(429, headers={"Retry-After": "30"}))
+network.http.serve("/x", "busy", status=503)
+```
+
+The status line carries the phrase `http.HTTPStatus` has for the status, `409 Conflict`,
+`429 Too Many Requests`, `418 I'm a Teapot` as Python spells it, with RFC 9110's
+`413 Content Too Large`, `414 URI Too Long`, `416 Range Not Satisfiable` and
+`422 Unprocessable Content` on every Python, 3.11 too, whose own phrases for them are older.
+A status Python does not know, as `599`, goes with an empty phrase after its space,
+`HTTP/1.1 599 `, as RFC 9112 4 allows. `reason=` sends another phrase, an empty one too:
+`HttpResponse(409, reason="Already Enrolled")` is sent as `HTTP/1.1 409 Already Enrolled`, and
+`serve("/", "x", status=409, reason="Already Enrolled")` the same. The server has no interim
+response, so a `1xx` is refused, as is anything below 200 or above 599.
 
 ### A handler computes the response
 
@@ -1143,20 +1166,25 @@ status), answered with the reason in lower case as the body, and not kept in `re
 `serve` raises `ValueError` for a path that does not start with `/`
 (`http.serve: 'index.html' is not a path, which starts with /`) or that holds a query
 (`http.serve: '/a?b' holds a query, which a path does not: serving the path answers it whatever the query`),
-and `TypeError` for `status`, `content_type` or `headers` given with an `HttpResponse` or a
+and `TypeError` for `status`, `content_type`, `headers` or `reason` given with an `HttpResponse` or a
 handler, which carries them
 (`http.serve: status with a handler: the HttpResponse carries them`). `HttpResponse` checks its
 parts where it is made, and so does `serve` for a body with its keywords, with `http.serve` in
-place of `HttpResponse` in the message: `ValueError` for a status the server has no reason for
-(`HttpResponse: status 418 is not one of [200, 201, 204, 206, 301, 302, 304, 400, 401, 403, 404, 413, 416, 431, 500, 501, 503]`),
+place of `HttpResponse` in the message: `ValueError` for a status that is not a final one, an
+`int` from 200 to 599 and not a `bool`
+(`HttpResponse: status 100 is not a final status, from 200 to 599`, and the same for `600`, `True` or `'409'`),
+a reason with a line break
+(`HttpResponse: 'A\r\nX: 1' is not a reason phrase, which holds no line break`) or that Latin-1
+cannot encode (`HttpResponse: the reason '€' is not Latin-1, which the head is sent in: put it in the body`),
 a header whose name is empty or holds `:`, or whose name or value holds a line break
 (`HttpResponse: 'X-A:B': '1' is not a header field`), a content type with a line break
 (`HttpResponse: 'text/plain\r\nX: 1' is not a content type`), a header or content type that
 Latin-1, which the head is sent in, cannot encode
-(`HttpResponse: 'X-Echo': '€' is not Latin-1, which the head is sent in: put it in the body`), a body with a `204` or `304`
+(`HttpResponse: 'X-Echo': '€' is not Latin-1, which the head is sent in: put it in the body`), a body with a `204`, `205` or `304`
 (`HttpResponse: a 204 response has no body`) and an `after` below 0
 (`HttpResponse: after takes a Duration of 0 or more, not -0.001 s`); `TypeError` for a body that is
-neither text nor bytes (`HttpResponse: the body is text or bytes, not 42`), a header name or value
+neither text nor bytes (`HttpResponse: the body is text or bytes, not 42`), a reason that is not
+text (`HttpResponse: the reason is text, not 1`), a header name or value
 that is not text (`HttpResponse: 'X-N': 1 is not a header field of text`) and an `after` that is
 not a `Duration` (`HttpResponse: after takes a Duration, as seconds(5), not 5`).
 
