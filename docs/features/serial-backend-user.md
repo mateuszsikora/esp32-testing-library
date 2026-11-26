@@ -138,9 +138,12 @@ may retry.
 `board.reset()` hard-resets the board again, as power-on does, through pytest-embedded's
 `hard_reset()` (EN pulsed through the adapter's RTS); the console capture and `board.now` go on
 across it, and the run's log gets `board.reset(): hard reset`. Before power-on it raises
-`BoardOff: the board is off; call board.power_on() first`. The backend cannot switch the board's
-supply, nor see the chip's resets: `board.power_off()` skips the test with
-`serial: the backend cannot switch the board's power`, and `board.boots`, `board.boot`,
+`BoardOff: the board is off; call board.power_on() first`. A warm reset cannot be caused from
+the wires: `board.reset(kind=...)` with any kind but `"en"` skips the test with
+`serial: board.reset(kind='panic') cannot be caused from the wires; only kind='en' pulses EN`,
+the kind as given, and an unknown kind raises its `ValueError` first, as on esp32sim. The backend
+cannot switch the board's supply, nor see the chip's resets: `board.power_off()` skips the test
+with `serial: the backend cannot switch the board's power`, and `board.boots`, `board.boot`,
 `board.next_boot()`, `board.uptime_zero(boot)` and `board.wait_for_wake()` with
 `serial: the backend does not see the chip's resets`, at the line that asks, as an unsupported
 source does ([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)), and

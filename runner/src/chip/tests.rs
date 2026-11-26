@@ -551,6 +551,93 @@ reset_hint_test!(
     esp32s31::RESET_HINT
 );
 
+/// A warm reset the peer asks for (`Guest::request_reset`, then `chip_reset`) gives the ROM its
+/// cause and ESP-IDF its hint, in place of the one the guest left, and keeps the RTC memory
+/// (`[]` on the S31, whose LP memory esp32sim's chip reset makes again, as for the guest's own).
+macro_rules! warm_reset_test {
+    ($name:ident, $machine:ty, $m:ident => $bus:expr, $hint_at:expr, [$($memory:expr),*]) => {
+        #[test]
+        fn $name() {
+            let mut $m = <$machine as Target>::new(4 << 20);
+            let memories: &[u32] = &[$($memory),*];
+            for &address in memories {
+                $bus.load_bytes(address, &[0xa5; 4]).unwrap();
+            }
+            // ESP_RST_SW, the guest's, then ESP_RST_PANIC, the peer's
+            $bus.write32($hint_at, 0x8003_0003).unwrap();
+            let panic = 0x8004_0004;
+            Guest::request_reset(&mut $m, 12, panic);
+            assert_eq!(Guest::reset_hint(&mut $m), panic);
+            assert_eq!(Guest::chip_reset(&mut $m), 12);
+            assert_eq!(Guest::reset_hint(&mut $m), panic, "kept through the reset");
+            assert_eq!(SocBus::reset_cause(&$bus), 12);
+            assert!(!SocBus::sw_reset(&$bus), "the reset asked for is done");
+            for &address in memories {
+                assert_eq!($bus.read32(address).unwrap(), 0xa5a5_a5a5, "{address:#x}");
+            }
+            // the RTC watchdog's, with no hint
+            Guest::request_reset(&mut $m, 16, 0);
+            assert_eq!(Guest::chip_reset(&mut $m), 16);
+            assert_eq!(Guest::reset_hint(&mut $m), 0);
+        }
+    };
+}
+warm_reset_test!(
+    the_classic_chip_resets_warm_with_the_peers_cause_and_hint,
+    ::esp32::Machine,
+    m => m.bus,
+    esp32::RESET_HINT,
+    [esp32::RTC_SLOW]
+);
+warm_reset_test!(
+    the_s3_resets_warm_with_the_peers_cause_and_hint,
+    ::esp32s3::Machine,
+    m => m.bus,
+    esp32s3::RESET_HINT,
+    [::esp32s3::bus::RTC_SLOW_LOW]
+);
+warm_reset_test!(
+    the_c3_resets_warm_with_the_peers_cause_and_hint,
+    ::esp32c3::Machine,
+    m => m.bus,
+    esp32c3::RESET_HINT,
+    [::esp32c3::bus::RTC_SLOW_LOW]
+);
+warm_reset_test!(
+    the_c6_resets_warm_with_the_peers_cause_and_hint,
+    ::esp32c6::Machine,
+    m => m.bus,
+    esp32c6::RESET_HINT,
+    [::esp32c6::bus::LP_SRAM_LOW]
+);
+warm_reset_test!(
+    the_p4_resets_warm_with_the_peers_cause_and_hint,
+    esp32p4::P4<::esp32p4::RevGe3>,
+    m => m.bus,
+    esp32p4::RESET_HINT,
+    [::esp32p4::bus::LP_RAM_LOW]
+);
+warm_reset_test!(
+    the_s31_resets_warm_with_the_peers_cause_and_hint,
+    esp32s31::S31,
+    s => s.m.bus,
+    esp32s31::RESET_HINT,
+    []
+);
+
+/// The causes a warm `chip_reset` may give are the ROM's but a power-on's, and every chip has
+/// those of the resets esp32tl injects: a CPU's software reset (12), the RTC watchdog's system
+/// reset (16) and the digital core's software reset (3).
+#[test]
+fn every_chip_takes_the_causes_of_a_panic_a_watchdog_and_a_brownout() {
+    for p in ALL {
+        assert!(!p.reset_causes.contains(&1), "{}", p.name);
+        for cause in [3, 12, 16] {
+            assert!(p.reset_causes.contains(&cause), "{}: {cause}", p.name);
+        }
+    }
+}
+
 /// Without the runner, esp32sim's chip reset forgets the C3's and the S31's hint register, which
 /// the chip keeps: what `chip_reset` puts back there.
 #[test]

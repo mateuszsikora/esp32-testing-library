@@ -380,8 +380,9 @@ The guest reset. From the run loop: `run` returned `Stop::SwReset`, and `cause` 
 ESP-IDF's `esp_rom/esp32/include/esp32/rom/rtc.h`). The classic chip in esp32sim raises
 3 (`SW_RESET`), 5 (`DEEPSLEEP_RESET`, the wake from deep sleep), 9 (`RTCWDT_SYS_RESET`),
 12 (`SW_CPU_RESET`, `esp_restart`), 13 (`RTCWDT_CPU_RESET`) and 16 (`RTCWDT_RTC_RESET`). From the
-peer: a `chip_reset` (5.18) and a `power` that brings the supply back (5.17) reset the chip with
-cause 1 (`POWERON_RESET`), at the input's `t`. The power-on at the start of the run sends no
+peer: a `chip_reset` without a `cause` (5.18) and a `power` that brings the supply back (5.17)
+reset the chip with cause 1 (`POWERON_RESET`), at the input's `t`; a `chip_reset` with a `cause`
+resets it warm, with that cause, at the input's `t`. The power-on at the start of the run sends no
 `reset`, so the `n`-th `reset` of a run starts the chip's boot `n + 1`.
 
 `hint` is the register ESP-IDF keeps its reset-reason hint in, `RTC_RESET_CAUSE_REG` of the chip's
@@ -392,7 +393,9 @@ watchdogs and the brownout handler write `h | h << 16 | 0x80000000` there for an
 takes it for the reason of a software reset, causes 3 and 12, which the ROM reports alike for
 `esp_restart()` and a panic. The example is `ESP_RST_PANIC`'s, 4. The register also holds a
 deep-sleep wake stub's address, and whatever else the guest wrote there; the runner sends it as it
-is. A reset from the peer has `hint` 0: a power-on clears the RTC registers.
+is. A power-on reset from the peer has `hint` 0: a power-on clears the RTC registers. A warm reset
+from the peer has the `hint` its `chip_reset` gave, which the runner wrote into the register
+before the reset and reads back as for the guest's own.
 
 | Chip | Register | Address |
 |---|---|---|
@@ -840,13 +843,48 @@ commands, never inside one: torn pages and half-erased sectors are not modelled.
 
 ```json
 {"type": "chip_reset", "t": 4500000000}
+{"type": "chip_reset", "t": 4500000000, "cause": 12, "hint": 2147745796}
 ```
 
-At `t` the chip's EN pin is pulsed, as a board's reset button does: a power-on reset of the chip
-alone, as `power` gives one when the supply comes back (5.17), then `reset` with cause 1 (5.5). The
-board keeps its power: the SD card stays where it was, and so does what the peer models around
-the chip. It goes into the input queue (section 8) like any input. With the supply off it does
-nothing. The pulse takes no time: the guest runs again from the same `t`.
+Without `cause`, at `t` the chip's EN pin is pulsed, as a board's reset button does: a power-on
+reset of the chip alone, as `power` gives one when the supply comes back (5.17), then `reset` with
+cause 1 (5.5). The board keeps its power: the SD card stays where it was, and so does what the peer
+models around the chip. It goes into the input queue (section 8) like any input. With the supply
+off it does nothing. The pulse takes no time: the guest runs again from the same `t`.
+
+With `cause`, the ROM's reset reason for the boot that follows, it is a warm reset instead, as a
+panic, a watchdog or a brownout gives the chip: at `t` the runner writes `hint`, 0 when absent or
+`null`, as a 32-bit number into the chip's reset-reason hint register (the table of 5.5), has
+esp32sim reset the chip with `cause` (`SocBus::request_reset`), and resets it as after one the
+guest asks for (`Stop::SwReset`): SRAM, the RTC memories and the RTC registers keep what the guest
+wrote, the hint register the peer's `hint`. Then `reset` with that `cause` and `hint` (5.5). The
+example is a panic's: cause 12, `SW_CPU_RESET`, and `ESP_RST_PANIC`'s hint. With the supply off
+it does nothing either.
+
+The runner refuses, as a protocol error (section 9): a `hint` without a `cause`
+(`chip_reset: a "hint" without a "cause"`); cause 1 (`chip_reset: cause 1 is a power-on's; a
+chip_reset without a "cause" is one`); a `cause` or `hint` over 32 bits; and a cause the chip's ROM
+does not report, `chip_reset: cause 2 is not one the ROM of the classic ESP32 reports`. The causes
+each chip takes are those of ESP-IDF's `components/soc/<chip>/include/soc/reset_reasons.h` but 1,
+read in the containers the validation images are built in (v5.3.6, v5.5.4 for the P4, v6.1 for the
+S31):
+
+| Chip | Causes |
+|---|---|
+| ESP32 | 3, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16 |
+| ESP32-S3, ESP32-C3 | 3, 5, 7, 8, 9, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23 |
+| ESP32-C6 | 3, 5, 6, 7, 8, 9, 11, 12, 13, 15, 16, 17, 18, 20, 21, 22, 24 |
+| ESP32-P4 | 3, 5, 7, 9, 11, 12, 13, 15, 16, 18, 19, 20, 22, 23, 24, 26, 27 |
+| ESP32-S31 | 3, 5, 6, 7, 8, 9, 11, 12, 13, 15, 16, 18, 19, 20, 22, 23, 24, 26 |
+
+A warm reset runs none of the guest's code: whatever the firmware's own handler would print or do
+before the reset, a backtrace or `Rebooting...`, does not happen. Nor does the runner model what a
+cause changes beyond the cause and the hint: every cause is the same chip reset, which keeps the RTC
+domain, so cause 16 (`RTCWDT_RTC_RESET`), which resets the RTC domain on the chip, keeps its
+registers and its timer here, and cause 5 (`DEEPSLEEP_RESET`) has the ROM take the wake path with
+whatever the wake-stub registers hold. On the ESP32-S31 esp32sim's chip reset makes SRAM and the LP
+memory again, at every reset of the chip, the guest's own included ([runner technical
+documentation](features/runner-technical.md#chips)).
 
 ### 5.19 `sd_card` and `sd_card_ack` *ext* (#106)
 

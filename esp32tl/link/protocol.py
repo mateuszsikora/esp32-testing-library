@@ -387,10 +387,14 @@ class Power:
 
 @dataclass(frozen=True)
 class ChipReset:
-    """At `t` the chip's EN pin is pulsed: a power-on reset of the chip alone (5.18)."""
+    """At `t` the chip's EN pin is pulsed: a power-on reset of the chip alone (5.18). With a
+    `cause`, the ROM's, a warm reset instead, with `hint` in the reset-reason hint register, 0 when
+    `None`; neither goes on the wire when `None`."""
 
     TYPE: ClassVar[str] = "chip_reset"
     t: int
+    cause: int | None = None
+    hint: int | None = None
 
 
 @dataclass(frozen=True)
@@ -495,6 +499,8 @@ Input = (
 HarnessMessage = HarnessHello | Input | FlashDump | FlashWrite | Wait | Stop
 Message = RunnerMessage | HarnessMessage
 
+_STATS_OPTIONAL = ("wifi", "rt_resyncs", "console_rx_lost")
+
 # The fields whose JSON name is not the attribute's.
 JSON_NAMES = {"nbytes": "bytes"}
 
@@ -507,9 +513,12 @@ def as_json(message: Message | UartStats | WifiStats) -> dict[str, Any]:
     for field in fields(message):
         value = getattr(message, field.name)
         # `stats.wifi` is there with `--wifi` only, `stats.rt_resyncs` with `--realtime` only,
-        # `stats.console_rx_lost` with `--console-port usb` only
-        optional = field.name in ("wifi", "rt_resyncs", "console_rx_lost")
-        if not (isinstance(message, Stats) and optional and value is None):
+        # `stats.console_rx_lost` with `--console-port usb` only; `chip_reset.cause` and `hint`
+        # with a warm reset only
+        optional = (isinstance(message, Stats) and field.name in _STATS_OPTIONAL) or isinstance(
+            message, ChipReset
+        )
+        if not (optional and value is None):
             obj[JSON_NAMES.get(field.name, field.name)] = _to_json(value)
     return obj
 
@@ -785,6 +794,20 @@ def _sd_op(f: Fields) -> SdOp:
     )
 
 
+def _chip_reset(f: Fields) -> ChipReset:
+    """A `chip_reset`, checked as the runner checks it without the chip: a `hint` only with a
+    `cause`, no cause 1, and both 32-bit."""
+    cause, hint = f.opt_integer("cause"), f.opt_integer("hint")
+    if cause is None and hint is not None:
+        raise ProtocolError("a hint without a cause")
+    if cause == 1:
+        raise ProtocolError("cause 1 is a power-on's; a chip_reset without a cause is one")
+    for name, value in (("cause", cause), ("hint", hint)):
+        if value is not None and value > 0xFFFF_FFFF:
+            raise ProtocolError(f"{name} is over 32 bits: {value}")
+    return ChipReset(f.integer("t"), cause, hint)
+
+
 def _sd_fault(f: Fields) -> SdFault:
     """An `sd_fault`, checked as the runner checks it without the card."""
     op = f.choice("op", SD_OPS)
@@ -893,7 +916,7 @@ DECODERS: dict[Sender, dict[str, Callable[[Fields], Message]]] = {
         "console_rx": lambda f: ConsoleRx(f.integer("t"), f.data("data")),
         "wifi_ap": lambda f: WifiAp(f.integer("t"), f.boolean("on")),
         "power": lambda f: Power(f.integer("t"), f.boolean("on")),
-        "chip_reset": lambda f: ChipReset(f.integer("t")),
+        "chip_reset": _chip_reset,
         "sd_fault": _sd_fault,
         "sd_clear": lambda f: SdClear(f.integer("t"), f.opt_integers("ids")),
         "sd_card": lambda f: SdCardChange(f.integer("t"), f.opt_string("image")),

@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 
 import pytest
-from test_reset_reasons import REASONS, printed_reasons
+from test_reset_reasons import REASONS, check_warm_resets, printed_reasons
 
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.flash import Namespaces, i8, i16, i32, i64, u8, u16, u32, u64
@@ -96,6 +96,14 @@ def on_chip(chip: str, profile: str, banner: str) -> type:
             self, board: Esp32Sim, console: Console
         ) -> None:
             check_reset_reasons(board, console)
+
+        @image("reset_reasons")
+        def test_each_warm_reset_boots_with_the_reason_its_event_leaves(
+            self, board: Esp32Sim, console: Console
+        ) -> None:
+            # from the deep sleep nothing wakes on these chips, and back to it or to done
+            check_reset_reasons(board, console)
+            check_warm_resets(board, console, rb"reset_reasons: (done|sleeping 100 ms)")
 
         @image("console_repl")
         def test_the_console_takes_a_command(self, board: Esp32Sim) -> None:

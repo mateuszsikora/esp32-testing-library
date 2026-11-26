@@ -75,8 +75,8 @@ input would be stamped with a turn the run is past. The HTTP server's handler
 ([the HTTP server](network-user.md#a-handler-computes-the-response)) follows the same rules.
 
 One runner serves the whole test, from the first `power_on()` to teardown. `board.reset()`,
-`board.power_off()` and a `power_on()` after it go to it over the link, at the board's time the test
-calls them, and the run goes on through them on the same clock
+`board.reset(kind=...)`, `board.power_off()` and a `power_on()` after it go to it over the link,
+at the board's time the test calls them, and the run goes on through them on the same clock
 ([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)). The flash the firmware
 writes to, NVS and OTA data among them, is the runner's copy of the build's files: a power cycle
 keeps it, and the build's files are never written. The test reads it with
@@ -90,9 +90,14 @@ goes into the run's log as `boot N: REASON, IDF_REASON (reset cause C)`, and int
 statistics as one of its `resets`. REASON is the ROM's name for the cause, and IDF_REASON the name
 ESP-IDF's `esp_reset_reason()` gives the boot, `boot.idf_reason`, from the cause and the hint the
 runner read with it: `ESP_RST_PANIC` rather than `ESP_RST_SW` after a panic, which the ROM reports
-as `esp_restart()`'s `SW_CPU_RESET`. A reset, whatever caused it, and `board.power_off()` end the
-TCP connections the test opened to the device, as `lost`, and leave the device without an address on
-the simulated network until it takes one again
+as `esp_restart()`'s `SW_CPU_RESET`. A warm `board.reset(kind=...)` gives the runner the kind's
+cause and hint ([resets and power cycles](pytest-plugin-user.md#resets-and-power-cycles)), which
+the runner writes into the chip before it resets it as after the firmware's own panic, watchdog or
+brownout, so the boot reads in the log as one the firmware caused: `board.reset(kind='panic')`,
+then `boot N: SW_CPU_RESET, ESP_RST_PANIC (reset cause 12)`. The firmware's handler does not run, so
+nothing it would print before such a reset appears on the console. A reset, whatever caused it, and
+`board.power_off()` end the TCP connections the test opened to the device, as `lost`, and leave the
+device without an address on the simulated network until it takes one again
 ([network](network-user.md#open-a-tcp-connection-to-the-device)).
 
 A classic ESP32 in deep sleep with a timer wake wakes on its RTC timer, through a

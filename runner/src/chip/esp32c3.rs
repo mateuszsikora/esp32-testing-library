@@ -23,6 +23,9 @@ pub const PROFILE: Profile = Profile {
     bt: true,
     usb_serial_jtag: true,
     psram_mb: &[],
+    reset_causes: &[
+        3, 5, 7, 8, 9, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+    ],
 };
 
 /// The MAC esp32sim gives the C3 (`cli/src/lib.rs`, `setup_c3`).
@@ -112,11 +115,15 @@ impl Guest for esp32c3::Machine {
         let hint = self.reset_hint();
         let cause = self.reboot();
         reset_console_rx(self);
-        super::keep_reset_hint(&mut self.bus, RESET_HINT, hint);
+        super::write_reset_hint(&mut self.bus, RESET_HINT, hint);
         cause
     }
     fn reset_hint(&mut self) -> u32 {
         super::read_reset_hint(&mut self.bus, RESET_HINT)
+    }
+    fn request_reset(&mut self, cause: u32, hint: u32) {
+        super::write_reset_hint(&mut self.bus, RESET_HINT, hint);
+        esp_soc::SocBus::request_reset(&mut self.bus, cause);
     }
     fn power_on_reset(&mut self, rom: &[u8]) -> u32 {
         use esp32c3::bus::*;

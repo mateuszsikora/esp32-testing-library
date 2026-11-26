@@ -40,6 +40,9 @@ pub const PROFILE: Profile = Profile {
     usb_serial_jtag: true,
     // the in-package PSRAM of the ESP32-S31NRV16, which esp32sim's S31 takes as a board input
     psram_mb: &[16],
+    reset_causes: &[
+        3, 5, 6, 7, 8, 9, 11, 12, 13, 15, 16, 18, 19, 20, 22, 23, 24, 26,
+    ],
 };
 
 /// GPIO 0 to 61 without 29 and 41 (ESP-IDF v6.1 `SOC_GPIO_VALID_GPIO_MASK`, esp32sim's
@@ -257,11 +260,15 @@ impl Guest for S31 {
         let hint = self.reset_hint();
         let cause = self.m.reboot();
         self.after_any_reset();
-        super::keep_reset_hint(&mut self.m.bus, RESET_HINT, hint);
+        super::write_reset_hint(&mut self.m.bus, RESET_HINT, hint);
         cause
     }
     fn reset_hint(&mut self) -> u32 {
         super::read_reset_hint(&mut self.m.bus, RESET_HINT)
+    }
+    fn request_reset(&mut self, cause: u32, hint: u32) {
+        super::write_reset_hint(&mut self.m.bus, RESET_HINT, hint);
+        esp_soc::SocBus::request_reset(&mut self.m.bus, cause);
     }
     fn power_on_reset(&mut self, _rom: &[u8]) -> u32 {
         // esp32sim's chip reset makes the S31's whole digital side again, its SRAM and LP memory

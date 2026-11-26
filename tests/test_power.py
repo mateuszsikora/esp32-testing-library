@@ -27,8 +27,8 @@ BOOT = (
     rb" uptime_ms=(\d+)"
 )
 
-# esp_reset_reason(): ESP_RST_POWERON and ESP_RST_SW (esp_system.h).
-ESP_RST_POWERON, ESP_RST_SW = 1, 3
+# esp_reset_reason(): ESP_RST_POWERON, ESP_RST_SW and ESP_RST_PANIC (esp_system.h).
+ESP_RST_POWERON, ESP_RST_SW, ESP_RST_PANIC = 1, 3, 4
 # The ROM's reasons (RESET_REASON in esp32/rom/rtc.h): a power-on, and esp_restart's.
 POWERON_RESET, SW_CPU_RESET = 1, 12
 
@@ -94,6 +94,29 @@ def test_a_restart_keeps_ram_and_rtc_memory_and_board_reset_clears_them(
     assert third.uptime_ms < 1000 < pressed.ns // 1_000_000
     console.expect_exact("persistence: done")
     assert "boot 3: POWERON_RESET, ESP_RST_POWERON (reset cause 1)" in board.report(run=True)
+
+
+def test_a_warm_reset_keeps_ram_and_rtc_memory_and_board_reset_clears_them(
+    board: Esp32Sim, console: Console
+) -> None:
+    board.power_on()
+    console.expect_exact("persistence: done")
+    board.wait(seconds(1))
+    pressed = board.now
+    board.reset(kind="panic")
+    third = booted(console)
+    # the chip resets as after its own panic: what the boot before wrote is still there, and the
+    # firmware reads the panic's reason, which no panic of its own left
+    assert state(third) == (3, ESP_RST_PANIC, SW_CPU_RESET, 3, 3, -1)
+    assert board.boot == Boot(3, pressed, SW_CPU_RESET)
+    assert board.boot.idf_reason == "ESP_RST_PANIC"
+    console.expect_exact("persistence: done")
+    board.reset()
+    # EN, after it: a power-on reset, which starts the memories again
+    assert state(booted(console)) == (4, ESP_RST_POWERON, POWERON_RESET, 1, 1, -1)
+    log = board.report(run=True)
+    assert "board.reset(kind='panic')" in log
+    assert "boot 3: SW_CPU_RESET, ESP_RST_PANIC (reset cause 12)" in log
 
 
 def test_each_boot_s_uptime_zero_puts_the_firmware_s_uptime_on_the_board_s_clock(

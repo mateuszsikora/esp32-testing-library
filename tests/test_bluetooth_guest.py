@@ -9,6 +9,7 @@ an air of its own, on the same clock, so that its time and the board's are one."
 
 import asyncio
 import json
+import re
 import threading
 from collections.abc import Callable, Coroutine, Iterable, Iterator
 from pathlib import Path
@@ -969,6 +970,33 @@ def test_board_reset_drops_what_the_controller_made_for_the_old_host(bt: Bluetoo
     assert turn[0] == ChipReset(0)
     assert not [message for message in turn if isinstance(message, HciRx)]
     assert backend.link.error is None
+
+
+def test_a_warm_board_reset_sends_its_cause_and_hint_and_resets_the_controller(
+    bt: Bluetooth,
+) -> None:
+    backend = backend_with(bt)
+    command_complete = bytes.fromhex("040e0401030c00")
+    bt.air.call(lambda: bt.on_packet(command_complete))
+    backend.reset(kind="panic")
+    turn = backend.link.receive(Sync(0))
+    # ESP_RST_PANIC's hint and the CPU's software reset, as ESP-IDF's panic handler leaves them
+    assert turn[0] == ChipReset(0, 12, 0x8004_0004)
+    assert not [message for message in turn if isinstance(message, HciRx)]
+    assert any("board.reset(kind='panic')" in line for line in backend.log.lines())
+
+
+def test_a_board_reset_of_an_unknown_kind_sends_nothing(bt: Bluetooth) -> None:
+    backend = backend_with(bt)
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            "board.reset: kind is 'en', 'panic', 'task_wdt', 'int_wdt', 'rtc_wdt' or"
+            " 'brownout', not 'sw'"
+        ),
+    ):
+        backend.reset(kind="sw")  # type: ignore[arg-type]
+    assert not [m for m in backend.link.receive(Sync(0)) if isinstance(m, ChipReset)]
 
 
 def test_the_backend_s_supply_and_the_runner_s_resets_reach_the_controller(

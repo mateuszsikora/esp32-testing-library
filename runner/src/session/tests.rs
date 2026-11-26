@@ -139,8 +139,10 @@ struct FakeGuest {
     bt_inits: Option<u64>,
     /// esp32sim's `[ble]` lines the run loop has not taken yet.
     bt_lines: VecDeque<String>,
-    /// The reset-reason hint register, as `Act::Hint` last wrote it.
+    /// The reset-reason hint register, as `Act::Hint` or `request_reset` last wrote it.
     hint: u32,
+    /// Each warm reset the run loop asked for: the cycle, the cause and the hint.
+    requested: Vec<(u64, u32, u32)>,
 }
 
 /// Why `FakeGuest` lost a received byte.
@@ -187,6 +189,7 @@ impl FakeGuest {
             bt_inits: None,
             bt_lines: VecDeque::new(),
             hint: 0,
+            requested: Vec::new(),
         }
     }
 
@@ -351,6 +354,12 @@ impl Guest for FakeGuest {
     }
     fn reset_hint(&mut self) -> u32 {
         self.hint
+    }
+    fn request_reset(&mut self, cause: u32, hint: u32) {
+        self.requested.push((self.now, cause, hint));
+        self.hint = hint;
+        // the reset `chip_reset` takes next, as esp32sim's next scheduling round would
+        self.script.push_front((self.now, Act::Reset(cause)));
     }
     fn power_on_reset(&mut self, _rom: &[u8]) -> u32 {
         // the hint stays, so that a `reset` with none shows the run loop sent none
@@ -1629,6 +1638,9 @@ fn a_signal_ends_the_slice_in_progress_with_stats() {
         fn chip_reset(&mut self) -> u32 {
             self.0.chip_reset()
         }
+        fn request_reset(&mut self, cause: u32, hint: u32) {
+            self.0.request_reset(cause, hint)
+        }
         fn power_on_reset(&mut self, rom: &[u8]) -> u32 {
             self.0.power_on_reset(rom)
         }
@@ -1762,6 +1774,9 @@ fn on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point() 
         }
         fn chip_reset(&mut self) -> u32 {
             self.m.chip_reset()
+        }
+        fn request_reset(&mut self, cause: u32, hint: u32) {
+            Guest::request_reset(&mut self.m, cause, hint)
         }
         fn power_on_reset(&mut self, rom: &[u8]) -> u32 {
             self.m.power_on_reset(rom)
@@ -2668,6 +2683,9 @@ impl Guest for WifiGuest {
     fn chip_reset(&mut self) -> u32 {
         self.inner.chip_reset()
     }
+    fn request_reset(&mut self, cause: u32, hint: u32) {
+        self.inner.request_reset(cause, hint)
+    }
     fn power_on_reset(&mut self, rom: &[u8]) -> u32 {
         self.inner.power_on_reset(rom)
     }
@@ -2970,6 +2988,15 @@ fn chip_reset(t: u64) -> String {
     format!(r#"{{"type":"chip_reset","t":{t}}}"#)
 }
 
+fn warm_reset(t: u64, cause: u32, hint: Option<u32>) -> String {
+    match hint {
+        Some(hint) => {
+            format!(r#"{{"type":"chip_reset","t":{t},"cause":{cause},"hint":{hint}}}"#)
+        }
+        None => format!(r#"{{"type":"chip_reset","t":{t},"cause":{cause}}}"#),
+    }
+}
+
 /// A peer that sends `script`'s messages, each in the first turn at or after the time it names,
 /// and a turn at each of those times.
 fn scripted(script: Vec<(u64, String)>) -> impl FnMut(&Turn) -> Vec<String> {
@@ -3189,6 +3216,59 @@ fn en_resets_the_chip_with_power_on_as_its_cause_and_does_nothing_without_power(
         .collect();
     assert_eq!(resets, [(MS, 1), (5 * MS, 1)]);
     assert_eq!(r.guest.power_resets, [cycles(MS), cycles(5 * MS)]);
+}
+
+#[test]
+fn a_chip_reset_with_a_cause_is_a_warm_reset_with_the_peers_hint() {
+    // ESP_RST_PANIC, as `esp_reset_reason_set_hint` writes it
+    let panic = 0x8004_0004;
+    let guest = FakeGuest::new(vec![]);
+    let peer = FakePeer::new(
+        &[],
+        scripted(vec![
+            (MS, warm_reset(MS, 12, Some(panic))),
+            (2 * MS, warm_reset(2 * MS, 16, None)),
+            (3 * MS, power(3 * MS, false)),
+            // with the supply off there is no chip to reset
+            (4 * MS, warm_reset(4 * MS, 12, Some(panic))),
+        ]),
+    );
+    let r = run(0.01, guest, peer);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    let resets: Vec<(u64, u64, u64)> = r
+        .peer
+        .of("reset")
+        .iter()
+        .map(|m| (num(m, "t"), num(m, "cause"), num(m, "hint")))
+        .collect();
+    assert_eq!(resets, [(MS, 12, u64::from(panic)), (2 * MS, 16, 0)]);
+    assert_eq!(
+        r.guest.requested,
+        [(cycles(MS), 12, panic), (cycles(2 * MS), 16, 0)]
+    );
+    assert!(
+        r.guest.power_resets.is_empty(),
+        "{:?}",
+        r.guest.power_resets
+    );
+}
+
+#[test]
+fn a_chip_reset_with_a_cause_the_chips_rom_lacks_is_a_protocol_error() {
+    // cause 2 is none of the classic chip's, the unit tests' chip
+    let peer = FakePeer::new(&[], |turn| {
+        vec![warm_reset(0, 2, None), wait(turn.seq, None, None)]
+    });
+    let r = run(1.0, FakeGuest::new(Vec::new()), peer);
+    assert!(
+        matches!(
+            &r.end,
+            End::Protocol(m)
+                if m.contains("chip_reset: cause 2 is not one the ROM of the classic ESP32 reports")
+        ),
+        "{:?}",
+        r.end
+    );
 }
 
 #[test]

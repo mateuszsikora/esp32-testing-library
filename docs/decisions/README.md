@@ -383,6 +383,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [The broker answers a client's publication with the test's handler, as it is routed](harness.md#the-broker-answers-a-clients-publication-with-the-tests-handler-as-it-is-routed) | `harness.md` | decided (#336) |
 | [A card image maps names to blocks, and the card reports no file events](harness.md#a-card-image-maps-names-to-blocks-and-the-card-reports-no-file-events) | `harness.md` | decided (#337) |
 | [A refused PPP negotiation ends the call as a mode change of its own](harness.md#a-refused-ppp-negotiation-ends-the-call-as-a-mode-change-of-its-own) | `harness.md` | decided (#345) |
+| [A test resets the chip warm by naming the event, not the cause](harness.md#a-test-resets-the-chip-warm-by-naming-the-event-not-the-cause) | `harness.md` | decided (#358) |
 
 ## The runner crate and esp32sim
 

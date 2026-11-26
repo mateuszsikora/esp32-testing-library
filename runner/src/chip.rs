@@ -55,6 +55,10 @@ pub struct Profile {
     /// The sizes, in MiB, `--psram-mb` can give the chip besides 0; none if esp32sim gives it
     /// no PSRAM.
     pub psram_mb: &'static [usize],
+    /// The reset causes its ROM reports but a power-on's, ESP-IDF's `soc_reset_reason_t` of
+    /// `components/soc/<chip>/include/soc/reset_reasons.h`: the causes the peer's `chip_reset` may
+    /// give a warm reset (protocol 5.18).
+    pub reset_causes: &'static [u32],
 }
 
 /// Every chip `--chip` takes, in the order the usage lists them.
@@ -140,11 +144,12 @@ pub(crate) fn read_reset_hint(bus: &mut impl emu_core::Bus, address: u32) -> u32
         .expect("the reset-reason hint register is mapped")
 }
 
-/// Puts back the reset-reason hint `hint` at `address` after a reset of esp32sim that makes the
-/// register anew, which the chip keeps through every reset but a power-on: what ESP-IDF's
+/// Writes the reset-reason hint `hint` at `address`, as the runner writes the bus: what ESP-IDF's
 /// `esp_reset_reason()` reads at the next boot (`components/esp_system/port/soc/<chip>/
-/// reset_reason.c`).
-pub(crate) fn keep_reset_hint(bus: &mut impl emu_core::Bus, address: u32, hint: u32) {
+/// reset_reason.c`). Puts the hint back after a reset of esp32sim that makes the register anew,
+/// which the chip keeps through every reset but a power-on, and writes the one a warm
+/// `chip_reset` of the peer gives (`Guest::request_reset`).
+pub(crate) fn write_reset_hint(bus: &mut impl emu_core::Bus, address: u32, hint: u32) {
     bus.write32_unpriced(address, hint)
         .expect("the reset-reason hint register is mapped");
 }

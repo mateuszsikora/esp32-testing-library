@@ -89,9 +89,11 @@ from esp32tl.interfaces.board import (
     POWERON_RESET,
     Board,
     Boot,
+    ResetKind,
     Sleep,
     UptimeZero,
     idf_reset_reason,
+    warm_reset,
 )
 from esp32tl.interfaces.console import ConsoleInput, ConsoleLines
 from esp32tl.interfaces.gnss import Gnss
@@ -1267,20 +1269,29 @@ class Esp32Sim(Board):
             raise BoardOff("the board is off already: call board.power_on() to switch it on")
         self._switch(False)
 
-    def reset(self) -> None:
-        """Pulses the chip's EN pin at the board's time now, as the board's reset button does:
-        the chip boots again through a power-on reset, and the rest of the board keeps its
-        power."""
+    def reset(self, kind: ResetKind = "en") -> None:
+        """Resets the chip at the board's time now; the rest of the board keeps its power. With
+        `kind` "en", pulses the chip's EN pin, as the board's reset button does: the chip boots
+        again through a power-on reset. Any other kind (`RESET_KINDS`) is a warm reset, as a
+        panic, a task or interrupt watchdog, the RTC watchdog or a brownout leaves it: SRAM, the
+        RTC memories and the RTC registers keep what the firmware wrote there, and the next boot
+        reads the cause and the hint ESP-IDF's own path leaves (`warm_reset`). The firmware's
+        handler does not run, so the console shows none of what it would print."""
+        warm = warm_reset(kind)
         refuse_board("board.reset")
         if not self.powered:
             raise BoardOff("the board is off: board.reset() resets a board that is on")
-        self._hold.check("board.reset()")
+        step = "board.reset()" if warm is None else f"board.reset(kind={kind!r})"
+        self._hold.check(step)
         now = self._hold.now
         # The Bluetooth controller resets with the chip, now: what it made for the old host must
         # not reach the new one, after the reboot that empties the runner's queue.
         self._bluetooth.chip_reset(now)
-        self.link.board_input(ChipReset(now))
-        self.log.test(now, "board.reset()")
+        if warm is None:
+            self.link.board_input(ChipReset(now))
+        else:
+            self.link.board_input(ChipReset(now, warm.cause, warm.hint))
+        self.log.test(now, step)
 
     def _switch(self, on: bool) -> None:
         """The board's supply on or off at the board's time now, for the runner and for the
