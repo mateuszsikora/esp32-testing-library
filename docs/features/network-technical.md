@@ -263,11 +263,17 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
 - `dns.py`: one bounded question, including compressed names with loop detection; preserves the
   query ID and recursion-desired bit. IN A answers have TTL 60 and address `10.64.0.1`,
   except behind the virtual station, where they use the host's leased address. Every question it
-  parses, whatever its QTYPE, is appended to `questions` as a `DnsQuestion(at, name, qtype)`, `at`
-  being `Duration(now())`, before the answer is built; `asked` is a property that lists their
-  names. A query it refuses (a response, an opcode other than QUERY, other than one question, a
-  bad label, a name over 255 bytes or a truncated question) returns `None` before anything is
-  recorded.
+  parses, whatever its QTYPE, is appended to `questions` as a `DnsQuestion(at, name, qtype,
+  answered)`, `at` being `Duration(now())`, before the answer is built; `asked` is a property that
+  lists their names. `unknown(name)` and `known(name)` add the name to and remove it from a set,
+  with ASCII letters lowercased (`str.translate`, not `str.lower`, which folds all of Unicode) and
+  one trailing dot removed, and log a line only when the set changes. A question whose name, its
+  ASCII letters lowercased, is in the set is answered with RCODE 3, no answer record and
+  `answered="nxdomain"`, whatever its QTYPE and QCLASS. Any other question is answered with
+  RCODE 0: an IN A one with the address and `"address"`, any other with no record and
+  `"no record"`. The log line after each question names the address, `NXDOMAIN` or `no record`. A
+  query it refuses (a response, an opcode other than QUERY, other than one question, a bad label, a
+  name over 255 bytes or a truncated question) returns `None` before anything is recorded.
 - `ethernet.py`: Ethernet II without FCS, ARP and the hand-off to DHCP. `Ethernet.receive` drops
   frames under 14 bytes and frames from a multicast source, and learns `device_mac` from every other
   frame. In esp32sim every frame from the station ends in 4 bytes more, libpp's guard word

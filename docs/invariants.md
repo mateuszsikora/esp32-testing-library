@@ -2664,6 +2664,17 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_net_services.py::test_ntp_switches_between_synchronised_and_unsynchronised_answers`,
   `tests/test_net_services.py::test_ntp_go_silent_wins_over_unsynchronised`,
   `tests/test_net_services.py::test_ntp_exchanges_say_which_answers_were_unsynchronised`
+- **309.** After `dns.unknown(name)` every question for that name, of any type and class, is
+  answered with RCODE 3 and no record, until `dns.known(name)`; names compare without regard to
+  ASCII case and without a trailing dot, several can be unknown at once, and every other name is
+  answered as before. Each question records what it was answered with, `"address"`, `"no record"`
+  or `"nxdomain"`, and a call to `unknown` or `known` logs one line when it changes the answer and
+  none when it does not.
+  `tests/test_net_services.py::test_dns_answers_nxdomain_for_an_unknown_name_of_every_type`,
+  `tests/test_net_services.py::test_dns_resolves_every_other_name_while_one_is_unknown`,
+  `tests/test_net_services.py::test_dns_unknown_names_ignore_case_and_a_trailing_dot`,
+  `tests/test_net_services.py::test_dns_known_undoes_unknown_for_that_name_alone`,
+  `tests/test_net_services.py::test_dns_keeps_every_question_it_parsed_with_its_time_and_type`
 
 ## The link's changes
 

@@ -1652,7 +1652,8 @@ decision](../decisions/harness.md#behind-a-wi-fi-access-point-the-network-record
 Behind the modem, PPP gives the device `10.64.0.2` and DNS `10.64.0.1`; the peer is `10.64.0.1`.
 Behind the access point, DHCP gives the same addresses ([above](#addresses-behind-the-access-point)).
 Every destination IP answers, so TCP and UDP dispatch by destination port, regardless of the
-address. DNS on UDP 53 answers every IN A query with `10.64.0.1`; other query types receive an empty answer.
+address. DNS on UDP 53 answers every IN A query with `10.64.0.1`; other query types receive an empty
+answer, and a name the test made unknown NXDOMAIN ([below](#a-name-that-does-not-resolve)).
 NTP on UDP 123 tells `board.power_on(utc=...)` plus elapsed emulated time. The default UTC is the
 board's. `network.ntp.go_silent()` stops answering new requests; `network.ntp.resume()` answers
 new requests again using the current world time. Both work before power-on and during a run,
@@ -1823,6 +1824,45 @@ Why the server is the harness's own: [the decision](../decisions/harness.md#the-
 plain MQTT; [the position tracker](examples-user.md#position-tracker-over-a-cellular-modem)
 validates firmware PPP, NTP and MQTT over TLS, with its broker CA provisioned through NVS.
 
+### A name that does not resolve
+
+`network.dns.unknown(name)` makes a name unknown from the call on: every question for it, of any
+type, gets RCODE 3 (NXDOMAIN) and no record, as a mistyped host or a removed record does.
+`network.dns.known(name)` undoes it, and questions for that name are answered as before. Several
+names can be unknown at once; every other name is answered as before. A question matches when its
+name is exactly `name`, compared without regard to ASCII case and without a trailing dot: after
+`unknown("Broker.Example.")`, `broker.example` and `BROKER.example` get NXDOMAIN, but
+`mqtt.broker.example` and `broker.example.com` still resolve. A `name` that is not text raises
+`TypeError("dns: name takes text")`. Both work before power-on and during a run, without advancing
+time, and act on questions that reach the server after the call; an answer the device has cached
+stays with it until its TTL of 60 s runs out.
+
+Behind the modem one failed lookup can be two questions. IPCP gives the device the network's
+address as both its primary and its secondary DNS server, and ESP-IDF's lwIP, on an answer with an
+error RCODE, asks its next server at once (`dns_recv` in ESP-IDF v5.5.5, read from the source, not
+measured), so `dns.questions` holds two NXDOMAIN questions for the name. Behind the access point
+DHCP gives one server, and one question.
+
+```python
+network.dns.unknown("broker.example")
+board.power_on()
+question = board.wait_until(network.dns.next_question("broker.example"), within=seconds(30))
+assert question.answered == "nxdomain"
+network.dns.known("broker.example")  # The next question for it is answered as before.
+```
+
+A call that changes what the server answers logs one line in the network transcript, with the name
+as it is compared; `unknown` of a name already unknown and `known` of one that is not log nothing.
+Each question logs one line saying what it was answered with, here behind the access point:
+
+```text
+dns: broker.example is unknown from now on
+dns: broker.example → NXDOMAIN
+dns: broker.example is known again
+dns: broker.example → 10.64.0.1
+dns: broker.example → no record
+```
+
 ### When the device asked for the time and for a name
 
 Both services keep what the device asked, in the order it came, with the board's time it reached
@@ -1837,7 +1877,7 @@ neither service and is not recorded.
 | `network.ntp.unsynchronised()` | From now on, answer with leap indicator 3, stratum 0, the reference id `INIT` and a reference timestamp of 0, the receive and transmit timestamps still the world's |
 | `network.ntp.synchronised()` | From now on, answer as a synchronised stratum-1 server again, the default |
 | `network.ntp.next_exchange(*, answered=None)` | Condition returning the first request recorded after the call; with `answered=True` or `False`, the first answered or the first not |
-| `network.dns.questions` | Every question the server parsed, each a `DnsQuestion` with `at` (a `Duration`), `name` and `qtype` (1 for A, 28 for AAAA); every one is answered |
+| `network.dns.questions` | Every question the server parsed, each a `DnsQuestion` with `at` (a `Duration`), `name`, `qtype` (1 for A, 28 for AAAA) and `answered`, what the server answered it with: `"nxdomain"` for any question for an [unknown name](#a-name-that-does-not-resolve), `"address"` for an IN A question for any other name, `"no record"` for any other; every one is answered |
 | `network.dns.asked` | The names of `questions`, in order |
 | `network.dns.next_question(name=None)` | Condition returning the first question recorded after the call; with `name`, the first for exactly that name |
 
@@ -1922,8 +1962,9 @@ What changes with a bridge:
   TCP port 8883 already has a service`, and `network.listen` refuses a bridged port. `to` is a
   tuple, `("127.0.0.1", 1883)` or `("localhost", 8080)`; a string raises `TypeError`, a port out of
   1 to 65535 `ValueError`.
-- **DNS still answers every name with `10.64.0.1`.** The device keeps its configured names; only the
-  port picks the service. The bridge connects to `to`, not to the name the device asked for.
+- **DNS answers every name but the [unknown](#a-name-that-does-not-resolve) ones with
+  `10.64.0.1`.** The device keeps its configured names; only the port picks the service. The
+  bridge connects to `to`, not to the name the device asked for.
 - **TLS goes through as it is.** The bridge does not end TLS: the device must trust the real
   service's certificate, and the transcript holds ciphertext for that port. `tls=` is for
   `listen`, not for a bridge.
