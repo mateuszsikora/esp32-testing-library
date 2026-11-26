@@ -344,7 +344,7 @@ The SD card, Wi-Fi and modem supply their writer's lock for these reads.
 | `BLOCK`, `MAX_DELAY` | `int`, `Duration`, `esp32tl/interfaces/sd_card.py` | 512, the block the rules count in; 10 s, the longest delay (`SD_DELAY_MAX` of `esp32tl.link.protocol`) |
 | `wifi(board)` | fixture, function scope | Returns `board.wifi` |
 | `bt(board)` | fixture, function scope | Returns `board.bluetooth`; a `BackendError`, as for a build with no ELF, fails the test as `esp32sim: {error}` without a traceback, as `gnss` does |
-| `Bluetooth(*, asked=..., log=None, address=ADDRESS, latency=LATENCY_NS, directory=None, files=None, chip="esp32")` | class, `esp32tl/interfaces/bluetooth.py`, a `BoardLink` `Interface` named `bluetooth`, with no wire and `bluetooth` true | The firmware's controller, a `GuestController` of `chip`, on `air`, an `Air` on the board's clock made by `use()`, which calls `asked(Request("bluetooth", source="model"))` once and sets the air's `log` to the run log; `used`, `controller`; `supply(on)`, `chip_reset(t)`; the counts, `unknown_commands()`, `devices()`, `report()`, `properties()`, `close()`. For the link: `receive`, `arrive`, `poll`, `quiet_until`, `latency`, as [bluetooth-peer-technical.md](bluetooth-peer-technical.md#data-flow) (item 12) has them |
+| `Bluetooth(*, asked=..., log=None, address=ADDRESS, latency=LATENCY_NS, directory=None, files=None, chip="esp32")` | class, `esp32tl/interfaces/bluetooth.py`, a `BoardLink` `Interface` named `bluetooth`, with no wire and `bluetooth` true | The firmware's controller, a `GuestController` of `chip`, on `air`, an `Air` on the board's clock made by `use()`, which calls `asked(Request("bluetooth", source="model"))` once and sets the air's `log` to the run log; `add_elf(path)`, the ELF of another image the firmware may boot, kept in `elfs`; `used`, `controller`; `supply(on)`, `chip_reset(t)`; the counts, `unknown_commands()`, `devices()`, `report()`, `properties()`, `close()`. For the link: `receive`, `arrive`, `poll`, `quiet_until`, `latency`, as [bluetooth-peer-technical.md](bluetooth-peer-technical.md#data-flow) (item 12) has them |
 | `Wifi(*, now, world=..., asked=..., log=None, bridging=..., test_error=...)` | class, `esp32tl/interfaces/wifi.py`, a `BoardLink` `Interface` named `wifi`, whose `arrive` reaches its network, with no wire and `ethernet` true | The chip's Wi-Fi air. `station(ssid, *, password=None, mac=None)` returns an `Internet(link="station")` joining the device's SoftAP. `access_point(ssid, *, password=None, channel=6, bssid=None)` returns the `Internet(now, world, link="ethernet")` behind it and starts it at 0; `nearby(ssid, *, channel=1, rssi=-60, secure=True, bssid=None)`; `access_point_off()`, `access_point_on()`; `network`, `on_air`, `configuration` (`AccessPoint \| StationConfig \| None`), `around` (`tuple[Nearby, ...]`), `events` (`Sequence[AirEvent]`); `runner_args()`, the runner's `--wifi` and `--wifi-nearby`, or `--wifi-sta`; `report()` and `properties()`. For the link: `receive(t, direction, frame)` is the network's while it is active, `arrive(now)` and `poll(now)` the network's off the air too, so its broker's keepalive runs, `inputs(now)` the switches as `WifiAp`, `quiet_until()` the network's, `latency()` `LATENCY_NS` (1 ms) once a virtual radio role is configured. `asked(Request("wifi", source="model"))` is called by `access_point` and `nearby`, and by `station` with `role="station"`, which the esp32sim backend looks up in its `CHIP_GAPS` ([esp32sim-backend-technical.md](esp32sim-backend-technical.md#data-flow)). `bridging` and `test_error` go to the network, as the `Modem`'s do |
 | `AccessPoint(ssid, password, channel, bssid)`, `Nearby(ssid, channel, rssi, secure, bssid)`, `AirEvent(t, on)` | frozen dataclasses, `esp32tl/interfaces/wifi.py` | What the test gave; `spec()` is the runner flag's value. `AirEvent.t` in nanoseconds of the board's time |
 | `Console(board)` | class, `esp32tl/interfaces/console.py` | `expect(pattern, timeout=30, *, return_what_before_match=False)`, `expect_exact(...)` with the same arguments, `timeout` a `Duration` or a number of seconds; `line(pattern)`, `lines(pattern=None, *, since=None)`, `tap(path)`, `write(data: bytes \| str)` and `sendline(line: bytes \| str)`; input requires the backend's `write_console(data: bytes)` method. `board` is a `Clocked`: `console_output`, `console_lines` and `wait_on_clock(condition, within, description)`, `within` a `Duration` |
@@ -1019,9 +1019,22 @@ made and a chip reset or a power loss threw away is not recorded, as it never re
 `Esp32Sim._write_taps` writes it with `recording.write_btsnoop` once the runner has gone, as it
 writes the UARTs' recordings ([run-report-technical.md](run-report-technical.md#the-hci-tap)).
 
+`Bluetooth.add_elf(path)` calls `asked` with `Request("bluetooth", source="model")` every time,
+not only at the first look as `use()` does, so that one after power-on is refused as a source is.
+It resolves `path` against `directory`, takes a directory's application ELF through
+`build.load(str(dir), dir, chip=self.chip).elf`, whose `BuildError` it raises again with
+`bluetooth.add_elf: ` before the message, checks the file's first four bytes, `\x7fELF`, then
+refuses an ELF that `files` holds as a tap or an SD card's image (`WRITERS`), `SourceError:
+bluetooth.add_elf: PATH is the tap of bluetooth`, calls `use()`, appends the resolved path to
+`elfs` under the lock, unless it is there already, claims it in `files` as `("elf",
+"bluetooth")`, so that a later tap or card image of it is refused as one of any claimed file is,
+and returns it. The backend adds a
+`--bt` for each of `elfs` after the application's ([esp32sim backend](esp32sim-backend-technical.md)).
+
 `tests/test_bluetooth_guest.py` covers the interface through a real `BoardLink`, without the
 emulator, its tap included; `tests/test_pytest_plugin.py` the `--bt` of the runner's command line;
-`tests/test_bt_spp_initiator.py` the tap's files after a run of the firmware; and
+`tests/test_bt_spp_initiator.py` the tap's files after a run of the firmware;
+`tests/test_bt_spp_ota.py` `add_elf`, its refusals and the runs it makes work; and
 `tests/test_serial_backend.py` the skip on serial.
 
 `tests/test_wifi.py` covers the flags, the parameter checks, the capability request, the switches

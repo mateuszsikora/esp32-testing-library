@@ -179,6 +179,62 @@ buffers from PSRAM (`CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST`) gets its packets o
 well, on a board profile with `psram_mb = 4`
 ([Bluetooth peer](bluetooth-peer-user.md#in-front-of-the-firmware-boardbluetooth)).
 
+#### An app from another slot or another build: an OTA update
+
+The firmware's controller starts for an app the bootloader boots from any app partition, `ota_0`,
+`ota_1` or `factory`, at a power-on, a software reset and a deep-sleep wake alike: the runner's
+hooks are where the bootloader mapped the app. They are the functions of one ELF, though, and an
+app built from other sources or at another version has its functions elsewhere. A firmware that
+updates itself over the air with another build, then needs Bluetooth from it, names that build's
+ELF before `board.power_on()`:
+
+```python
+def test_spp_after_the_update(board, bt, console):
+    SppPeer(bt.air, name="ESP_SPP_ACCEPTOR", pin="1234", source=Heard())
+    bt.add_elf("../build-v2/app.elf")  # or the build directory, "../build-v2"
+    board.power_on()
+    ...
+```
+
+The backend passes the runner one more `--bt` for each, after the application's, and the runner
+puts in the hooks of the ELF whose SHA-256 the booted image records
+([runner](runner-user.md#an-app-from-another-build-an-ota-update)). `add_elf` takes a path relative
+to the test file's directory: an ELF, or an ESP-IDF or PlatformIO build directory, whose
+application ELF it takes as the backend takes the build's. It puts the firmware's controller on the
+link, as `board.bluetooth.use()` does, and returns the ELF's resolved path, as
+`board.bluetooth.elfs` lists it; an ELF named twice, or the build's own, gives the runner no
+second `--bt`. After `board.power_on()` it is
+refused as a source is: `bluetooth: the board is on already: give an interface its source before
+board.power_on()`. A path that cannot be read is `FileNotFoundError: bluetooth.add_elf: cannot read
+PATH: No such file or directory`, a file that is not an ELF `ValueError: bluetooth.add_elf: PATH
+is not an ELF file`, a build directory without one `FileNotFoundError: bluetooth.add_elf: the
+build in PATH has no ELF`, and a directory that is no build, or one of another chip, the
+`BuildError` the backend gives for such a build with `bluetooth.add_elf: ` before it. The run
+reads the ELF, so a tap or an SD card image that would write over it is refused, before
+`add_elf` as `SourceError: bluetooth.add_elf: PATH is the tap of bluetooth` and after it as
+`SourceError: bluetooth: cannot tap into PATH: PATH is the elf of bluetooth`.
+
+Without it, an app built from another ELF than the build's gets no controller: its
+`esp_bt_controller_init` runs ESP-IDF's own, which on the classic ESP32 panics with
+`StoreProhibited` and boot-loops. The runner's log says so, `esp32tl-runner: the app the bootloader
+started was built from an ELF of SHA-256 HEX, none of the --bt ELFs: it has no Bluetooth
+controller; pass its ELF as another --bt`, and the report of a failed test ends with that line, as
+it does with `esp32tl-runner: Bluetooth controller hooks from ELF, the app the bootloader started`
+each time the hooks follow an app of `add_elf`. The first app the bootloader starts keeps the
+build's hooks even when the build's ELF is not the file its image was built from, as a single
+`--bt` always did, and the report then ends with `esp32tl-runner: --bt ELF: the app the bootloader
+started first was built from an ELF of SHA-256 HEX, not this file's HEX: its hooks stay over it, as
+the application's`. Before #347 the hooks stayed the build's whatever
+app ran, and the firmware's controller task failed, `[ble] controller task creation failed:
+0x3ffea240`, or the firmware panicked.
+
+The firmware cannot read its own image once it has started its controller: until the next reset
+esp32sim's code is over `esp_bt_controller_init` in the flash, and `esp_image_verify` of the
+running partition fails with `ESP_ERR_IMAGE_INVALID`. A firmware that copies itself to the other
+slot does it first ([runner](runner-user.md#give-the-guest-a-bluetooth-controller)).
+[`bt_spp_ota` and `bt_spp_ota_v2`](validation-firmware-user.md#bt_spp_ota-and-bt_spp_ota_v2) are
+the images of both cases.
+
 #### A firmware that starts its controller without `board.bluetooth`
 
 A test that never looks at `board.bluetooth` gives the runner `--no-bt` with the same ELF instead of

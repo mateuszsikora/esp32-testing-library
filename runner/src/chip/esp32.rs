@@ -205,6 +205,7 @@ pub(crate) fn reset_console_rx(machine: &mut esp32::Machine) {
 }
 
 impl Guest for esp32::Machine {
+    super::follow_app!(restore);
     fn cycles(&self) -> u64 {
         self.bus.cycles
     }

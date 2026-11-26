@@ -54,7 +54,10 @@ usage: esp32tl-runner --chip CHIP --flash-at OFFSET=FILE... --max-seconds S [opt
                         it, and at the end of the run (docs/protocol.md, section 5.21)
   --bt ELF              the guest's Bluetooth controller is the peer's, over the socket
                         (hci_tx, hci_rx): esp32sim's VHCI hooks take their symbols from
-                        ELF, the application's; needs --board
+                        ELF, the application's; needs --board; repeatable, the first the
+                        application's: each ELF of another image the guest may boot, such
+                        as an OTA update, and the hooks follow the app the bootloader
+                        started, by the app_elf_sha256 of its esp_app_desc_t
   --no-bt ELF           the guest has no Bluetooth controller: its call to
                         esp_bt_controller_init, at that symbol of ELF, the application's,
                         ends the run (end bt_controller, exit code 5); needs --board,
@@ -124,8 +127,9 @@ pub struct Opts {
     pub realtime: bool,
     /// `--flash-out`.
     pub flash_out: Option<PathBuf>,
-    /// `--bt`: the application's ELF, whose symbols esp32sim's VHCI hooks take.
-    pub bt: Option<PathBuf>,
+    /// `--bt`: the application's ELF, whose symbols esp32sim's VHCI hooks take, then those of
+    /// the other images the guest may boot.
+    pub bt: Vec<PathBuf>,
     /// `--no-bt`: the application's ELF, whose `esp_bt_controller_init` ends the run.
     pub no_bt: Option<PathBuf>,
 }
@@ -195,7 +199,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
         wifi: None,
         realtime: false,
         flash_out: None,
-        bt: None,
+        bt: Vec::new(),
         no_bt: None,
     };
     let mut sd_image = None;
@@ -308,7 +312,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
             "--wifi-nearby" => nearby.push(value()?),
             "--realtime" => opts.realtime = true,
             "--flash-out" => opts.flash_out = Some(PathBuf::from(value()?)),
-            "--bt" => opts.bt = Some(PathBuf::from(value()?)),
+            "--bt" => opts.bt.push(PathBuf::from(value()?)),
             "--no-bt" => opts.no_bt = Some(PathBuf::from(value()?)),
             "-h" | "--help" => return Err(Error::Help),
             _ => return Err(usage(format!("unknown argument {flag:?}"))),
@@ -395,12 +399,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, Error> {
         }
         None => station.map(|spec| Wifi::Station { spec }),
     };
-    if opts.bt.is_some() && opts.board.is_none() {
+    if !opts.bt.is_empty() && opts.board.is_none() {
         return Err(usage(
             "--bt makes the peer the guest's Bluetooth controller: it needs --board",
         ));
     }
-    if opts.bt.is_some() && opts.no_bt.is_some() {
+    if !opts.bt.is_empty() && opts.no_bt.is_some() {
         return Err(usage(
             "--bt with --no-bt: the guest's controller is the peer's, or there is none",
         ));
@@ -469,7 +473,7 @@ fn unsupported(opts: &Opts) -> Result<(), Error> {
         ),
         (
             "--bt",
-            opts.bt.is_some() && !chip.bt,
+            !opts.bt.is_empty() && !chip.bt,
             "has no VHCI hooks in esp32sim",
         ),
         (

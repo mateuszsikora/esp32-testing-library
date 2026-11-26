@@ -149,7 +149,8 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc`, `Esp32Sim.utc_at` and the GNSS receiver's
    `--wifi ssid=<ssid>,chan=<channel>[,psk=<password>][,bssid=<bssid>]` and one
    `--wifi-nearby ssid=<ssid>,chan=<channel>,rssi=<dBm>,secure=<0|1>[,bssid=<bssid>]` per network
    around. With a `bluetooth` the test used (`Bluetooth.used`), `bluetooth=` adds
-   `--bt <app.elf>` after that; with one it did not use, `--no-bt <app.elf>`, when `app.elf` is a
+   `--bt <app.elf>` after that, then `--bt <elf>` for each of `Bluetooth.elfs`, the ELFs of
+   `bluetooth.add_elf` in the order given, but `app.elf` resolved; with one it did not use, `--no-bt <app.elf>`, when `app.elf` is a
    file and `CHIP_GAPS` has no `bluetooth` for the build's chip (all but `esp32p4` and
    `esp32s31`), and nothing otherwise. With `console="usb-serial-jtag"`, the profile's `console`,
    `--console-port usb` comes right after `--console both --peer-timeout 0`, before `--board`; a
@@ -473,8 +474,11 @@ cut at its start, rather than dropped. A log it cannot read gives
    other than the runner holds the socket), `shutdown(SHUT_RDWR)` ends the read and the thread is
    joined. Then closes the connection and the listener and removes the socket's directory. Then
    joins the waiter thread.
-5. Reads all `[emu] wifi` diagnostics from the completed runner log into the backend report, after
-   joining the waiter. Then `self.process.close()` sends the forwarder `SIGTERM`, closes the log and
+5. Reads all `[emu] wifi` diagnostics, and the runner's lines on the Bluetooth hooks of an app the
+   bootloader started from another ELF than the build's (`RADIO_DIAGNOSTICS`: `esp32tl-runner:
+   Bluetooth controller hooks from `, `esp32tl-runner: the app the bootloader started was built
+   from an ELF` and `: the app the bootloader started first was built from an ELF`), from the completed runner log into the backend report, after joining the
+   waiter. Then `self.process.close()` sends the forwarder `SIGTERM`, closes the log and
    waits for the forwarder, so the runner's last lines, the backend's own `esp32tl: the runner
    exited with code N` among them, are on the queue when it returns. pytest-embedded stops its
    listener right after the dut (`_close_or_terminate`), so a line the listener has not taken off

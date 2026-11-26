@@ -669,6 +669,7 @@ fn run_with(
         realtime: false,
         flash_out,
         hci: guest.hci.clone(),
+        bt_images: None,
         no_bt: guest.bt_inits.is_some(),
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
@@ -1663,6 +1664,7 @@ fn a_signal_ends_the_slice_in_progress_with_stats() {
         realtime: false,
         flash_out: None,
         hci: None,
+        bt_images: None,
         no_bt: false,
     };
     let (end, _) = Session::new(&mut guest, &mut peer, shared, opts).run();
@@ -1845,6 +1847,7 @@ fn on_the_emulator_the_slices_stop_a_guest_asleep_in_waiti_at_the_block_point() 
         realtime: false,
         flash_out: None,
         hci: None,
+        bt_images: None,
         no_bt: false,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
@@ -1924,6 +1927,7 @@ fn on_the_emulator_a_byte_into_a_full_rx_fifo_is_lost_and_raises_the_overflow_in
         realtime: false,
         flash_out: None,
         hci: None,
+        bt_images: None,
         no_bt: false,
     };
     let (end, stats) = Session::new(&mut m, &mut peer, shared, opts).run();
@@ -1999,6 +2003,7 @@ fn signalled(parent_gone: bool) -> (End, FakePeer) {
         realtime: false,
         flash_out: None,
         hci: None,
+        bt_images: None,
         no_bt: false,
     };
     let (end, _) = Session::new(&mut guest, &mut peer, shared, opts).run();
@@ -2374,6 +2379,7 @@ fn on_the_emulator_gpio_in_reaches_the_guest_and_its_output_comes_back_as_gpio_o
         realtime: false,
         flash_out: None,
         hci: None,
+        bt_images: None,
         no_bt: false,
     };
     let (end, stats) = Session::new(&mut m, &mut peer, shared, opts).run();
@@ -2768,6 +2774,7 @@ fn run_wifi_mode(
         realtime: false,
         flash_out: None,
         hci: None,
+        bt_images: None,
         no_bt: false,
     };
     let shared = guest.inner.shared.clone();
@@ -3359,6 +3366,7 @@ fn run_with_slot(seconds: f64, peer: FakePeer, slot: &sd_card::Shared) -> Run {
         realtime: false,
         flash_out: None,
         hci: None,
+        bt_images: None,
         no_bt: false,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
@@ -3660,6 +3668,7 @@ fn run_realtime(seconds: f64, mut guest: FakeGuest, mut peer: FakePeer) -> Run {
         realtime: true,
         flash_out: None,
         hci: None,
+        bt_images: None,
         no_bt: false,
     };
     let (end, stats) = Session::new(&mut guest, &mut peer, shared, opts).run();
@@ -4003,6 +4012,7 @@ fn each_flash_dump_ack_starts_the_peer_timeout_again() {
         realtime: false,
         flash_out: Some(out.0.as_path()),
         hci: None,
+        bt_images: None,
         no_bt: false,
     };
     Session::new(&mut guest, &mut peer, shared, opts).run();

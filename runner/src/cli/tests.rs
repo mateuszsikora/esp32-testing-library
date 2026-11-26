@@ -27,7 +27,7 @@ fn minimal_command_line() {
             wifi: None,
             realtime: false,
             flash_out: None,
-            bt: None,
+            bt: Vec::new(),
             no_bt: None,
         }
     );
@@ -324,7 +324,7 @@ fn bt_names_the_application_elf_and_needs_a_board() {
         Err(Error::Usage("--bt needs a value".into()))
     );
     let opts = parse_str(&format!("{MINIMAL} --board socket:s --bt build/app.elf")).unwrap();
-    assert_eq!(opts.bt, Some("build/app.elf".into()));
+    assert_eq!(opts.bt, vec![PathBuf::from("build/app.elf")]);
     assert_eq!(opts.no_bt, None);
 }
 
@@ -549,7 +549,10 @@ fn no_bt_names_the_application_elf_needs_a_board_and_excludes_bt() {
         ))
     );
     let opts = parse_str(&format!("{MINIMAL} --board socket:s --no-bt build/app.elf")).unwrap();
-    assert_eq!((opts.no_bt, opts.bt), (Some("build/app.elf".into()), None));
+    assert_eq!(
+        (opts.no_bt, opts.bt),
+        (Some("build/app.elf".into()), Vec::new())
+    );
     for chip in ["esp32p4", "esp32s31"] {
         let base = MINIMAL.replace("--chip esp32", &format!("--chip {chip}"));
         assert_eq!(

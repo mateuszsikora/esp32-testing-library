@@ -1,0 +1,12 @@
+# The example's own options (CONFIG_EXAMPLE_PEER_DEVICE_NAME and the rest), which its main.c reads.
+source "$IDF_PATH/examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator/main/Kconfig.projbuild"
+
+menu "bt_spp_ota"
+    config BT_SPP_OTA_UPDATE
+        bool "Update ota_1 from the update partition"
+        default n
+        help
+            The first boot copies the image in the update partition, bt_spp_ota's, into ota_1,
+            rather than its own: bt_spp_ota_v2, a build of another ELF than the one that runs
+            from ota_1.
+endmenu

@@ -55,6 +55,8 @@ whatever `FIRMWARE_OUT` the shell exports, because the tests read the images the
 | `deep_sleep` | ESP-IDF's `examples/system/deep_sleep`, unmodified, with its own `sdkconfig.defaults`, for target `esp32`: sleeps 20 s at a time with a timer wake, and reports after each wake how long it slept ([below](#deep_sleep)) |
 | `bt_spp_initiator` | ESP-IDF's `examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator`, unmodified, with its own `sdkconfig.defaults`, for target `esp32`: finds a device named `ESP_SPP_ACCEPTOR` over Bluetooth Classic, pairs with it, opens SPP and writes to it without end ([below](#bt_spp_initiator)) |
 | `bt_spp_initiator_psram` | The same example, unmodified, with `firmware/bt_spp_initiator_psram/sdkconfig.defaults` after its own: PSRAM on, and Bluedroid's buffers taken from it first; on a profile with `psram_mb = 4` it does what the plain image does ([below](#bt_spp_initiator_psram)) |
+| `bt_spp_ota` | `firmware/bt_spp_ota`: ESP-IDF's `bt_spp_initiator` sources, unmodified, behind an OTA update: from `ota_0` it copies itself to `ota_1` and restarts, starts its controller in each boot, and from `ota_1` sleeps and wakes, then pairs with and streams to `ESP_SPP_ACCEPTOR` ([below](#bt_spp_ota-and-bt_spp_ota_v2)) |
+| `bt_spp_ota_v2` | The same project with `firmware/bt_spp_ota_v2/sdkconfig.defaults` after its own: its first boot copies `bt_spp_ota`'s image, which its build flashes into an `update` partition, into `ota_1`, so that the app that runs from there is a build of another ELF ([below](#bt_spp_ota-and-bt_spp_ota_v2)) |
 | `hello_world_8mb` | ESP-IDF's `hello_world`, unmodified, with `firmware/hello_world_8mb/sdkconfig.defaults`: `CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y`, so that its bootloader's and its application's image headers give 8 MB of flash. On a board profile with `flash_mb` 8 or 16 it boots; on one with 4 the esp32sim backend refuses it at setup ([the flash a run gets](board-profiles-user.md#the-flash-a-run-gets)) |
 | `uart_rate_switch` | `firmware/uart_rate_switch`: switches a part on UART1 from 9600 to 115200 baud with `AT+IPR=115200` and follows it, and after a power loss searches for the part's rate, 115200 first, then 9600 ([below](#uart_rate_switch)) |
 | `arduino_shell` | `firmware/arduino_shell`, a PlatformIO project on the Arduino-ESP32 core, `board = esp32dev`, built by `firmware/build-platformio.sh`: prints a banner on `Serial`, reads its settings with `Preferences`, runs a line-based command interpreter on `Serial`, and, when its settings name a network, joins it with `WiFi` and serves `GET /status` with `WebServer` ([below](#arduino_shell)) |
@@ -439,6 +441,58 @@ same `SppPeer` as the plain image it pairs, opens the channel and streams at the
 `speed(1.272723s ~ 4.292856s): 298.953674 kbit/s`. Its test in `tests/test_bt_spp_initiator.py`
 asks for what the plain image's does.
 
+## `bt_spp_ota` and `bt_spp_ota_v2`
+
+`firmware/bt_spp_ota` builds ESP-IDF's `bt_spp_initiator` sources from the ESP-IDF tree, unchanged,
+with the example's `app_main` renamed `spp_initiator_main`, and the example's own options
+(`main/Kconfig.projbuild` reads the example's): the same Bluedroid with Classic and SPP, the peer's
+name `ESP_SPP_ACCEPTOR` and the PIN `1234`. Its own `main.c` takes the boot's reset reason and the
+slot it runs from:
+
+| Boot | Slot | What it does |
+|---|---|---|
+| power-on | `ota_0` | copies its app to `ota_1` and selects it, starts its controller (`esp_bt_controller_init`, `esp_bt_controller_enable` in mode 2), stops it, `esp_restart()` |
+| software reset | `ota_1` | starts its controller, stops it, deep sleep for 100 ms |
+| deep-sleep wake | `ota_1` | the example's `app_main`: finds `ESP_SPP_ACCEPTOR`, pairs, opens SPP and streams to it |
+
+It copies its image before it starts its controller: from then until the next reset esp32sim's
+code is over `esp_bt_controller_init` in the flash, and `esp_image_verify` of the running partition
+fails ([runner](runner-user.md#give-the-guest-a-bluetooth-controller)). Its table,
+`firmware/bt_spp_ota/partitions.csv`, is that of the consumer's board of #347, two slots of
+0x1f0000 and no factory app: `ota_0` at `0x20000`, `ota_1` at `0x210000`, on a 4 MB flash.
+Against an `SppPeer` (`tests/test_bt_spp_ota.py`):
+
+```text
+bt_spp_ota: booted reason=poweron running=ota_0
+bt_spp_ota: updated boot=ota_1
+bt_spp_ota: controller enabled running=ota_0
+I (103) boot: Loaded app from partition at offset 0x210000
+bt_spp_ota: booted reason=sw running=ota_1
+bt_spp_ota: controller enabled running=ota_1
+bt_spp_ota: booted reason=deepsleep running=ota_1
+I (…) SPP_INITIATOR_DEMO: authentication success: ESP_SPP_ACCEPTOR
+```
+
+`bt_spp_ota_v2` is the same project with `CONFIG_BT_SPP_OTA_UPDATE=y` and
+`firmware/bt_spp_ota/partitions_v2.csv`: `ota_0` at `0x20000` and `ota_1` at `0x1a0000`, 0x180000
+each, and an `update` data partition, subtype `0x40`, at `0x320000`, on the same 4 MB flash. Its
+build copies `bt_spp_ota`'s image and ELF, from `firmware/bt_spp_ota/build/` beside its own build
+directory, into `firmware/bt_spp_ota_v2/build/update/`, and flashes the image into `update`
+(`esptool_py_flash_to_partition`); the build fails, `bt_spp_ota_v2 flashes bt_spp_ota's image,
+PATH: build bt_spp_ota first`, without it, and `firmware/build.sh bt_spp_ota_v2` builds
+`bt_spp_ota` first when it is not there, as `firmware/build.sh bt_spp_ota_v2 bt_spp_ota` does
+in that order of its arguments. It prints `bt_spp_ota: v2` first, and its first boot
+copies `update` into `ota_1` rather than itself: the boots from `ota_1` then run `bt_spp_ota`, a
+build of another ELF than `bt_spp_ota_v2.elf`, the build's. The test names that ELF,
+`firmware/bt_spp_ota_v2/build/update/bt_spp_ota.elf`, with `board.bluetooth.add_elf`
+([esp32sim backend](esp32sim-backend-user.md#an-app-from-another-slot-or-another-build-an-ota-update)),
+and the boots go as above; without it the app in `ota_1` has no controller. The ELF is in
+`update/`, not beside `bt_spp_ota.elf`, because pytest-embedded takes the first `.elf` it lists in
+the build directory for the application's.
+
+Build them with `firmware/build.sh bt_spp_ota bt_spp_ota_v2`; `make firmware` and `make test`
+include both, `bt_spp_ota` first.
+
 ## `sdspi`
 
 ESP-IDF's example as it is, with its default `sdkconfig`: SPI2 with SCLK on GPIO 14, MOSI 15,
@@ -584,8 +638,10 @@ every image those are:
 |---|---|
 | `0x1000` | `bootloader/bootloader.bin` |
 | `0x8000` | `partition_table/partition-table.bin` |
-| `0xd000` | `ota_data_initial.bin`, for `ota_state` only |
+| `0xd000` | `ota_data_initial.bin`, for `ota_state`, `bt_spp_ota` and `bt_spp_ota_v2` only |
 | `0x10000` | `IMAGE.bin` (`hello_world.bin`, `nmea_reader.bin`, `gpio_echo.bin`, `sd_remount.bin`, `modem_at.bin`, `modem_recovery.bin`, `nvs_reader.bin`, `pppos_client.bin`, `mqtt_session.bin`, `http_request.bin`, `persistence.bin`, `ota_state.bin`, `timer_wake.bin`, `deep_sleep.bin`), `sd_card.bin` for `sdspi`, `bt_spp_initiator_demo.bin` for `bt_spp_initiator` and `bt_spp_initiator_psram` |
+| `0x20000` | `bt_spp_ota.bin`, for `bt_spp_ota` and `bt_spp_ota_v2`, whose first app partition starts there |
+| `0x320000` | `update/bt_spp_ota.bin`, `bt_spp_ota`'s image, for `bt_spp_ota_v2` only |
 
 and the ELF is `IMAGE.elf`, `sd_card.elf` for `sdspi` and `bt_spp_initiator_demo.elf` for
 `bt_spp_initiator` and `bt_spp_initiator_psram`: the files take the project's name, and those two examples' projects are called

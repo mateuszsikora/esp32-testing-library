@@ -115,7 +115,10 @@ usage: esp32tl-runner --chip CHIP --flash-at OFFSET=FILE... --max-seconds S [opt
                         it, and at the end of the run (docs/protocol.md, section 5.21)
   --bt ELF              the guest's Bluetooth controller is the peer's, over the socket
                         (hci_tx, hci_rx): esp32sim's VHCI hooks take their symbols from
-                        ELF, the application's; needs --board
+                        ELF, the application's; needs --board; repeatable, the first the
+                        application's: each ELF of another image the guest may boot, such
+                        as an OTA update, and the hooks follow the app the bootloader
+                        started, by the app_elf_sha256 of its esp_app_desc_t
   --no-bt ELF           the guest has no Bluetooth controller: its call to
                         esp_bt_controller_init, at that symbol of ELF, the application's,
                         ends the run (end bt_controller, exit code 5); needs --board,
@@ -141,7 +144,7 @@ usage: esp32tl-runner --chip CHIP --flash-at OFFSET=FILE... --max-seconds S [opt
 | `--wifi-nearby SPEC` | none | esp32sim's `key=value,...`: `ssid` (1 to 32 bytes, required), `chan` (1 to 14, default 1), `rssi` in dBm (-128 to 127, default -60), `secure` (`0` or `1`, also `false`/`true` or `no`/`yes`; default `1`), `bssid` (default: one derived from the SSID, the same every run). Repeatable, at most 32, each on a BSSID of its own and not the access point's SSID or BSSID. Only with `--wifi` |
 | `--realtime` | off: the guest runs as fast as it can | Paces the run to wall time. Only with `--board`: `--realtime paces a run for the peer's real device: it needs --board` |
 | `--flash-out PATH` | none: the flash stays in the runner | A file to write the whole flash to, created or replaced; its directory must exist. With or without `--board` |
-| `--bt ELF` | none: the guest has no Bluetooth controller | The application's ELF, from the same build as its image, with the controller's symbols in it (`esp_bt_controller_init` and the others of esp32sim's `--ble`). Only with `--board`: `--bt makes the peer the guest's Bluetooth controller: it needs --board` |
+| `--bt ELF` | none: the guest has no Bluetooth controller | The application's ELF, from the same build as its image, with the controller's symbols in it (`esp_bt_controller_init` and the others of esp32sim's `--ble`). Repeatable: after the application's, the ELF of each other image the guest may boot, such as one an OTA update writes ([below](#an-app-from-another-build-an-ota-update)). Only with `--board`: `--bt makes the peer the guest's Bluetooth controller: it needs --board` |
 | `--no-bt ELF` | none: the guest's call to `esp_bt_controller_init` runs ESP-IDF's own controller | The application's ELF, from the same build as its image ([below](#a-guest-with-no-bluetooth-controller)). Only with `--board`: `--no-bt ends the run for the peer when the guest starts its Bluetooth controller: it needs --board`; not with `--bt`: `--bt with --no-bt: the guest's controller is the peer's, or there is none`; on the ESP32-P4 and the ESP32-S31, `--no-bt: esp32p4 has no Bluetooth in esp32sim` |
 
 A flag given twice keeps its last value, except `--flash-at` and `--wifi-nearby`, which add one
@@ -456,6 +459,47 @@ With `--flash-out`, the file holds the flash as the firmware has it, although es
 its controller task's code over `esp_bt_controller_init` in the emulated flash: the runner puts
 the function's own code back in the copy it writes.
 
+The firmware itself does not see that copy: from its call to `esp_bt_controller_init` until the
+next reset, a read of its own image, through `esp_partition_read` or `esp_image_verify`, finds
+esp32sim's code there, and `esp_image_verify` fails with `ESP_ERR_IMAGE_INVALID`. A firmware that
+copies or checks its running image does it before it starts its controller, as
+[`bt_spp_ota`](validation-firmware-user.md#bt_spp_ota-and-bt_spp_ota_v2) does.
+
+### An app from another build: an OTA update
+
+esp32sim's hooks are at the addresses of one ELF. An app that the bootloader starts from another
+build, one an OTA update wrote into the other app partition, has its functions elsewhere, and the
+hooks of the build's ELF would patch the middle of other functions: the firmware then panics, or
+its controller task fails as `[ble] controller task creation failed: 0x3ffea240`. Give the ELF of
+every image the guest may boot, the application's first:
+
+```sh
+  --bt build/app.elf --bt update/build/app.elf
+```
+
+At every slice boundary the runner reads the `esp_app_desc_t` where the ELFs have `esp_app_desc`,
+at the start of the app's DROM, and takes its `app_elf_sha256`, the SHA-256 of the ELF the image
+was built from, which ESP-IDF writes into every image. When it changes, the hooks become those of
+the ELF of that SHA-256; the forwarder stays the guest's controller. Until the bootloader has
+mapped an app the hooks are the application's. The first app the bootloader starts is taken for
+the application's own image: when its SHA-256 is none of the `--bt` ELFs', the application's ELF
+is not byte for byte the file its image was built from (built again since, or processed after),
+and its hooks stay, as a single `--bt` always kept them, with a line on stderr (below); an app of
+the ELF's own SHA-256 still gets them. A later
+app the bootloader started from an image whose ELF none of the `--bt` names gets no hooks, and the runner says so on stderr (below); its
+`esp_bt_controller_init` then runs ESP-IDF's own controller, which on the classic ESP32 panics
+with `StoreProhibited`. An image whose `app_elf_sha256` is all zeros, one built without
+`elf2image --elf-sha256-offset`, keeps the hooks it has. The same image in another slot is the
+same ELF and needs nothing more: an app booted from `ota_1` gets its controller at a power-on, a
+software reset and a deep-sleep wake as from `ota_0`. The bootloader maps at the same address
+each image it checks, so between a reset and its handing over the hooks, and the lines on stderr,
+may follow an image it checks and then does not start, as after a failed check or a rollback,
+before they follow the one it starts.
+
+Every `--bt` ELF is checked before the run: one that esp32sim refuses ends it with exit code 2,
+as for the application's, `esp32tl-runner: --bt ELF: BLE requires ELF symbol
+esp_bt_controller_init`.
+
 ## A guest with no Bluetooth controller
 
 Without `--bt`, esp32sim installs no VHCI hooks, and a firmware that starts its controller runs
@@ -518,8 +562,18 @@ instead. Everything the runner says goes to stderr, on lines that start with
 
 - `esp32tl-runner: ROM PATH` once the ROM ELF is loaded;
 - `esp32tl-runner: flash 0x1000: PATH (N bytes)` for each `--flash-at` file, offset in hex;
-- `esp32tl-runner: Bluetooth controller on the socket, VHCI hooks from ELF` with `--bt`, once its
-  ELF is loaded;
+- `esp32tl-runner: Bluetooth controller on the socket, VHCI hooks from ELF` with `--bt`, once for
+  each `--bt` ELF, once they are loaded and checked;
+- `esp32tl-runner: Bluetooth controller hooks from ELF, the app the bootloader started` with `--bt`,
+  each time the app the bootloader started is another `--bt` ELF's than the one whose hooks were in
+  place ([above](#an-app-from-another-build-an-ota-update));
+- `esp32tl-runner: the app the bootloader started was built from an ELF of SHA-256 HEX, none of
+  the --bt ELFs: it has no Bluetooth controller; pass its ELF as another --bt` with `--bt`, HEX the
+  image's `app_elf_sha256`, when it is none of their ELFs;
+- `esp32tl-runner: --bt ELF: the app the bootloader started first was built from an ELF of
+  SHA-256 HEX, not this file's HEX: its hooks stay over it, as the application's` with `--bt`,
+  ELF the application's, when the first app the bootloader starts records another SHA-256 than
+  the file and than every `--bt` ELF;
 - `esp32tl-runner: no Bluetooth controller: the guest's call to esp_bt_controller_init (ADDRESS,
   from ELF) ends the run` with `--no-bt`, ADDRESS in hex, or `esp32tl-runner: --no-bt: ELF has no
   esp_bt_controller_init, nothing to stop` for an ELF without it;

@@ -1048,8 +1048,9 @@ connection write nothing. Without `--board` the end of the run writes it too.
 ```
 
 With `--bt ELF`, the guest's Bluetooth controller is the peer's. esp32sim's VHCI hooks, installed
-over the symbols of the application's ELF as its `--ble` installs them, take the place of the
-controller: the guest's host (Bluedroid or NimBLE) sends its H4 packets through
+over the symbols of the application's ELF as its `--ble` installs them, or of another `--bt` ELF's
+when the app the bootloader started was built from it (the wire is the same either way), take the
+place of the controller: the guest's host (Bluedroid or NimBLE) sends its H4 packets through
 `esp_vhci_host_send_packet`, and esp32sim's controller task, in the guest, hands it the
 controller's through the host's receive callback. The runner puts a controller of its own in
 esp32sim's session, in place of esp32sim's virtual BLE controller, that forwards each packet to

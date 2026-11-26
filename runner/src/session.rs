@@ -89,6 +89,17 @@ pub trait Guest {
     /// keeps what the guest wrote to it. `rom` is the mask ROM's ELF. Returns the cause the ROM
     /// will report, `POWERON_RESET`.
     fn power_on_reset(&mut self, rom: &[u8]) -> u32;
+    /// The `app_elf_sha256` of the `esp_app_desc_t` at `desc` of the bus, where the application
+    /// image the bootloader mapped has it: the SHA-256 of the ELF it was built from. `None` where
+    /// nothing is mapped there or it holds no descriptor, and on a chip without `--bt`.
+    fn running_app(&mut self, _desc: u32) -> Option<[u8; 32]> {
+        None
+    }
+    /// esp32sim's Bluetooth hooks over the symbols of `elf`, in place of those there were; with
+    /// `None`, none. The forwarder stays the guest's controller (`hci::Images`).
+    fn bt_hooks(&mut self, _elf: Option<&esp_soc::elf::Elf>) -> Result<(), String> {
+        Ok(())
+    }
     /// With the board's supply off: the bus's clock moves on to `cycle`, and the chip runs
     /// nothing.
     fn idle_until(&mut self, cycle: u64);
@@ -325,6 +336,8 @@ pub struct Options<'a> {
     pub flash_out: Option<&'a Path>,
     /// `--bt`: what the forwarder, the guest's Bluetooth controller, shares with the run loop.
     pub hci: Option<hci::Shared>,
+    /// `--bt`'s ELFs, whose hooks follow the app the bootloader started.
+    pub bt_images: Option<hci::Images>,
     /// `--no-bt`: the guest's call to `esp_bt_controller_init` ends the run.
     pub no_bt: bool,
 }
@@ -646,6 +659,9 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 if self.guest.cycles() >= end {
                     continue;
                 }
+            }
+            if let Some(images) = &mut self.opts.bt_images {
+                images.follow(&mut *self.guest);
             }
             let stop = self.guest.run_until(end);
             // the stub answered the call; the guest stops here, whatever it did after it

@@ -10,7 +10,7 @@ The crate is `runner/`, package `esp32tl-runner`:
 | `runner/src/socket_board.rs` | `SocketBoard`, the `BoardModel` on the chip's pins with `--board`: it records what the guest does, with its bus cycle, for the run loop, holds the GPIO levels the peer drives for the chip to take, hands SPI transactions to the SD card slot, tells it the bus cycle at every tick, and records what the peer's fault rules did |
 | `runner/src/sd_card.rs` | `SdCard`, an SD card in SPI mode, with the peer's fault rules; `Slot`, the slot of `--sd-spi` and the card in it, which the peer's `sd_card` empties and fills; and `CardBoard`, the board that holds the slot alone without `--board` |
 | `runner/src/session.rs` | `Session`, the run loop with a peer: slices, turns, coalescing, pacing, warnings, the Wi-Fi station's Ethernet frames and access point with `--wifi`, the SD card going in and out with `--sd-spi`, `stats` |
-| `runner/src/hci.rs` | `Forwarder`, the `HciController` of `--bt` in esp32sim's VHCI session: it keeps the guest's H4 packets with their bus cycle for the run loop and hands the guest the peer's |
+| `runner/src/hci.rs` | `Forwarder`, the `HciController` of `--bt` in esp32sim's VHCI session: it keeps the guest's H4 packets with their bus cycle for the run loop and hands the guest the peer's; `Images`, the `--bt` ELFs, whose hooks follow the app the bootloader started; `sha256`, of each ELF file |
 | `runner/src/protocol.rs` | the wire format: time conversion, base64, parsing the peer's messages and writing the runner's |
 | `runner/src/transport.rs` | `SocketLink`, the Unix or TCP socket: buffered NDJSON writes, line reads, the signal flag and the time limits |
 | `runner/src/parent.rs` | `watch`, the thread of `--parent-fd`: at end of file on the parent's pipe it sets the signal flag, so that the run ends as with the peer gone ([below](#interfaces)) |
@@ -79,9 +79,10 @@ its pin, `357b0e5`.
    - The ROM: `--rom`, else `find_rom` (below). `m.load_rom`, then the `ROM` line on stderr.
    - Each `--flash-at` file, in command-line order: read whole, `m.write_flash(offset, data)`,
      then the `flash` line. Nothing checks that files overlap; a later one overwrites.
-   - With `--bt` ([below](#bluetooth-the-guests-hci-on-the-socket)): `bluetooth` parses the ELF,
-     installs esp32sim's VHCI hooks over its symbols, puts the `Forwarder` in esp32sim's session,
-     and prints the `Bluetooth controller on the socket` line.
+   - With `--bt` ([below](#bluetooth-the-guests-hci-on-the-socket)): `bluetooth` parses each ELF
+     and takes its SHA-256, installs esp32sim's VHCI hooks over the first's symbols, puts the
+     `Forwarder` in esp32sim's session, checks that esp32sim takes the hooks of every other ELF
+     (`Images::check`), and prints the `Bluetooth controller on the socket` line for each.
    - With `--no-bt` ([below](#no-bluetooth-controller---no-bt)): `no_bluetooth` parses the ELF and
      puts an esp32sim stub at its `esp_bt_controller_init`, or prints that it has none.
    - `m.boot_rom()` (core 0 to the reset vector); `m.console.mask = CONSOLE_UART0` (`2`, bit 1 of
@@ -799,6 +800,45 @@ with the code in place while `original_flash` holds it, and the flash itself oth
 goes on running the trampoline. `Guest::write_flash`, for `flash_write` (protocol 5.25), writes
 the copy too where the bytes fall under it, so that `reboot()` puts the peer's bytes back.
 
+**The app the bootloader started.** The hooks are at the addresses of one ELF, and an app built
+from another, one an OTA update wrote into another app partition, has its functions elsewhere:
+there the `Init` hook still fires when `esp_bt_controller_init` did not move, and the trampoline
+calls the old ELF's `xTaskCreatePinnedToCore`, whose address is now another function's, so that
+the `Created` hook gets a pointer, `[ble] controller task creation failed: 0x3ffea240`; or the
+guest panics. The same image in another slot is the same ELF and runs as from `ota_0`: the hooks
+are virtual addresses, and `install` writes the trampoline where the MMU the bootloader set maps
+them (`flash_off`, `esp32/src/bus.rs:187-199`). `--bt` takes the ELFs of every image the guest may
+boot, the application's first. `hci::Images` keeps them with the SHA-256 of each file, and
+`Session::run` calls `Images::follow` at every slice boundary, before `run_until`. It reads
+`esp_app_desc_t` where the ELFs link `esp_app_desc`, at the start of the app's DROM
+(`Guest::running_app`, `chip::app_elf_sha256`): the magic word `0xabcd5432`, then
+`app_elf_sha256` at offset 144, which esptool's `elf2image --elf-sha256-offset` writes into the
+image, the SHA-256 of the ELF file. The read goes through the bus as the runner reads it; an
+unmapped read records the fault in the bus's `last_fault`, which `follow_app!` puts back as it
+was. When the hash differs from the one read last, and is not all zeros, `Guest::bt_hooks` puts in
+the hooks of the ELF of that hash, or none (`Ble::default()`) when no ELF has it, keeping the
+session, the forwarder in it, and the `[ble]` lines, and flushes what the cores decoded, so that
+no cached block runs past a hook it did not have; esp32sim builds its hook filter from
+`Ble::hooks` at every `run_until_cycle` (`esp-soc/src/machine.rs:944`). The first hash that is not
+all zeros is the application's image's: when no ELF has it, `follow` gives it to the application's
+ELF beside the ELF's own (`Images::started`, `Images::alias`), which keeps its hooks, and an app of
+the ELF's own SHA-256 still matches it, as when the bootloader only checked that first image, so that an ELF that is not byte for byte the file
+`elf2image` read, built again or processed after, keeps the hooks a single `--bt` always gave it.
+On the classic chip, the S3 and the C3 (`follow_app!(restore)`), `bt_hooks` first puts back the
+code under esp32sim's trampoline (`Ble::restore_flash`): the new `Ble` starts with no
+`original_flash`, and `reboot()` would leave the trampoline in the flash for good. The C6's `Ble`
+forgets its `original_flash` at a new `enable` too, and keeps it `pub(crate)`, so the runner
+cannot put the code back first and its hooks changing while the trampoline is in the flash would
+leave it there; nothing makes them change then. The bootloader maps at DROM's
+start each image it checks (`bootloader_mmap`), and the app keeps its own descriptor mapped for as
+long as it runs (`esp_partition_mmap` takes other pages), so the hooks change only between a reset
+and the next handing over, long before the app calls `esp_bt_controller_init`: a slice is at most
+1 ms of the board's time while the guest is awake. In that time they may follow an image the
+bootloader checks and then does not start, after a failed check or for a rollback, and the runner
+says so on stderr, before they follow the one it starts; the trampoline is not in the flash then.
+`follow_app!` gives the classic chip, the S3, the C3 and the C6 the two methods; the others keep
+`Guest`'s defaults, `None` and nothing.
+
 **The forwarder.** `hci::Hci`, shared as `hci::Shared` (`Rc<RefCell<Hci>>`) by the `Forwarder` in
 the machine and the session (`Options::hci`), holds `tx`, the host's packets with their bus cycle,
 and `rx`, the peer's packets that have come due. esp32sim's hooks move the controller to the bus's
@@ -1280,7 +1320,19 @@ against the real binary. The rest:
   `esp32::Machine` with an ELF that has the controller's symbols, as esp32sim's own tests give
   them, and checks that a packet the hooks send reaches `tx` and that nothing answers it, as
   esp32sim's controller would; `forward_refuses_an_elf_without_the_controller` checks esp32sim's
-  message.
+  message. `the_bluetooth_hooks_follow_the_app_the_bootloader_started` gives a real
+  `esp32::Machine` two such ELFs, the second's hooks 0x20 further, maps an `esp_app_desc_t` at
+  DROM's first page through the PRO CPU's MMU entry, as the bootloader does, and checks that the
+  hooks are the application's until a descriptor is mapped, with no fault left on the bus, then
+  the second's for its SHA-256, the forwarder still the controller, the first's again, none for a
+  SHA-256 of neither, and none still for an image that records all zeros;
+  `the_first_app_keeps_the_application_s_hooks_when_its_elf_is_not_the_image_s` checks that a
+  single ELF keeps its hooks for a first app of another SHA-256, after one that records zeros,
+  none for a later app of a third, and its hooks again for that first SHA-256 and for its own; `new_hooks_put_back_the_code_under_the_trampoline` checks
+  that `bt_hooks` puts the code under the trampoline back in the flash and leaves no
+  `original_flash`; `a_bt_elf_without_the_controller_is_refused_before_the_run` checks `Images::check`'s message;
+  `sha256_gives_the_digests_of_the_standard_s_examples` checks `hci::sha256` against FIPS 180-4's
+  examples and a million `a`.
 - `runner/src/protocol/tests.rs`: time conversion in both directions and past 76 emulated
   seconds, character times, base64 against RFC 4648's vectors and malformed input, parsing every
   message the peer may send and refusing malformed ones (`eth_rx` of 13 bytes or without `t`,

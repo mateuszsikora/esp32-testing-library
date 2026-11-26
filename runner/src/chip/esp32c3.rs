@@ -97,6 +97,7 @@ const SYSTIMER_TICK: u64 = super::clock_divider(
 );
 
 impl Guest for esp32c3::Machine {
+    super::follow_app!(restore);
     fn cycles(&self) -> u64 {
         self.bus.cycles
     }

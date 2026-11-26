@@ -155,13 +155,13 @@ fn go<T: Target>(opts: &cli::Opts) -> ExitCode {
         Some(Err(message)) => return fail(&message),
         None => None,
     };
-    let hci = opts.bt.as_ref().map(|_| hci::Shared::default());
-    let (mut m, rom) = match setup::<T>(opts, shared.clone(), card.clone(), hci.clone()) {
+    let hci = (!opts.bt.is_empty()).then(hci::Shared::default);
+    let (mut m, rom, images) = match setup::<T>(opts, shared.clone(), card.clone(), hci.clone()) {
         Ok(loaded) => loaded,
         Err(message) => return fail(&message),
     };
     if let (Some(board), Some(shared)) = (&opts.board, shared) {
-        return run_with_board(opts, board, shared, card, hci, &mut m, &rom);
+        return run_with_board(opts, board, shared, card, hci.zip(images), &mut m, &rom);
     }
     let wall = std::time::Instant::now();
     let stop = chip::run_free(&mut m);
@@ -202,7 +202,7 @@ fn run_with_board<T: Target>(
     board: &cli::Board,
     shared: socket_board::Shared,
     card: Option<sd_card::Shared>,
-    hci: Option<hci::Shared>,
+    bt: Option<(hci::Shared, hci::Images)>,
     m: &mut T,
     rom: &[u8],
 ) -> ExitCode {
@@ -258,7 +258,8 @@ fn run_with_board<T: Target>(
             card: card.clone(),
             realtime: opts.realtime,
             flash_out: opts.flash_out.as_deref(),
-            hci,
+            hci: bt.as_ref().map(|(hci, _)| hci.clone()),
+            bt_images: bt.map(|(_, images)| images),
             no_bt: opts.no_bt.is_some(),
         },
     );
@@ -366,13 +367,13 @@ fn report_card(card: Option<&sd_card::Shared>) {
 /// The machine with its ROM and flash loaded, at the reset vector, and the ROM's ELF, which a
 /// power-on reset loads again. With `shared`, the socket board is on its pins; with `card`, the
 /// SD card slot, on the socket board or on a board of its own; with `hci`, the forwarder of
-/// `--bt` is the guest's Bluetooth controller.
+/// `--bt` is the guest's Bluetooth controller, and the `--bt` ELFs come back with it.
 fn setup<T: Target>(
     opts: &cli::Opts,
     shared: Option<socket_board::Shared>,
     card: Option<sd_card::Shared>,
     hci: Option<hci::Shared>,
-) -> Result<(T, Vec<u8>), String> {
+) -> Result<(T, Vec<u8>, Option<hci::Images>), String> {
     let mut m = T::new(opts.flash_mb << 20);
     if opts.psram_mb != 0 {
         m.set_psram_size(opts.psram_mb << 20)?;
@@ -439,9 +440,10 @@ fn setup<T: Target>(
             data.len()
         );
     }
-    if let (Some(path), Some(hci)) = (&opts.bt, hci) {
-        bluetooth(&mut m, path, hci)?;
-    }
+    let images = match hci {
+        Some(hci) => Some(bluetooth(&mut m, &opts.bt, hci)?),
+        None => None,
+    };
     if let Some(path) = &opts.no_bt {
         no_bluetooth(&mut m, path)?;
     }
@@ -455,20 +457,40 @@ fn setup<T: Target>(
         (_, cli::ConsolePort::Usb) => CONSOLE_USB,
     };
     machine.max_cycles = end_cycle(opts);
-    Ok((m, elf))
+    Ok((m, elf, images))
 }
 
 /// `--bt`: the application's ELF, then esp32sim's VHCI hooks over its symbols, as its `--ble`
-/// installs them, with the forwarder in place of esp32sim's virtual controller.
-fn bluetooth<T: Target>(m: &mut T, path: &Path, hci: hci::Shared) -> Result<(), String> {
-    let at = |e: String| format!("--bt {}: {e}", path.display());
-    let elf = esp_soc::elf::parse(&read(path)?).map_err(at)?;
-    m.forward_bt(&elf, hci).map_err(at)?;
-    eprintln!(
-        "esp32tl-runner: Bluetooth controller on the socket, VHCI hooks from {}",
-        path.display()
-    );
-    Ok(())
+/// installs them, with the forwarder in place of esp32sim's virtual controller. The ELFs of the
+/// other images the guest may boot are read and checked too, for the run loop to put in their
+/// hooks when the bootloader starts one of them (`hci::Images`).
+fn bluetooth<T: Target>(
+    m: &mut T,
+    paths: &[PathBuf],
+    hci: hci::Shared,
+) -> Result<hci::Images, String> {
+    let mut images = Vec::new();
+    for path in paths {
+        let at = |e: String| format!("--bt {}: {e}", path.display());
+        let bytes = read(path)?;
+        let elf = esp_soc::elf::parse(&bytes).map_err(at)?;
+        images.push(hci::Image {
+            path: path.clone(),
+            sha256: hci::sha256(&bytes),
+            elf,
+        });
+    }
+    let at = |e: String| format!("--bt {}: {e}", paths[0].display());
+    m.forward_bt(&images[0].elf, hci).map_err(at)?;
+    let images = hci::Images::new(images);
+    images.check(m)?;
+    for image in &images.images {
+        eprintln!(
+            "esp32tl-runner: Bluetooth controller on the socket, VHCI hooks from {}",
+            image.path.display()
+        );
+    }
+    Ok(images)
 }
 
 /// ESP-IDF's entry to its Bluetooth controller, on every chip esp32sim's VHCI hooks take: the

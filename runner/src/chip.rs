@@ -206,6 +206,82 @@ pub(crate) fn flash_without_trampoline<'a>(
     std::borrow::Cow::Owned(copy)
 }
 
+/// `ESP_APP_DESC_MAGIC_WORD`, the first word of an image's `esp_app_desc_t`
+/// (`components/esp_app_format/include/esp_app_desc.h`).
+const APP_DESC_MAGIC: u32 = 0xabcd_5432;
+/// Where `app_elf_sha256` is in `esp_app_desc_t`: after the magic word, `secure_version`,
+/// `reserv1[2]`, `version[32]`, `project_name[32]`, `time[16]`, `date[16]` and `idf_ver[32]`.
+const APP_ELF_SHA256: u32 = 144;
+
+/// The `app_elf_sha256` of the `esp_app_desc_t` at `desc` of the bus: the SHA-256 of the ELF the
+/// image was built from, which esptool's `elf2image` writes into the image. `None` where `desc` is
+/// unmapped or holds no descriptor. Read as the runner reads the bus; an unmapped read records the
+/// fault in the bus, which `follow_app!` puts back as it was.
+pub(crate) fn app_elf_sha256(bus: &mut impl emu_core::Bus, desc: u32) -> Option<[u8; 32]> {
+    if bus.read32_unpriced(desc).ok()? != APP_DESC_MAGIC {
+        return None;
+    }
+    let mut hash = [0; 32];
+    for (at, byte) in (desc + APP_ELF_SHA256..).zip(&mut hash) {
+        *byte = bus.read8_unpriced(at).ok()?;
+    }
+    Some(hash)
+}
+
+/// `Guest::running_app` and `Guest::bt_hooks` on a chip whose Bluetooth is esp32sim's VHCI or the
+/// C6's NimBLE adapter: its bus keeps the address of its last fault in `last_fault`, its `Ble`
+/// keeps the session and the `[ble]` lines in `session` and `lines`, and `enable_ble` puts in a
+/// new `Ble` over an ELF's symbols. `bt_hooks` keeps the session, the forwarder in it, and the
+/// lines, and flushes what the cores decoded, so that no block runs past a hook it did not have.
+/// On a chip whose `Ble` lets the runner put back the code under esp32sim's trampoline
+/// (`follow_app!(restore)`: the VHCI chips), `bt_hooks` puts it back first, which a new `Ble`
+/// would otherwise forget and `reboot()` never restore. The C6's `Ble` forgets it too at a new
+/// `enable`, but its `original_flash` is `pub(crate)` in esp32sim, so the runner cannot put the code
+/// back first (`docs/decisions/runner.md`).
+macro_rules! follow_app {
+    () => {
+        super::follow_app!(@ keep_trampoline);
+    };
+    (restore) => {
+        super::follow_app!(@ restore_trampoline);
+    };
+    (@ $restore:ident) => {
+        fn running_app(&mut self, desc: u32) -> Option<[u8; 32]> {
+            let fault = self.bus.last_fault;
+            let hash = super::app_elf_sha256(&mut self.bus, desc);
+            self.bus.last_fault = fault;
+            hash
+        }
+        fn bt_hooks(&mut self, elf: Option<&esp_soc::elf::Elf>) -> Result<(), String> {
+            super::$restore(&mut self.bus.ble, &mut self.bus.flash);
+            let session = std::mem::take(&mut self.bus.ble.session);
+            let lines = std::mem::take(&mut self.bus.ble.lines);
+            let result = match elf {
+                Some(elf) => esp_soc::SocBus::enable_ble(&mut self.bus, elf),
+                None => {
+                    self.bus.ble = Default::default();
+                    Ok(())
+                }
+            };
+            self.bus.ble.session = session;
+            self.bus.ble.lines = lines;
+            for core in &mut self.cores {
+                emu_core::Core::flush_caches(core);
+            }
+            result
+        }
+    };
+}
+pub(crate) use follow_app;
+
+/// `follow_app!(restore)`: the code under esp32sim's trampoline back in the flash.
+pub(crate) fn restore_trampoline(ble: &mut esp_soc::ble::vhci::Ble, flash: &mut [u8]) {
+    ble.restore_flash(flash);
+}
+
+/// `follow_app!()`: a `Ble` that keeps the code under its trampoline to itself.
+pub(crate) fn keep_trampoline<B>(_: &mut B, _: &mut [u8]) {}
+
 /// Whether `len` bytes at `offset` fit in a flash of `flash` bytes, as `Guest::write_flash` asks
 /// before it writes any: esp32sim's own refusal does not say where (protocol 5.25).
 pub(crate) fn fits(flash: usize, offset: usize, len: usize) -> Result<(), String> {

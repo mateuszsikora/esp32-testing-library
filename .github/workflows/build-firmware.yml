@@ -177,6 +177,10 @@ jobs:
                 find "$build/config" -maxdepth 1 -name sdkconfig.json
                 find "$build/bootloader" "$build/partition_table" -maxdepth 1 \
                   -type f \( -name '*.bin' -o -name '*.elf' \)
+                # bt_spp_ota_v2's copy of bt_spp_ota's image and ELF
+                if [ -d "$build/update" ]; then
+                  find "$build/update" -maxdepth 1 -type f \( -name '*.bin' -o -name '*.elf' \)
+                fi
               fi
             done
           } >build/ci/firmware.list

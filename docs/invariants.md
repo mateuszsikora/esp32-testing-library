@@ -397,6 +397,23 @@ that references to its number keep their meaning.
      `tests/test_link_protocol.py::test_an_h4_packet_is_1_to_496_bytes_either_way`,
      `tests/test_boardlink.py::test_one_bluetooth_controller`,
      `tests/test_boardlink.py::test_hci_rx_from_an_interface_that_is_not_the_controller_fails_the_link`
+- **311.** With `--bt`, esp32sim's Bluetooth hooks are those of the `--bt` ELF whose SHA-256 is the
+     `app_elf_sha256` of the app the bootloader mapped, read at every slice boundary, the
+     application's until one is mapped; the forwarder stays the guest's controller, and the read
+     leaves no fault on the bus. The first app the bootloader starts keeps the application's
+     hooks when its SHA-256 is none of the ELFs'. A later app built from none of them gets no
+     hooks; one whose image records all zeros keeps those it had. Hooks that change put the code
+     under esp32sim's trampoline back in the flash first. An app booted from `ota_1`, its own image or another
+     build's named with `bluetooth.add_elf`, starts its controller at a power-on, a software reset
+     and a deep-sleep wake and talks to an `SppPeer` as from `ota_0`; without `add_elf`, another
+     build's gets no controller, and the runner says so.
+     `runner/src/tests.rs::the_bluetooth_hooks_follow_the_app_the_bootloader_started`,
+     `runner/src/tests.rs::the_first_app_keeps_the_application_s_hooks_when_its_elf_is_not_the_image_s`,
+     `runner/src/tests.rs::new_hooks_put_back_the_code_under_the_trampoline`,
+     `runner/src/tests.rs::a_bt_elf_without_the_controller_is_refused_before_the_run`,
+     `tests/test_bt_spp_ota.py::test_an_app_booted_from_ota_1_starts_its_controller_and_talks_to_the_peer`,
+     `tests/test_bt_spp_ota.py::test_an_update_built_from_another_elf_gets_its_hooks_from_the_elf_the_test_names`,
+     `tests/test_bt_spp_ota.py::test_an_update_built_from_an_elf_the_test_does_not_name_gets_no_controller`
 
 - **154.** Without a fault rule the SD card answers at once, as it always has. A rule applies to the
      operations that start once it is in place, at most one that fails or delays per operation,

@@ -1353,3 +1353,51 @@ RTC-reset action produced cause 16 on both targets, with both sleep bits clear o
 and set in esp32sim. RTC-domain reset semantics belong in the chip model, where firmware
 and the runner can observe the same state. Keep the runner's existing check of both cores
 while waiting for a model fix.
+
+## The Bluetooth hooks follow the app the bootloader started, by its ELF's SHA-256
+
+Status: decided (#347)
+
+esp32sim's VHCI hooks are at the addresses of one ELF. An app the bootloader starts from another
+build, one an OTA update wrote into the other app partition, has its functions elsewhere, and the
+hooks of the build's ELF patch the middle of other functions: its controller task fails, `[ble]
+controller task creation failed: 0x3ffea240`, or it panics. The same image in another slot was
+never the cause: the hooks are virtual addresses, and the trampoline goes where the MMU the
+bootloader set maps them. `--bt` is repeatable, the application's ELF first, and at every slice
+boundary the runner reads `app_elf_sha256` from the `esp_app_desc_t` mapped at the start of the
+app's DROM and puts in the hooks of the ELF with that SHA-256, or none
+([runner](../features/runner-technical.md#bluetooth-the-guests-hci-on-the-socket)). The harness
+names the other ELFs with `board.bluetooth.add_elf`.
+
+**Rejected:** working out at each reset which partition the bootloader will boot, from the
+partition table and `otadata`, as ESP-IDF's bootloader does. That repeats the bootloader's choice:
+the rollback states, `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`, the fallback to another slot on an
+image that fails verification, the factory and test apps, and the table's offset. The descriptor
+the bootloader mapped is its choice already made.
+
+**Rejected:** installing the hooks of every ELF at once, and taking at each hook the ones of the
+running app. esp32sim keeps a hook's kind in a private map, and an address that is a hook in one
+ELF is an instruction in the middle of a function in another, which the hook would take; it needs
+a change to esp32sim for no gain over switching the whole set.
+
+**Rejected:** refusing a run whose application's ELF is not byte for byte the file its image was
+built from, or dropping its hooks then. A single `--bt` kept them for an ELF built again or
+processed after `elf2image` with the same layout, and tests that passed so would fail: the first
+app the bootloader starts is the application's, and its SHA-256 becomes the application ELF's
+beside the ELF's own, with a line on stderr. A first image the bootloader only checks, of another
+build, then takes the application's hooks for the run; the application's own image still gets them. Checking the image in the flash before the run instead needs the runner to find
+the application's partition, which a merged flash file hides.
+
+**Rejected:** matching an ELF to the image by the other fields of `esp_app_desc_t`, its version,
+project name, time and date. Two builds can share all of them and still differ in layout; the
+SHA-256 of the ELF is what ESP-IDF records to say which ELF the image is.
+
+**Postponed:** `--no-bt`, which stubs `esp_bt_controller_init` of the application's ELF alone: an
+app of another build that starts its controller in a test that never looks at `board.bluetooth`
+runs ESP-IDF's controller. `add_elf` gives the run `--bt` anyway. And a firmware that reads its own
+image after it started its controller finds esp32sim's trampoline in it until the next reset; that
+needs esp32sim to keep the trampoline out of the guest's flash reads. On the ESP32-C6, hooks that
+change while the trampoline is in the flash leave it there for good: its `Ble` forgets
+`original_flash` at a new `enable` and keeps it `pub(crate)`, so the runner cannot put the code
+back as it does on the other chips; that needs esp32sim to expose the C6's `restore_flash`. Nothing
+makes the hooks change while an app runs, so no run reaches it.
