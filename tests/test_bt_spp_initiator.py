@@ -13,6 +13,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
+from bumble import hci
 
 from esp32tl import recording
 from esp32tl.backends.esp32sim import Esp32Sim
@@ -336,3 +337,24 @@ def test_with_no_peer_the_inquiry_runs_its_length_and_opens_nothing(
     assert len(console.lines("ESP_BT_GAP_DISC_STATE_CHANGED_EVT")) == 2
     assert console.lines(re.compile("ESP_SPP_DISCOVERY_COMP_EVT|ESP_SPP_OPEN_EVT")) == []
     assert bt.unknown_commands() == []
+
+
+def test_the_host_asks_its_controller_for_one_inquiry_then_pages_the_peer_it_found(
+    board: Esp32Sim, bt: Bluetooth, console: Console, tmp_path: Path
+) -> None:
+    # The example of "Tapping the HCI" in docs/features/run-report-user.md, which spells out the
+    # 30 of INQUIRY so that it reads on its own.
+    peer = SppPeer(bt.air, name=NAME, pin=PIN, source=Heard())
+    tap = bt.tap(tmp_path / "hci.btsnoop")
+    board.power_on()
+    board.wait_until(console.line("ESP_SPP_OPEN_EVT"), within=seconds(5))
+    commands = [
+        hci.HCI_Packet.from_bytes(data)
+        for _, direction, data in tap.events
+        if direction == "out" and data[0] == hci.HCI_COMMAND_PACKET
+    ]
+    [inquiry] = [c for c in commands if isinstance(c, hci.HCI_Inquiry_Command)]
+    assert inquiry.inquiry_length == 30  # inq_len in main.c, in units of 1.28 s
+    [page] = [c for c in commands if isinstance(c, hci.HCI_Create_Connection_Command)]
+    assert str(page.bd_addr).removesuffix("/P") == peer.address
+    assert commands.index(inquiry) < commands.index(page)

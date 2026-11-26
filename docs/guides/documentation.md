@@ -194,6 +194,12 @@ How to work on the repository (setting up, testing, writing documentation) or wi
 (`writing-tests.md`, testing your own firmware). They follow no template beyond a title and an
 opening paragraph that says who the guide is for.
 
+`writing-tests.md` indexes what a test can do by area, each row linking to the feature page that
+documents it: "The world before power-on" for setting up, "Making the world fail" for the fault
+controls and "Reading a history" for the histories and conditions. A change that adds a fault
+control or a history, or renames or removes one, changes its row in the same change, with every
+name in it one the code has. `scripts/check-docs.py` does not check these tables.
+
 ## Style
 
 The rules of [`CONTRIBUTING.md`](../../CONTRIBUTING.md) hold here too: plain and precise, measured

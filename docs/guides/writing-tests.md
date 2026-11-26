@@ -171,6 +171,27 @@ receiver, the modem, the network and the card) take changes after power-on too, 
 current instant: `board.gnss.lose_fix()` in the middle of a test is the receiver losing its fix
 then.
 
+## Making the world fail
+
+What the firmware meets when something goes wrong is a call of the test's too, before power-on or
+at the board's current instant after it. Each row names the calls of an area and links to the
+section that says what each does; a call with an undoing names it after a slash.
+
+| Area | The test makes it go wrong with | Documented in |
+|---|---|---|
+| The network's path | `network.set_path(rtt=..., downlink=..., uplink=...)` for a slow path; `network.set_path(drop=True)` drops every datagram, a call without it restores the path; `network.block(port, how="drop")` or `how="refuse"` / `network.unblock(port)` for one TCP port | [Network: a round trip and a rate](../features/network-user.md#give-the-network-a-round-trip-and-a-rate), [drop every datagram](../features/network-user.md#drop-every-datagram-and-restore-the-path), [block a TCP port](../features/network-user.md#block-a-tcp-port) |
+| The MQTT broker | `broker.connection_policy = lambda connect: ConnackCode.SERVER_UNAVAILABLE`, or any policy of the test's / `None`; `broker.puback = "hold"` or a `Duration`, then `publication.release()`; `broker.disconnect(client_id)`; `broker.forget_session(client_id)` for a broker that lost a session | [Reject MQTT connections](../features/network-user.md#reject-mqtt-connections-and-check-credentials), [withhold PUBACK and disconnect a client](../features/network-user.md#withhold-puback-and-disconnect-a-client), [the broker's calls](../features/network-user.md#exchange-mqtt-messages-behind-the-modem) |
+| The HTTP server | Any final status from 200 to 599: `network.http.serve(path, HttpResponse(429, headers={"Retry-After": "30"}))`, `serve(path, body, status=503)`, or a handler that returns one; `HttpResponse(..., after=seconds(30))` for a slow server | [Any final status](../features/network-user.md#any-final-status), [a slow server](../features/network-user.md#a-slow-server) |
+| DNS and NTP | `network.dns.unknown(name)` / `known(name)`; `network.ntp.go_silent()` / `resume()`, `network.ntp.unsynchronised()` / `synchronised()` | [A name that does not resolve](../features/network-user.md#a-name-that-does-not-resolve), [DNS, time and services](../features/network-user.md#dns-time-and-services) |
+| TLS | `CertificateAuthority(names, server_not_before=..., server_not_after=...)`, a server certificate out of its dates, given to `network.listen(port, service, tls=ca)` | [DNS, time and services](../features/network-user.md#dns-time-and-services) |
+| Wi-Fi | `board.wifi.access_point_off()` / `access_point_on()` | [The wifi fixture](../features/pytest-plugin-user.md#the-wifi-fixture) |
+| The modem | `board.modem.hang(pwrkey=...)`, `drop_call(terminate=...)`, `refuse_ppp("lcp")` or `"ipcp"` / `accept_ppp()`, `lose_registration()` / `register()`, `signal(dbm=...)`, `power_off()`, `lose_power()` / `restore_power()`, `clock_not_set(reads=...)` | [Modem: set up the modem](../features/modem-user.md#set-up-the-modem), [a hung modem](../features/modem-user.md#a-hung-modem-and-reset), [a dropped data call](../features/modem-user.md#a-dropped-data-call), [a refused PPP negotiation](../features/modem-user.md#a-refused-ppp-negotiation), [power changes](../features/modem-user.md#power-changes), [clock and operator](../features/modem-user.md#clock-and-operator) |
+| Bluetooth | `peer.switch_off()` / `switch_on()`, `out_of_range()` / `in_range()`, `forget_keys()`, `peer.rssi = -90`, `peer.disconnect()`; an `SppPeer` of another `pin`; on BLE the same calls but `disconnect()`, which only `central.disconnect()` has | [Bluetooth: a peer that leaves](../features/bluetooth-peer-user.md#a-peer-that-leaves), [the peer hangs up](../features/bluetooth-peer-user.md#the-peer-hangs-up-disconnect), [BLE: leaving](../features/bluetooth-peer-user.md#leaving) |
+| The SD card | `board.sd_card.fail("read")` or `"write"`, `delay(op, by)`, `observe(op)`, each with `count` and `blocks`, / `clear_faults()`; `remove()` / `insert(card)` | [Making the card fail or slow down](../features/pytest-plugin-user.md#making-the-card-fail-or-slow-down), [taking the card out](../features/pytest-plugin-user.md#taking-the-card-out-and-putting-one-in) |
+| The GNSS receiver | `board.gnss.lose_fix()` / `fix(at=...)`, `degrade(hdop=..., satellites=...)`, `go_silent()` / `resume()`, `refuse(cls, id)`, `answer_after(duration)` | [The GNSS receiver](../features/models-user.md#the-gnss-receiver) |
+| A UART model of the test's | Outputs `(at, bytes, baud)` at a rate the firmware does not read, which it meets as frame errors, and `frame_errors(at, count, baud)` to take them | [A model that changes its line rate](../features/models-user.md#a-model-that-changes-its-line-rate) |
+| The board | `board.power_off()` / `power_on()`, `board.reset()`; `board.nvs(..., merge=True)` while it is off, between two boots; `board.lines.drive(line, level)` / `release(line)` | [Resets and power cycles](../features/pytest-plugin-user.md#resets-and-power-cycles), [change NVS between two boots](../features/flash-contents-user.md#change-nvs-between-two-boots), [the fixtures](../features/pytest-plugin-user.md#the-fixtures) |
+
 ## Waiting for the device's reactions
 
 Every wait is on the board's clock, and every limit a test states is part of what it tests:
@@ -279,6 +300,29 @@ A plural history attribute is a read-only view that sees later records. For exam
 makes a query. Use `list(asked)` or `asked[:]` to freeze the names at that instant.
 Iteration visits the records present when iteration began. Query methods such as
 `broker.find_messages()`, `console.lines()` and `lines.events()` return a new list at each call.
+
+What there is to read, by area: a plural attribute is a live history unless its row says it is a
+count, a list or a tuple, a call with parentheses returns a new list, a condition is asked or
+waited on as any other, and a state is what holds at the read.
+
+| Area | Histories and conditions | Documented in |
+|---|---|---|
+| The board | `board.boots`, `board.boot`, `board.sleeps`; `board.flash()`, with `nvs()`, `ota()` and `partition(name)` | [Resets and power cycles](../features/pytest-plugin-user.md#resets-and-power-cycles), [waking from deep sleep](../features/pytest-plugin-user.md#waking-from-deep-sleep), [read the flash of a run](../features/flash-contents-user.md#read-the-flash-of-a-run) |
+| The console | `console.lines(pattern)` | [Typing on the console](../features/pytest-plugin-user.md#typing-on-the-console) |
+| GPIO lines | `board.lines.events()`, `output.events()`; `output.assert_stayed_on(since=...)`, `assert_stayed_off(since=...)` | [The fixtures](../features/pytest-plugin-user.md#the-fixtures), [named output conditions](../features/pytest-plugin-user.md#named-output-conditions) |
+| The MQTT broker | `messages`, `clients`, `received_packets`, `connection_ends`, `connection_attempts`, `subscribe_requests`, `deliveries`; `find_messages(...)`, `find_message(...)`, `find_connection(...)`, `find_delivery(...)`; `is_subscribed(topic)` | [History, next events and current state](../features/network-user.md#history-next-events-and-current-state), [received control packets](../features/network-user.md#received-control-packets), [how each connection ended](../features/network-user.md#how-each-connection-ended), [every SUBSCRIBE and UNSUBSCRIBE](../features/network-user.md#every-subscribe-and-unsubscribe) |
+| The network | `network.link_changes`, `network.events`, `network.connections`, `network.dhcp.leases`; a `TcpConnection`'s `received`, `syns`, and `unanswered()` for what its SYNs got | [When the link comes up and goes down](../features/network-user.md#when-the-link-comes-up-and-goes-down), [addresses behind the access point](../features/network-user.md#addresses-behind-the-access-point), [open a TCP connection to the device](../features/network-user.md#open-a-tcp-connection-to-the-device) |
+| HTTP | `network.http.requests`, `find_request(path)`; `network.http_client.exchanges` | [The HTTP server](../features/network-user.md#the-http-server), [call the device's HTTP API](../features/network-user.md#call-the-devices-http-api) |
+| DNS and NTP | `network.dns.questions`, `asked`; `network.ntp.exchanges`, `requests` (a count) | [When the device asked for the time and for a name](../features/network-user.md#when-the-device-asked-for-the-time-and-for-a-name) |
+| TLS | A listener's `handshake_started` and `handshake_completed` | [DNS, time and services](../features/network-user.md#dns-time-and-services) |
+| Wi-Fi | `board.wifi.events` | [The wifi fixture](../features/pytest-plugin-user.md#the-wifi-fixture) |
+| The modem | `board.modem.commands`, `mode_changes`, `restarts`, `power_changes`; its state now: `powered`, `registered`, `data_mode`, `hung` | [AT dialogue](../features/modem-user.md#at-dialogue), [mode changes and dials](../features/modem-user.md#mode-changes-and-dials), [a hung modem](../features/modem-user.md#a-hung-modem-and-reset), [power changes](../features/modem-user.md#power-changes) |
+| Bluetooth Classic | An `SppPeer`'s `events`, `refused`, `pairings`, `written_lines()`; `board.bluetooth.pairings()`, `devices()`, `unknown_commands()`, `packets_from_host` (a count) | [The model that answers](../features/bluetooth-peer-user.md#the-model-that-answers), [putting a peer on the air](../features/bluetooth-peer-user.md#putting-a-peer-on-the-air), [Secure Simple Pairing](../features/bluetooth-peer-user.md#secure-simple-pairing), [reading the device's writes as lines](../features/bluetooth-peer-user.md#reading-the-devices-writes-as-lines), [`board.bluetooth`](../features/bluetooth-peer-user.md#in-front-of-the-firmware-boardbluetooth) |
+| Bluetooth LE | A device's `events`, `connections`, `disconnections`, `pairings`; a `BlePeripheral`'s `writes`, `subscriptions`, `notifications`; a `BleCentral`'s `advertisements`, `notifications` | [Bluetooth LE](../features/bluetooth-peer-user.md#bluetooth-le-bleperipheral-and-blecentral) |
+| What the firmware's Bluetooth host sent | `board.bluetooth.tap(path).events`, decoded with Bumble | [Tapping the HCI](../features/run-report-user.md#tapping-the-hci) |
+| The SD card | `board.sd_card.changes`, `refused`, `not_reached` (a list, at each read), `faults` (a tuple, at each read), `faulted`, a fault's `hits`; a card's `read_text(name)`, `list_files()` | [Taking the card out](../features/pytest-plugin-user.md#taking-the-card-out-and-putting-one-in), [making the card fail or slow down](../features/pytest-plugin-user.md#making-the-card-fail-or-slow-down) |
+| The GNSS receiver | `board.gnss.casic_frames`, `position` | [The GNSS receiver](../features/models-user.md#the-gnss-receiver) |
+| A route's bytes | A tap's `events`: `board.gnss.tap(path)`, `board.modem.tap(path)`, `console.tap(path)` | [Taps and the run report](../features/run-report-user.md#tapping-a-route) |
 
 ## Which shape a condition has
 
