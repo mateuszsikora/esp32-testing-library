@@ -56,7 +56,7 @@ def test_a_stated_rtt_is_exact_from_the_request_to_the_answers_stamp() -> None:
     assert net.poll(up) == []
     assert net.ntp.requests == 1
     # The request is recorded when it reaches the server, not when the link carried it.
-    assert net.ntp.exchanges == [NtpExchange(Duration(up), answered=True)]
+    assert net.ntp.exchanges == [NtpExchange(Duration(up), answered=True, synchronised=True)]
     assert net.quiet_until() == t + 200 * MS
     # Handed over within the latency before its stamp, like every answer; stamped the same.
     assert net.poll(t + 199 * MS - 1) == []

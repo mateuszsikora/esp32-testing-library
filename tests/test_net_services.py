@@ -96,10 +96,10 @@ def test_ntp_keeps_every_request_with_its_time_and_whether_it_was_answered() -> 
     assert ntp.on_datagram(b"\x24" + QUERY[1:]) is None
     assert ntp.on_datagram(b"\x13" + QUERY[1:]) is None
     assert ntp.exchanges == [
-        NtpExchange(Duration(1_000_000_000), answered=True),
-        NtpExchange(Duration(16_000_000_000), answered=False),
-        NtpExchange(Duration(31_000_000_000), answered=False),
-        NtpExchange(Duration(40_000_000_000), answered=True),
+        NtpExchange(Duration(1_000_000_000), answered=True, synchronised=True),
+        NtpExchange(Duration(16_000_000_000), answered=False, synchronised=None),
+        NtpExchange(Duration(31_000_000_000), answered=False, synchronised=None),
+        NtpExchange(Duration(40_000_000_000), answered=True, synchronised=True),
     ]
     assert ntp.requests == 2
 
@@ -124,16 +124,111 @@ def test_ntp_next_exchange_is_a_described_condition_from_its_call() -> None:
     ntp.go_silent()
     now[0] = 15_000_000_000
     ntp.on_datagram(QUERY)
-    silent = NtpExchange(Duration(15_000_000_000), answered=False)
+    silent = NtpExchange(Duration(15_000_000_000), answered=False, synchronised=None)
     assert any_request() == silent and unanswered() == silent and answered() is None
     ntp.resume()
     now[0] = 30_000_000_000
     ntp.on_datagram(QUERY)
     # Non-consuming: the first match stays the answer.
     assert any_request() == silent and unanswered() == silent
-    assert answered() == NtpExchange(Duration(30_000_000_000), answered=True)
+    assert answered() == NtpExchange(Duration(30_000_000_000), answered=True, synchronised=True)
     with pytest.raises(TypeError, match="ntp: answered takes True, False or None"):
         ntp.next_exchange(answered=1)  # type: ignore[arg-type]
+
+
+SYNCHRONISED = struct.pack(">BBbbII4s", 0x24, 1, 0, -20, 0, 0x10, b"ESPT")
+UNSYNCHRONISED = struct.pack(">BBbbII4s", 0xE4, 0, 0, -20, 0, 0x10, b"INIT")
+
+
+def test_ntp_answers_unsynchronised_with_leap_3_stratum_0_and_the_worlds_time() -> None:
+    now = [2_500_000_000]
+    world = datetime(2031, 5, 6, tzinfo=UTC)
+    ntp = Ntp(lambda: now[0], lambda: world)
+    synchronised = ntp.on_datagram(QUERY)
+    assert synchronised is not None and synchronised[:16] == SYNCHRONISED
+    ntp.unsynchronised()
+    answer = ntp.on_datagram(QUERY)
+    assert answer is not None and len(answer) == 48
+    assert answer[:16] == UNSYNCHRONISED
+    # A server never synchronised has no reference time; the origin is the client's and the
+    # receive and transmit stamps are still the world's.
+    assert answer[16:24] == bytes(8) and synchronised[16:24] != bytes(8)
+    assert answer[24:] == synchronised[24:]
+    assert answer[24:32] == b"abcdefgh"
+    seconds = int((world - datetime(1900, 1, 1, tzinfo=UTC)).total_seconds()) + 2
+    assert answer[40:] == struct.pack(">II", seconds, 0x80000000)
+
+
+def test_ntp_switches_between_synchronised_and_unsynchronised_answers() -> None:
+    events: list[str] = []
+    ntp = Ntp(lambda: 0, log=events.append)
+    ntp.synchronised()  # Already the default: no line.
+    ntp.unsynchronised()
+    ntp.unsynchronised()
+    answer = ntp.on_datagram(QUERY)
+    assert answer is not None and answer[:16] == UNSYNCHRONISED
+    ntp.synchronised()
+    ntp.synchronised()
+    answer = ntp.on_datagram(QUERY)
+    assert answer is not None and answer[:16] == SYNCHRONISED
+    ntp.unsynchronised()
+    answer = ntp.on_datagram(QUERY)
+    assert answer is not None and answer[:16] == UNSYNCHRONISED
+    assert ntp.requests == 3
+    assert events == [
+        "ntp: unsynchronised",
+        "ntp: answered unsynchronised",
+        "ntp: synchronised",
+        "ntp: answered",
+        "ntp: unsynchronised",
+        "ntp: answered unsynchronised",
+    ]
+
+
+def test_ntp_go_silent_wins_over_unsynchronised() -> None:
+    now = [0]
+    ntp = Ntp(lambda: now[0])
+    ntp.unsynchronised()
+    ntp.go_silent()
+    assert ntp.on_datagram(QUERY) is None
+    ntp.synchronised()
+    now[0] = 1_000_000_000
+    assert ntp.on_datagram(QUERY) is None
+    ntp.unsynchronised()
+    ntp.resume()
+    now[0] = 2_000_000_000
+    answer = ntp.on_datagram(QUERY)
+    assert answer is not None and answer[:16] == UNSYNCHRONISED
+    assert ntp.exchanges == [
+        NtpExchange(Duration(0), answered=False, synchronised=None),
+        NtpExchange(Duration(1_000_000_000), answered=False, synchronised=None),
+        NtpExchange(Duration(2_000_000_000), answered=True, synchronised=False),
+    ]
+    assert ntp.requests == 1
+
+
+def test_ntp_exchanges_say_which_answers_were_unsynchronised() -> None:
+    now = [0]
+    ntp = Ntp(lambda: now[0])
+    unanswered = ntp.next_exchange(answered=False)
+    for t, call in (
+        (1_000_000_000, ntp.synchronised),
+        (2_000_000_000, ntp.unsynchronised),
+        (3_000_000_000, ntp.go_silent),
+        (4_000_000_000, ntp.resume),
+        (5_000_000_000, ntp.synchronised),
+    ):
+        call()
+        now[0] = t
+        ntp.on_datagram(QUERY)
+    assert [(e.answered, e.synchronised) for e in ntp.exchanges] == [
+        (True, True),
+        (True, False),
+        (False, None),
+        (True, False),
+        (True, True),
+    ]
+    assert unanswered() == NtpExchange(Duration(3_000_000_000), False, None)
 
 
 def test_dns_keeps_every_question_it_parsed_with_its_time_and_type() -> None:
