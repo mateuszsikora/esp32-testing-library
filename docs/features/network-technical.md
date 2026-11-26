@@ -245,6 +245,15 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   Configure-Request. Values below the implementation's minimum of 68 are NAKed with 68. The
   IPv4 send boundary also drops a datagram exceeding that limit, logging
   `ppp: dropped IPv4 packet of <n> bytes: exceeds peer MRU <mru>`.
+  `Ppp.refuse`, a `PppStage` (`"lcp"`, `"ipcp"` or `None`), is the far end's refusal of the
+  negotiation ([`modem.refuse_ppp`](modem-user.md#a-refused-ppp-negotiation)). With `"lcp"`,
+  `start` sends no Configure-Request and `_lcp` returns at each of the device's, logging `ppp:
+  refusing LCP: the device's Configure-Requests go unanswered` at the first. With `"ipcp"`, LCP
+  opens with no IPCP Configure-Request of the far end's, and `_ipcp` answers the device's first one
+  with an LCP Terminate-Request, logging `ppp: refusing IPCP: the far end ends the link`, and
+  ignores the rest. `negotiation_failed` is set at the device's LCP Terminate-Request on a refusing
+  link, which is acknowledged as always, and at the device's Terminate-Ack carrying the identifier
+  of the far end's Terminate-Request, after which `_reset_lcp` gives `far end terminated`.
 - `ip.py`: checks IPv4 lengths/checksum and rejects fragments; validates TCP and nonzero UDP
   checksums. Every destination dispatches by port. TCP uses fixed initial sequence 65536,
   window 8192, peer MSS capped at 1400 (default 536), acknowledgment and window accounting,
@@ -991,6 +1000,11 @@ stack sent before still arrives, as at a service on the internet: data on a conn
 last PUBLISH among them. The link's end clears the path whole, and so does a reset behind a virtual
 station, whose `Station.stop` ends the link.
 
+`Internet.start(t, refuse=None)` sets the new `Ppp`'s `refuse` before `Ppp.start`, and
+`Internet.negotiation_failed` is that `Ppp`'s `negotiation_failed`, `False` behind Ethernet or a
+station: the modem reads it after each chunk of data mode ([modem
+internals](modem-technical.md#a-refused-negotiation)).
+
 `Internet.terminate(t)` calls `Ppp.terminate`, which sends an LCP Terminate-Request on an open link
 and changes nothing else, and returns the output for
 [`modem.drop_call(terminate=True)`](modem-technical.md#interfaces), which stops the network next.
@@ -1071,8 +1085,9 @@ not a session, so a delayed publication outlives the connections and network res
 ### Link changes
 
 `Internet.link_changes` is a `Sequence[LinkChange]`. `LinkChange.cause` is a `LinkCause`, a `Literal`
-of the sixteen causes; `Ppp`'s `ended` callback takes a `PppCause`, the `Literal` of the three
-causes `Ppp` gives. `_link_change(up, cause)` appends to the list: it stamps
+of the sixteen causes; `Ppp`'s `ended` callback takes a `PppCause`, the `Literal` of the four
+causes `Ppp` gives, `far end terminated` only at the end of a refused IPCP, whose link was never
+up and so records nothing. `_link_change(up, cause)` appends to the list: it stamps
 `Duration(self.now())`, the instant the callback or the held board runs at, and keeps
 `_link_up`: it appends only when `up` differs from it, and never on an `"ethernet"` link. Behind a
 modem `Ppp` calls `opened` after `ipcp_opened` counts an IPCP open, and `Internet` records `IPCP

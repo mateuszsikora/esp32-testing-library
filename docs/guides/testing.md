@@ -271,7 +271,7 @@ the ROM and its firmware image at test time; PPP and host network services are n
 `tests/test_modem_recovery.py` runs `firmware/modem_recovery` with the simulated network, through
 `esp_modem` and PPP: the recovery of a hung modem, with its pulses read from `lines.events()` and its
 two presses of PWRKEY waited for with two successive `next_change(on=True)`, also of
-one that hangs while the firmware dials, and the dial after a dropped call, with and without a Terminate-Request, with the down and the up each gives in `network.link_changes`. Build it with `firmware/build.sh modem_recovery`.
+one that hangs while the firmware dials, and the dial after a dropped call, with and without a Terminate-Request, with the down and the up each gives in `network.link_changes`, and two dials refused at each PPP stage (`modem.refuse_ppp`) followed by one accepted after `accept_ppp()`. Build it with `firmware/build.sh modem_recovery`.
 
 ## Determinism
 

@@ -143,3 +143,61 @@ def test_the_far_end_offers_to_terminate_an_open_link_only() -> None:
     sent.clear()
     closed.terminate()
     assert sent == []
+
+
+def test_a_far_end_refusing_lcp_answers_no_configure_request_and_ends_at_the_terminate() -> None:
+    sent: list[bytes] = []
+    logged: list[str] = []
+    ppp = Ppp(sent.append, lambda datagram: None, refuse="lcp", log=logged.append)
+    ppp.start()
+    assert sent == []  # the far end asks nothing either
+    for ident in (1, 2, 3):
+        ppp.receive(control(0xC021, 1, ident, b"\x01\x04\x05\xdc"))
+    assert sent == [] and not ppp.lcp_open and not ppp.negotiation_failed
+    assert logged == ["ppp: refusing LCP: the device's Configure-Requests go unanswered"]
+    # the device gives up: its Terminate-Request is acknowledged, and the negotiation is over
+    ppp.receive(control(0xC021, 5, 4))
+    assert [unframe(data) for data in sent] == [b"\x06\x04\x00\x04"]
+    assert ppp.negotiation_failed and not ppp.lcp_open
+
+
+def test_a_far_end_refusing_ipcp_opens_lcp_and_ends_it_at_the_first_ipcp_request() -> None:
+    sent: list[bytes] = []
+    ended: list[str] = []
+    ppp = Ppp(sent.append, lambda datagram: None, refuse="ipcp", ended=ended.append)
+    ppp.start()
+    assert unframe(sent[0]) == b"\x01\x01\x00\x04"
+    ppp.receive(control(0xC021, 1, 7))
+    ppp.receive(control(0xC021, 2, 1))
+    assert ppp.lcp_open
+    # no IPCP Configure-Request of the far end's: the last frame is the device's Configure-Ack
+    assert [unframe(data)[0] for data in sent] == [1, 2]
+    sent.clear()
+    ppp.receive(control(0x8021, 1, 8, b"\x03\x06\0\0\0\0"))
+    [terminate] = [unframe(data) for data in sent]
+    assert terminate[0] == 5 and terminate[2:] == b"\x00\x04"  # LCP Terminate-Request, no data
+    # a second IPCP request gets nothing; a Terminate-Ack of another identifier changes nothing
+    ppp.receive(control(0x8021, 1, 9, b"\x03\x06\0\0\0\0"))
+    ppp.receive(control(0xC021, 6, (terminate[1] + 1) & 0xFF))
+    assert len(sent) == 1 and ppp.lcp_open and not ppp.ipcp_open
+    assert not ppp.negotiation_failed
+    ppp.receive(control(0xC021, 6, terminate[1]))
+    assert ppp.negotiation_failed and not ppp.lcp_open and not ppp.ipcp_open
+    assert ended == ["far end terminated"] and ppp.ipcp_opened == 0
+
+
+def test_a_device_that_terminates_a_refused_ipcp_first_ends_the_negotiation_too() -> None:
+    sent: list[bytes] = []
+    ppp = Ppp(sent.append, lambda datagram: None, refuse="ipcp")
+    ppp.start()
+    ppp.receive(control(0xC021, 1, 7))
+    ppp.receive(control(0xC021, 2, 1))
+    ppp.receive(control(0xC021, 5, 8))
+    assert unframe(sent[-1]) == b"\x06\x08\x00\x04"
+    assert ppp.negotiation_failed
+
+
+def test_a_device_terminate_request_with_no_refusal_is_no_failed_negotiation() -> None:
+    ppp, _, _ = opened()
+    ppp.receive(control(0xC021, 5, 21))
+    assert not ppp.negotiation_failed

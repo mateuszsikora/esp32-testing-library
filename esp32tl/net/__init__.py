@@ -33,7 +33,7 @@ from esp32tl.net.ip import (
 )
 from esp32tl.net.mqtt import Broker
 from esp32tl.net.ntp import DEFAULT_UTC, Ntp
-from esp32tl.net.ppp import Ppp
+from esp32tl.net.ppp import Ppp, PppStage
 from esp32tl.net.station import DEFAULT_MAC, HostLease, Station
 from esp32tl.net.tls import CertificateAuthority, Tls
 from esp32tl.report import board_time
@@ -741,17 +741,23 @@ class Internet:
         while self._down.queue and self._down.queue[0][0] <= horizon:
             self._out.append(self._down.queue.popleft())
 
-    def start(self, t: int) -> None:
+    def start(self, t: int, refuse: PppStage | None = None) -> None:
         """The link comes up at `t`: a modem's dial, which starts PPP, or an access point on the
-        air."""
+        air. With `refuse`, the far end's PPP refuses this call's negotiation at that stage."""
         self.stop(t)
         self.active = True
         self._at = t
         try:
             if isinstance(self.link, Ppp):
+                self.link.refuse = refuse
                 self.link.start()
         finally:
             self._at = None
+
+    @property
+    def negotiation_failed(self) -> bool:
+        """Whether this call's refused PPP negotiation is over: the modem is to hang up."""
+        return isinstance(self.link, Ppp) and self.link.negotiation_failed
 
     def _station_link(self, t: int, ready: bool) -> None:
         """Apply the runner's data-link transition on the emulated clock."""

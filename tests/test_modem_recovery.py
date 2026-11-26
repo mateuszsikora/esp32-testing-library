@@ -253,3 +253,52 @@ def test_a_call_dropped_while_the_firmware_leaves_data_mode_restarts_nothing(
     # for it, and here each is a byte. With no drop +++ gets its OK; later NO CARRIER answers it.
     assert (b"\nAT\r" in sent) is newline
     assert b"+++" in sent and b"AT\r" in sent
+
+
+@pytest.mark.parametrize("stage", ["lcp", "ipcp"])
+def test_a_refused_negotiation_leaves_the_modem_registered_and_a_dial_after_accept_comes_up(
+    board: Esp32Sim, modem: Modem, console: Console, tmp_path: Path, stage: str
+) -> None:
+    network = modem.network()
+    modem.refuse_ppp(stage)  # type: ignore[arg-type]
+    tap = modem.tap(tmp_path / "modem.jsonl")
+    board.power_on()
+
+    # Two dials, each refused: the modem hangs up, stays registered and answers AT. Armed in
+    # command mode, before the dial, the next change to command mode is the refusal.
+    for attempt in range(2):
+        refused = board.wait_until(modem.next_mode_change("command"), within=seconds(90))
+        dial = modem.mode_changes[-2]
+        assert (dial.cause, refused.cause) == ("dial", "ppp refused")
+        assert modem.registered and modem.powered and not modem.data_mode
+        if stage == "lcp":
+            # modem_recovery gives up after 30 s and closes PPP: lwIP's Terminate-Request ends it.
+            # The wait counts 10 ms ticks, so it may end up to one tick early (29.996 s in CI).
+            assert ms(29_990) <= refused.at - dial.at < seconds(31)
+        if attempt == 1:
+            # before the firmware dials again: the next dial is accepted
+            modem.accept_ppp()
+        back = board.wait_until(console.line("modem_recovery: command mode"), within=seconds(60))
+        assert "+CEREG: 0,1" in "\n".join(entry.text for entry in console.lines(since=back.at))
+        assert not network.link_changes and not console.lines("modem_recovery: connected")
+
+    up = board.wait_until(network.next_link_up(), within=seconds(90))
+    board.wait_until(console.line("modem_recovery: connected"), within=seconds(5))
+    assert up.cause == "IPCP open" and modem.data_mode and network.ppp.ipcp_open
+    requests = network.ntp.requests
+    board.wait_until(lambda: network.ntp.requests > requests, within=seconds(5))
+
+    # Each attempt is a dial and its refusal; the refused ones never brought the link up.
+    assert [c.cause for c in modem.mode_changes] == ["dial", "ppp refused"] * 2 + ["dial"]
+    assert [(c.up, c.cause) for c in network.link_changes] == [(True, "IPCP open")]
+    assert not modem.restarts and not console.lines("modem_recovery: hung")
+    assert all(c.response for c in modem.commands)
+    # What crossed the wire before the accepted dial: a Terminate-Request from the device and the
+    # far end's Terminate-Ack (lcp), or the far end's Terminate-Request and lwIP's Terminate-Ack
+    # (ipcp); with lcp no Configure-Request of the far end's.
+    before = modem.mode_changes[-1].at.ns
+    into = b"".join(data for t, d, data in tap.events if t < before and d == "in")
+    out = b"".join(data for t, d, data in tap.events if t < before and d == "out")
+    request, ack = (out, into) if stage == "lcp" else (into, out)
+    assert b"\xc0!}%" in request and b"\xc0!}&" in ack
+    assert (b"\xc0!}!" in into) is (stage == "ipcp")

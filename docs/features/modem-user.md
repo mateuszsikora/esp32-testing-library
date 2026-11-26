@@ -44,6 +44,8 @@ board power-on instead starts it off, for firmware that boots it with PWRKEY.
 | `signal(dbm=...)` | Finite signal strength in dBm; CSQ is clamped to 0–31, in 2 dB steps from -113 dBm; BER is 99 |
 | `lose_registration()` | Lose registration, end data mode silently; queries return registration status 0 |
 | `drop_call(terminate=False)` | End a data call and stay registered: `NO CARRIER`, then command mode ([below](#a-dropped-data-call)) |
+| `refuse_ppp(stage)` | From the next dial on, the network refuses PPP at `stage`, `"lcp"` or `"ipcp"`: the call connects and its negotiation fails; once the device ends it, `NO CARRIER` and command mode, registered ([below](#a-refused-ppp-negotiation)); needs `network()` |
+| `accept_ppp()` | From the next dial on, the network completes PPP again, as by default |
 | `register()` | Restore coverage; status becomes 1 if powered and `CFUN` is 1 |
 | `power_off()` | Switch off; the supply remains available to PWRKEY |
 | `power_on()` | Supply and power on, resetting command mode and AT settings |
@@ -64,7 +66,8 @@ board power-on instead starts it off, for firmware that boots it with PWRKEY.
 
 Registration changes affect the next query; there are no unsolicited registration notifications.
 Losing registration or power in data mode ends that mode silently: this model sends no unsolicited
-`NO CARRIER` for those losses, only for [`drop_call`](#a-dropped-data-call). Firmware waiting for a
+`NO CARRIER` for those losses, only for [`drop_call`](#a-dropped-data-call) and the end of a
+[refused negotiation](#a-refused-ppp-negotiation). Firmware waiting for a
 disconnect indication may time out. With `modem.network()`, loss resets PPP and loses the TCP
 connections the test opened; no queued reply survives a new dial. The connections the device opened
 stay open at the network's end, and silent, as a broker on the internet sees a device that lost its
@@ -271,6 +274,65 @@ and shown by `firmware/modem_recovery` on that pin:
   later has `NO CARRIER` answer `+++`, and `AT` goes out alone. Either way every command is answered
   and nothing restarts the modem.
 
+## A refused PPP negotiation
+
+```python
+from esp32tl.units import seconds
+
+network = modem.network()
+modem.refuse_ppp("ipcp")  # or "lcp"
+board.power_on()
+refused = board.wait_until(modem.next_mode_change("command"), within=seconds(60))
+assert refused.cause == "ppp refused" and modem.registered
+modem.accept_ppp()
+board.wait_until(network.next_link_up(), within=seconds(90))
+```
+
+`refuse_ppp(stage)` makes the network refuse the PPP negotiation of every dial from the next one
+on, as a network does when it rejects the APN or fails on its side, while the modem stays
+registered. The dial still gets `CONNECT` and data mode. Then, by `stage`:
+
+- `"lcp"`: the network answers none of the device's LCP Configure-Requests and sends none of its
+  own, so LCP never opens. When the device closes PPP and sends an LCP Terminate-Request, the
+  network answers it with a Terminate-Ack.
+- `"ipcp"`: LCP opens as usual. The network sends no IPCP Configure-Request, and answers the
+  device's first one with an LCP Terminate-Request. It ignores any further IPCP Configure-Request.
+  When the device answers with a Terminate-Ack, the negotiation is over. A Terminate-Request from
+  the device ends it too.
+
+Then the modem sends `NO CARRIER`, 1 ms after the UART chunk that holds the device's
+Terminate-Request or Terminate-Ack; when the device's Terminate-Request ends it, right behind the
+network's Terminate-Ack. It goes back to
+command mode, registered, and answers AT. `mode_changes` records the end of the call as
+`ModeChange(at, "command", "ppp refused")`, stamped at that chunk
+([below](#mode-changes-and-dials)). So a test counts the refused attempts by these entries, each
+one after the dial it ends. IPCP never opened, so the network's `link_changes` records nothing for
+a refused call ([the link's changes](network-user.md#when-the-link-comes-up-and-goes-down)). The
+run log says `ppp: refusing LCP: the device's Configure-Requests go unanswered` at the first
+request, or `ppp: refusing IPCP: the far end ends the link`.
+
+`accept_ppp()` goes back to the default from the next dial on. Neither call touches a call that is
+already connected: a session that is up stays up, and a refused call stays refused until it ends.
+The refusal belongs to the network, so the modem's restarts and power cycles keep it.
+
+Other ends of a refused call keep their own causes. If the device leaves data mode with `+++` before
+it terminates, the call ends with `"escape"` and `OK`, as any call does. A test that ends the call
+with `drop_call`, `hang`, `lose_registration` or a power call gets that call's cause. A device on
+lwIP that keeps waiting sends 10 LCP Configure-Requests, 6 s apart, then stops without a
+Terminate-Request (`FSM_DEFMAXCONFREQS` and `FSM_DEFTIMEOUT` in lwIP's `ppp_opts.h`,
+`fsm_timeout` in its `fsm.c`); closing PPP while LCP is still negotiating sends one (`fsm_close`).
+The network sets no deadline of its own: such a call stays in data mode until the device escapes
+or closes PPP. `firmware/modem_recovery` waits 30 s for its address, then closes PPP. Under
+`"lcp"` that sends lwIP's Terminate-Request, so its refused calls end 30 s after their dial, less
+up to one 10 ms FreeRTOS tick of the tick-based wait. Measured on the emulator, the gap is
+29.996 s (29.995523387 s), the same in every run. Under
+`"ipcp"` the call ends at lwIP's Terminate-Ack, right after `CONNECT`, and the firmware leaves data
+mode at its own 30 s. Either way it then finds the modem registered and dials again.
+
+It raises `SourceError: modem.refuse_ppp: needs modem.network(): no PPP to refuse` before
+`modem.network()`, with no model selected by that call, and `ValueError: modem.refuse_ppp: stage is
+'LCP', not 'lcp' or 'ipcp'` for any other stage.
+
 ## Mode changes and dials
 
 ```python
@@ -295,6 +357,7 @@ is a `Duration` on the board's clock, `mode` is `"command"` or `"data"`, and `ca
 | `"hang"` | `"command"` | `hang()` in data mode | The test's instant |
 | `"registration"` | `"command"` | `lose_registration()` in data mode | The test's instant |
 | `"restart"` | `"command"` | A run of the modem ended in data mode; after the board's first instant, `restarts` says what ended it, at the same instant | The restart's |
+| `"ppp refused"` | `"command"` | The `NO CARRIER` that ends a call whose negotiation [`refuse_ppp`](#a-refused-ppp-negotiation) refused | The UART chunk with the device's Terminate-Request or Terminate-Ack |
 
 So a test counts the firmware's PPP attempts by counting the dials, each with its result. Doing it
 from `commands` is fragile: ESP-IDF's `esp_modem` sync step sends `AT` up to three times before it
