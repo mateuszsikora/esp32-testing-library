@@ -5,6 +5,8 @@ ESP32-C6 (`esp32tl/bluetooth/guest.py`), and the LE peers (`esp32tl/bluetooth/le
 host where the link layer is under test; a `BleCentral` stands in for the firmware where a
 `BlePeripheral` is."""
 
+import functools
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -476,8 +478,75 @@ def test_an_esp32_c6_s_controller_takes_commands_its_bitmap_leaves_out() -> None
     guest, host = raw(air, ADVERTISER, GuestController, chip="esp32c6")
     send(air, guest, hci.HCI_Reset_Command())
     send(air, guest, hci.HCI_Set_Event_Mask_Page_2_Command(event_mask_page_2=bytes(8)))
-    assert [bytes(p).hex() for p in host.packets] == ["040e0401030c00", "040e0401630c00"]
+    send(
+        air,
+        guest,
+        hci.HCI_Write_Authenticated_Payload_Timeout_Command(
+            connection_handle=1, authenticated_payload_timeout=3000
+        ),
+    )
+    send(air, guest, hci.HCI_Read_Remote_Version_Information_Command(connection_handle=1))
+    # Bumble completes the timeout whatever the handle, where the C6 refused an unknown one; the
+    # remote version gets UNKNOWN_CONNECTION_IDENTIFIER, as from the C6
+    assert [bytes(p).hex() for p in host.packets] == [
+        "040e0401030c00",
+        "040e0401630c00",
+        "040e06017c0c000100",
+        "040f0402011d04",
+    ]
     assert guest.unknown_commands == []
+
+
+# What the guest answers otherwise than the chip did in its capture, by chip and opcode: the C6's
+# LE buffer, of which the link's hci_rx carries 491 bytes, and its LE features, of which the link
+# takes bits 0 to 7.
+ANSWERED_OTHERWISE = {
+    "esp32s3": {},
+    "esp32c6": {
+        0x2002: "040e0701022000eb010a",
+        0x2003: "040e0c01032000ff00000000000000",
+    },
+}
+
+
+def capture(chip: str) -> list[tuple[bytes, list[str]]]:
+    """Each command of `tools/hci_probe/<chip>.txt`, with what the chip sent after it."""
+    path = Path(__file__).parent.parent / "tools" / "hci_probe" / f"{chip}.txt"
+    exchanges: list[tuple[bytes, list[str]]] = []
+    for line in path.read_text().splitlines():
+        if line.startswith("TX "):
+            exchanges.append((bytes.fromhex(line[3:]), []))
+        elif line.startswith("RX ") and exchanges:
+            exchanges[-1][1].append(line[3:])
+    return exchanges
+
+
+@pytest.mark.parametrize("chip", ["esp32s3", "esp32c6"])
+def test_an_le_only_chip_s_controller_answers_every_command_of_its_capture(chip: str) -> None:
+    air = Air()
+    guest, host = raw(air, ADVERTISER, GuestController, chip=chip)
+    exchanges = capture(chip)
+    # the S3's capture came before the probe set the event mask
+    assert len(exchanges) == {"esp32s3": 29, "esp32c6": 30}[chip]
+    for command, sent in exchanges:
+        opcode = int.from_bytes(command[1:3], "little")
+        if opcode == 0x0C0D:
+            # the probe sends Read_Stored_Link_Key 5 bytes short, which Bumble does not parse;
+            # the chip did not know it
+            continue
+        before = len(host.packets)
+        air.call(functools.partial(guest.on_packet, command))
+        answered = [bytes(p).hex() for p in host.packets[before:]]
+        # the LE events came of the air around the chip: advertising reports, the discard event
+        expected = [e for e in sent if not e.startswith(("<", "043e"))]
+        answered = [a for a in answered if not a.startswith("043e")]
+        if opcode in ANSWERED_OTHERWISE[chip]:
+            expected = [ANSWERED_OTHERWISE[chip][opcode]]
+        # Read_BD_ADDR's address is masked in the capture, and the guest's is its own
+        expected = [e.split("x")[0] for e in expected]
+        assert [a[: len(e)] for a, e in zip(answered, expected, strict=True)] == expected, hex(
+            opcode
+        )
 
 
 def test_the_data_length_told_is_the_connection_s_on_the_1m_phy() -> None:

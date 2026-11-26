@@ -1089,13 +1089,16 @@ esp32tl controller has, and `esp32tl/bluetooth/le.py`, the LE devices. `Controll
    (17040); `advertising_channel_tx_power` 9, which its own
    `LE_Read_Advertising_Physical_Channel_Tx_Power` handler returns (Bumble's returns 0).
    `Read_Local_Supported_Commands` returns `le.supported_commands`, the chip's 64 bytes;
-   `on_hci_command_packet` answers a command whose bit in it is clear, by
+   `on_hci_command_packet` answers a command of `le.answers` with `Command_Complete` and its
+   measured return parameters (`HCI_GenericReturnParameters`; `0x203A`, `0x203B`, `0x204B` on
+   both chips), and a command whose bit in the bitmap is clear, by
    `hci.HCI_SUPPORTED_COMMANDS_MASKS`, and which is not in `le.also_known` (C6: `0x0C03`,
-   `0x0C63`, `0x0C7B`, `0x0C7C`, `0x041D`), with `_le_unknown`, and so does `on_hci_command` for a
-   command with no handler and no mask. `_le_unknown` keeps it in `unknown_commands` and sends
-   `UNKNOWN_HCI_COMMAND`: in `Command_Status` when `le.le_unknown_status` (C6) and the opcode's OGF
-   is `LE_OGF` (`0x08`), in `Command_Complete` otherwise. `send_hci_packet` puts
-   `le.command_packets` (S3 5, C6 1) in every `Command_Complete` and `Command_Status`. `on_hci_command` takes `SET_ADV_FLOW_CONTROL`
+   `0x0C63`, `0x0C7C`, `0x041D`), with `_le_unknown`, and so does `on_hci_command` for a command
+   with no handler and no mask, as `0x0C7B`, which the C6 answered but Bumble has no class for.
+   `_le_unknown` keeps it in `unknown_commands` and sends `UNKNOWN_HCI_COMMAND`: in
+   `Command_Status` when `le.le_unknown_status` (C6) and the opcode's OGF is `LE_OGF` (`0x08`), in
+   `Command_Complete` otherwise. `send_hci_packet` puts `le.command_packets` (S3 5, C6 1) in every
+   `Command_Complete` and `Command_Status`. `on_hci_command` takes `SET_ADV_FLOW_CONTROL`
    (`0xFD09`: enable, credits, lost threshold), which sets `_report_credits` (`None` when off) and
    `_lost_threshold` and completes, and `ADV_REPORT_FLOW_CONTROL` (`0xFD0A`: credits), which adds
    them, answers nothing and calls `_tell_discarded`: with a credit and `_discarded` at the

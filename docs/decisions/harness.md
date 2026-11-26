@@ -5207,7 +5207,7 @@ alone in `data_bytes`, and the two merged in `data`: a test that asks what went 
 
 Status: decided (#234)
 
-On the ESP32-S3, the ESP32-C3 and the ESP32-C6 (`LE_CHIPS`), the guest's controller reports what
+On the ESP32-S3 and the ESP32-C3, two of the `LE_CHIPS`, the guest's controller reports what
 an ESP32-S3 (QFN56, revision v0.2) reported on 2026-11-19 to `tools/hci_probe`, an ESP-IDF v5.3.6
 image that asks the chip's own controller through VHCI, with Bluedroid configured as the BLE 4.2
 examples are and never started: page 0 alone, `LE Supported (Controller)` and `BR/EDR Not
@@ -5259,13 +5259,23 @@ they came:
 - Its LE buffer, 517 bytes, becomes 491, `HCI_MAX - 5`: the runner refuses an `hci_rx` packet over
   `HCI_MAX` bytes on every chip, so a 517-byte packet could not reach the firmware.
 - Its supported commands leave out `HCI_Reset`, `Set_Event_Mask_Page_2`, the authenticated payload
-  timeout's two and `Read_Remote_Version_Information`, which it answered (`also_known`): the
-  guest takes them, where it answers any other command its list leaves out as unknown.
+  timeout's two and `Read_Remote_Version_Information`, which it answered: the guest takes them
+  (`also_known`), where it answers any other command its list leaves out as unknown, but for
+  `Read_Authenticated_Payload_Timeout`, which Bumble has no class for and the guest answers as
+  unknown too. Bumble completes `Write_Authenticated_Payload_Timeout` whatever the handle, where
+  the C6 refused an unknown one with `UNKNOWN_CONNECTION_IDENTIFIER`.
 
 A command it does not know gets `UNKNOWN_HCI_COMMAND` as the C6 answered: `Command_Status` for an LE
 command (`LE_Read_Buffer_Size` v2, `LE_Read_Local_P-256_Public_Key`, `0x207B`, `0x20FF`),
 `Command_Complete` for any other (`Inquiry`, `Create_Connection`, `Read_Buffer_Size`,
-`Read_Stored_Link_Key`, `0x0CFF`). Two things the C6 does are not modelled: it sends no LE event
+`Read_Stored_Link_Key`, `0x0CFF`). The three extended advertising commands the probe asks, which
+Bumble's handlers answer with values of their own, get what each chip sent (`answers`): the C6
+refused `LE_Read_Maximum_Advertising_Data_Length` and `LE_Read_Number_of_Supported_Advertising_Sets`
+with `COMMAND_DISALLOWED` alone and answered `LE_Read_Transmit_Power` with -15 and 20 dBm; the S3
+refused all three, each followed by values. So every command of both captures but the C6's LE
+features and LE buffer gets the bytes the chip sent, which
+`test_an_le_only_chip_s_controller_answers_every_command_of_its_capture` replays. Two things the C6
+does are not modelled: it sends no LE event
 until the host's event mask has LE Meta, bit 61, which the specification's default leaves out
 (Bluedroid sets it, `HCI_DUMO_EVENT_MASK_EXT`, and the guest sends LE events either way, as the
 S3's controller does), and its discard event `0xF0` carries one byte after the count, of another

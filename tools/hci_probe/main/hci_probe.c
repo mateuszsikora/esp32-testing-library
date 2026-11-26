@@ -1,7 +1,8 @@
 /* Asks the chip's own Bluetooth controller, through VHCI and with no host running, what it reports,
  * and prints every packet both ways in hex, "TX <hex>" and "RX <hex>", on the console. Built with
  * Bluedroid configured as ESP-IDF's BLE 4.2 examples are, and never started, so that the controller
- * runs as under those examples (`BLE_50:0`); the commands come in Bluedroid's start-up order where
+ * runs as under those examples (`BLE_50:0` on the ESP32-S3; the ESP32-C6's answered the same with
+ * Bluedroid configured for BLE 5.0); the commands come in Bluedroid's start-up order where
  * it matters: Espressif's flow control of advertising reports right after `HCI_Reset`. The answers
  * esp32tl's guest controller reports on an LE-only chip came from an ESP32-S3 and an ESP32-C6
  * running this (`esp32tl/bluetooth/guest.py`, `docs/stage0-findings.md`). */

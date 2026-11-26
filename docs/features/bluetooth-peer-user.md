@@ -164,7 +164,10 @@ reports is the chip's, which it takes from the board profile's `chip`:
   each `Command_Complete` and `Command_Status`. A command that list does not name, as
   `Read_Buffer_Size`, `Read_Local_Extended_Features` or `Inquiry`, and any command it does not
   know get `Command_Complete` with `UNKNOWN_HCI_COMMAND_ERROR`, and are listed in
-  `bt.unknown_commands()`; Bluedroid without Classic sends none of them. The ESP32-C3's
+  `bt.unknown_commands()`; Bluedroid without Classic sends none of them. Three extended advertising
+  commands it refused, `LE_Read_Maximum_Advertising_Data_Length`,
+  `LE_Read_Number_of_Supported_Advertising_Sets` and `LE_Read_Transmit_Power`, get its answers,
+  `COMMAND_DISALLOWED` each. The ESP32-C3's
   controller is built from the same sources; TODO(owner): measured on an ESP32-C3, which takes
   the S3's values meanwhile.
 - **The ESP32-C6**, whose controller is Bluetooth LE only too, and another: what an ESP32-C6
@@ -178,7 +181,12 @@ reports is the chip's, which it takes from the board profile's `chip`:
   advertising. Of its `LE_Read_Buffer_Size`, 517 bytes and 10 packets, it reports 491 bytes, the
   most the link carries in one packet, and 10. Its list leaves out commands the chip answers:
   `HCI_Reset`, `Set_Event_Mask_Page_2`, `Write_Authenticated_Payload_Timeout` and
-  `Read_Remote_Version_Information` are taken as the S3's are. A command it does not know gets
+  `Read_Remote_Version_Information` are taken as the S3's are, but
+  `Read_Authenticated_Payload_Timeout`, which the chip answered too, is unknown here, and
+  `Write_Authenticated_Payload_Timeout` completes whatever the handle, where the chip refused an
+  unknown one. `LE_Read_Maximum_Advertising_Data_Length` and
+  `LE_Read_Number_of_Supported_Advertising_Sets` get `COMMAND_DISALLOWED`, and
+  `LE_Read_Transmit_Power` -15 and 20 dBm, as from the chip. A command it does not know gets
   `Command_Status` with `UNKNOWN_HCI_COMMAND_ERROR` when it is an LE command (OGF `0x08`), as
   `LE_Read_Buffer_Size` v2 or `LE_Read_Local_P-256_Public_Key`, and `Command_Complete` otherwise,
   as `Inquiry`. The chip sends no LE event while the host's event mask leaves out LE Meta (bit

@@ -66,7 +66,8 @@ class LeController:
     resolving_list_size: int
     # `Read_Local_Supported_Commands`, the 64 bytes as they came.
     supported_commands: bytes
-    # The commands the controller answers though that bitmap does not name them, by opcode.
+    # The commands the controller answers though that bitmap does not name them, by opcode, which
+    # go on to the guest's handlers.
     also_known: frozenset[int]
     # The commands the controller takes at once, in each `Command_Complete` and `Command_Status`,
     # where Bumble's says 1.
@@ -74,6 +75,10 @@ class LeController:
     # Whether a command of the LE group (OGF 0x08) it does not know gets `Command_Status`; any other
     # it does not know gets `Command_Complete`, both with `UNKNOWN_HCI_COMMAND`.
     le_unknown_status: bool
+    # Commands answered with `Command_Complete` and these return parameters as they came, by
+    # opcode, where Bumble's handlers answer otherwise: the extended advertising commands a BLE
+    # 4.2 controller refuses or answers with values of its own.
+    answers: dict[int, bytes]
 
     @property
     def supported(self) -> int:
@@ -112,6 +117,14 @@ ESP32S3 = LeController(
     also_known=frozenset(),
     command_packets=5,
     le_unknown_status=False,
+    # `LE_Read_Maximum_Advertising_Data_Length` and `LE_Read_Number_of_Supported_Advertising_Sets`
+    # refused with `COMMAND_DISALLOWED`, followed by 0x001F and 0; `LE_Read_Transmit_Power` refused
+    # so too, followed by -24 and 21 dBm.
+    answers={
+        0x203A: bytes.fromhex("0c1f00"),
+        0x203B: bytes.fromhex("0c00"),
+        0x204B: bytes.fromhex("0ce815"),
+    },
 )
 
 # An ESP32-C6 (ESP32-C6FH4, QFN32, revision v0.2) on 2026-11-26 (`tools/hci_probe/esp32c6.txt`):
@@ -127,7 +140,9 @@ ESP32S3 = LeController(
 # `0x20FF`, `LE_Read_Local_P-256_Public_Key`) with `Command_Status`, any other (`Inquiry`,
 # `Create_Connection`, `Read_Buffer_Size`, `Read_Stored_Link_Key`, `0x0CFF`) with
 # `Command_Complete`. Of the commands it answered though its bitmap leaves them out, Bumble has no
-# class for `Read_Authenticated_Payload_Timeout`, which the guest answers as one it does not know.
+# class for `Read_Authenticated_Payload_Timeout` (0x0C7B), which the guest therefore answers as
+# one it does not know, and so leaves out of `also_known`; and Bumble completes
+# `Write_Authenticated_Payload_Timeout` whatever the handle, where the C6 refused an unknown one.
 ESP32C6 = LeController(
     version=0x0E,
     revision=0x0000,
@@ -138,9 +153,16 @@ ESP32C6 = LeController(
         "20000000004000000000e00000002822000000000000000000f7ffff7f00000000f0f9ffffffff07"
         "e0030004f900e40300000000000000000000000000000000"
     ),
-    also_known=frozenset({0x0C03, 0x0C63, 0x0C7B, 0x0C7C, 0x041D}),
+    also_known=frozenset({0x0C03, 0x0C63, 0x0C7C, 0x041D}),
     command_packets=1,
     le_unknown_status=True,
+    # `LE_Read_Maximum_Advertising_Data_Length` and `LE_Read_Number_of_Supported_Advertising_Sets`
+    # refused with `COMMAND_DISALLOWED` alone; `LE_Read_Transmit_Power` -15 and 20 dBm.
+    answers={
+        0x203A: bytes.fromhex("0c"),
+        0x203B: bytes.fromhex("0c"),
+        0x204B: bytes.fromhex("00f114"),
+    },
 )
 
 # The chips whose controller is Bluetooth LE only, by ESP-IDF target name, and what each reports.
@@ -226,6 +248,17 @@ class GuestController(Controller):
         self._discarded = 0
 
     def on_hci_command_packet(self, command: hci.HCI_Command) -> None:
+        if self.le is not None and command.op_code in self.le.answers:
+            self.send_hci_packet(
+                hci.HCI_Command_Complete_Event(
+                    num_hci_command_packets=1,
+                    command_opcode=command.op_code,
+                    return_parameters=hci.HCI_GenericReturnParameters(
+                        data=self.le.answers[command.op_code]
+                    ),
+                )
+            )
+            return
         mask = hci.HCI_SUPPORTED_COMMANDS_MASKS.get(command.op_code)
         if (
             self.le is not None
