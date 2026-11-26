@@ -2942,7 +2942,7 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `RST|ACK` from `snd_nxt`, acknowledging `rcv_nxt`, and nothing goes again; a reset once both
   FINs have crossed sends nothing and ends the connection as closed, once; a reset in `accept`
   still gives the connection it returns its `on_close`; TLS passes the reset
-  through with no alert before it.
+  through with no alert before it, after its own close or the device's FIN too.
   `tests/test_net_http.py::test_a_hang_up_ends_the_connection_without_a_byte_and_keeps_the_request`,
   `tests/test_net_http.py::test_a_hang_up_after_ends_the_connection_that_much_later`,
   `tests/test_net_http.py::test_a_hang_up_whose_connection_closed_first_ends_nothing`,
@@ -2955,6 +2955,8 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_net_ip.py::test_a_reset_from_on_close_at_the_device_s_fin_resets_and_ends_once`,
   `tests/test_net_ip.py::test_a_reset_during_accept_still_closes_the_connection_it_returns`,
   `tests/test_net_tls.py::test_a_hang_up_behind_tls_passes_its_reset_through_and_writes_no_alert`,
+  `tests/test_net_tls.py::test_a_reset_from_on_close_at_the_device_s_fin_reaches_tcp`,
+  `tests/test_net_tls.py::test_a_reset_after_a_close_reaches_tcp_once_and_a_close_goes_once`,
   `tests/test_http_request.py::test_a_hang_up_ends_the_connection_with_no_response`,
   `tests/test_http_request.py::test_a_hang_up_with_after_ends_the_connection_that_much_later`,
   `tests/test_http_request.py::test_a_hang_up_later_than_the_device_s_timeout_ends_nothing`

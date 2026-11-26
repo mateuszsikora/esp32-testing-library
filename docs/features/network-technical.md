@@ -626,7 +626,11 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   before completion and closes, after completion it closes without a log line; a `close_notify`
   closes; other warnings are ignored. The inner service's `close` is `_Session._end`, which
   passes `reset=True` through to the TCP flow's `close`, with no alert before the RST, and calls
-  the flow's `close()` with no arguments otherwise, sending no `close_notify` either way. Plaintext reaches the inner service only
+  the flow's `close()` with no arguments otherwise, sending no `close_notify` either way. The inner
+  service hears of the end once, but `_ended` (`None`, `"close"`, `"reset"`) alone decides what
+  reaches the flow: one close and one reset at most, so that a reset after the session's close, or
+  from the inner service's `on_close` at the device's FIN, still reaches the stack, as it would
+  without TLS. Plaintext reaches the inner service only
   after handshake completion. TLS errors close the connection and notify the inner service once. `Internet.listen(..., tls=ca)` returns the installed `Tls` object;
   plain listeners return `None`. Its cumulative `handshakes_started` counter increments on the
   first nonempty `on_data` per session, before TLS parsing. Empty input, TCP accept alone,

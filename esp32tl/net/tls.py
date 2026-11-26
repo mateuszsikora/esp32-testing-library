@@ -436,6 +436,10 @@ class _Session:
         self._stream = stream
         self._inner: Connection | None = None
         self._closed = False
+        # How the session ended the TCP connection: `None` while it has not, `"close"` after its
+        # FIN, `"reset"` after its RST. A reset still goes after a close, as the stack sends it
+        # until both FINs have crossed.
+        self._ended: str | None = None
         self._started = False
         # What the client sent that is not a whole record yet, and not a whole message yet.
         self._records = b""
@@ -711,13 +715,19 @@ class _Session:
 
     def _end(self, *, reset: bool = False) -> None:
         """Ends the connection: the inner service's `close`, which passes `reset` through, so that
-        a reset ends the TCP connection with its RST and no alert before it."""
+        a reset ends the TCP connection with its RST and no alert before it. The inner service
+        hears of the end once (`on_close`); the TCP connection gets one close and one reset at
+        most, a reset after the session's close or the device's FIN too, from the inner
+        service's `on_close` as well."""
         if not self._closed:
             self.on_close()
-            if reset:
-                self._close(reset=True)
-            else:
-                self._close()
+        if self._ended == "reset" or (self._ended == "close" and not reset):
+            return
+        self._ended = "reset" if reset else "close"
+        if reset:
+            self._close(reset=True)
+        else:
+            self._close()
 
     def on_close(self) -> None:
         if not self._closed:

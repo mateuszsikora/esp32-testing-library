@@ -13,7 +13,7 @@ from cryptography import x509
 
 from esp32tl.net import Internet, tls
 from esp32tl.net.http import HangUp, HttpHangUp
-from esp32tl.net.ip import Connection
+from esp32tl.net.ip import Connection, StreamClose
 from esp32tl.net.tls import (
     NOT_AFTER,
     NOT_BEFORE,
@@ -585,3 +585,72 @@ def test_a_hang_up_behind_tls_passes_its_reset_through_and_writes_no_alert(
     server.on_data(outgoing.read())
     assert ended == [how == "reset"] and incoming.pending == 0
     assert [request.path for request in net.http.requests] == ["/enroll"]
+
+
+class Inner:
+    """An inner service that keeps its connection's `close` and can reset from `on_close`."""
+
+    def __init__(self, *, reset_on_close: bool) -> None:
+        self.reset_on_close = reset_on_close
+        self.close: StreamClose = lambda **_: None
+        self.closed = 0
+
+    def accept(
+        self, peer: tuple[str, int], write: Callable[[bytes], None], close: StreamClose
+    ) -> "Inner":
+        self.close = close
+        return self
+
+    def on_data(self, data: bytes) -> None:
+        pass
+
+    def on_close(self) -> None:
+        self.closed += 1
+        if self.reset_on_close:
+            self.close(reset=True)
+
+
+def handshaken(inner: Inner) -> tuple[Connection, list[bool]]:
+    """A TLS session over `inner`, its handshake done, and each close of its TCP connection:
+    `True` for a reset."""
+    ca = CertificateAuthority(["api.example"])
+    listener = Tls(inner, ca)
+    context = ssl.create_default_context(cadata=ca.ca_pem)
+    context.maximum_version = ssl.TLSVersion.TLSv1_2
+    incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
+    client = context.wrap_bio(incoming, outgoing, server_hostname="api.example")
+    ended: list[bool] = []
+
+    def end(*, reset: bool = False) -> None:
+        ended.append(reset)
+
+    def receive(data: bytes) -> None:
+        incoming.write(data)
+
+    server = listener.accept(("10.64.0.2", 4000), receive, end)
+    for _ in range(20):
+        with contextlib.suppress(ssl.SSLWantReadError):
+            client.do_handshake()
+        server.on_data(outgoing.read())
+        if client.version() and listener.handshake_completed():
+            return server, ended
+    pytest.fail("TLS did not finish its handshake")
+
+
+def test_a_reset_from_on_close_at_the_device_s_fin_reaches_tcp() -> None:
+    inner = Inner(reset_on_close=True)
+    server, ended = handshaken(inner)
+    server.on_close()  # the device's FIN
+    assert inner.closed == 1 and ended == [True]
+
+
+def test_a_reset_after_a_close_reaches_tcp_once_and_a_close_goes_once() -> None:
+    inner = Inner(reset_on_close=False)
+    _, ended = handshaken(inner)
+    inner.close()
+    inner.close()
+    assert inner.closed == 1 and ended == [False]
+    inner.close(reset=True)
+    inner.close(reset=True)
+    inner.close()
+    assert inner.closed == 1 and ended == [False, True]
