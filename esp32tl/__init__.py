@@ -119,6 +119,7 @@ from esp32tl.net.dns import Dns as Dns
 from esp32tl.net.dns import DnsQuestion as DnsQuestion
 from esp32tl.net.ethernet import Ethernet as Ethernet
 from esp32tl.net.handlers import Registration as Registration
+from esp32tl.net.http import HttpHangUp as HttpHangUp
 from esp32tl.net.http import HttpRequest as HttpRequest
 from esp32tl.net.http import HttpResponse as HttpResponse
 from esp32tl.net.http import HttpServer as HttpServer
@@ -128,6 +129,7 @@ from esp32tl.net.http_client import HttpExchange as HttpExchange
 from esp32tl.net.ip import Connection as Connection
 from esp32tl.net.ip import DatagramService as DatagramService
 from esp32tl.net.ip import Network as Network
+from esp32tl.net.ip import StreamClose as StreamClose
 from esp32tl.net.ip import StreamService as StreamService
 from esp32tl.net.ip import TcpClient as TcpClient
 from esp32tl.net.mqtt import TEST_CLIENT as TEST_CLIENT
@@ -243,6 +245,7 @@ __all__ = [
     "HostLease",
     "HttpClient",
     "HttpExchange",
+    "HttpHangUp",
     "HttpRequest",
     "HttpResponse",
     "HttpServer",
@@ -305,6 +308,7 @@ __all__ = [
     "SppPeer",
     "Station",
     "StationConfig",
+    "StreamClose",
     "StreamService",
     "SubscribeRequest",
     "Subscription",

@@ -359,10 +359,14 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   that index, named `the next DHCP lease`. `find_lease()` reads the first lease.
 - `http.py`: `HttpServer(now, log, *, test_error=reraise)`, a `StreamService` on TCP 80 of every
   network (RFC 9110, 9112). `serve(path, response, *, status, content_type, headers, reason)` stores per
-  path an `HttpResponse` or a handler, `Callable[[HttpRequest], HttpResponse]` (`Handler`), after
+  path an `HttpResponse`, an `HttpHangUp` or a handler,
+  `Callable[[HttpRequest], HttpResponse | HttpHangUp]` (`Handler`), after
   checking that the path starts with `/` and holds no `?`, since a request is looked up by its
-  path without the query; `status`, `content_type`, `headers` and `reason` with an `HttpResponse` or a
-  handler raise `TypeError`, and with a body they make the `HttpResponse`. `HttpResponse` is a
+  path without the query; `status`, `content_type`, `headers` and `reason` with an `HttpResponse`,
+  an `HttpHangUp` or a handler raise `TypeError`, and with a body they make the `HttpResponse`.
+  `HttpHangUp(*, how="close", after=None)` is a frozen dataclass too, `how` typed
+  `HangUp = Literal["close", "reset"]` as `network.block`'s is `Block`, whose `__init__` checks
+  `how` against `"close"` and `"reset"` at run time too and `after` with `_after`, the check `_fill` shares. `HttpResponse` is a
   frozen dataclass with its own `__init__`, which `_fill` checks and sets through
   `object.__setattr__`: the status an `int`, not a `bool`, in `FINAL`, `range(200, 600)`, since
   the server has no interim response; `reason` the given phrase, text with no CR or LF that
@@ -383,18 +387,24 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   origin-form target, which starts with `/`, up to `?`; an absolute-form one, a scheme of letters,
   digits, `+`, `-` and `.` then `://`, what follows its authority up to `?`, or `/`; any other
   target as it is. `_answer` appends the `HttpRequest` to `requests`, then returns the served
-  `HttpResponse`, `404` with `not found\n`, or what the handler returns, called in
+  `HttpResponse` or `HttpHangUp`, `404` with `not found\n`, or what the handler returns, called in
   `handlers.handling("the HTTP server's handler for '<path>'")`; it logs
-  `http: <method> <target> → <status>`, with `, after <after>` for a delayed one. A handler that
-  raises an `Exception`, or returns what is not an `HttpResponse`, which raises
-  `TypeError("http.serve: the handler for '<path>' returned <repr>, not an HttpResponse")`, gets
+  `http: <method> <target> → <status>`, or `http: <method> <target> → hung up (<how>)`, with
+  `, after <after>` for a delayed one. A handler that
+  raises an `Exception`, or returns what is neither an `HttpResponse` nor an `HttpHangUp`, which raises
+  `TypeError("http.serve: the handler for '<path>' returned <repr>, not an HttpResponse or an HttpHangUp")`, gets
   `500` with `internal server error\n`, logged as
   `http: <method> <target> → 500, the handler failed: <type>: <message>`; `on_data` writes the
-  `500` and closes, then hands the exception to `test_error`. A response with a positive `after`
-  waits in the server's `_waiting`, due at the request's `at` plus `after`: `poll()` writes, at
-  the board's `now`, every one due by then, earliest first, and `quiet_until()` is the earliest
-  due, or `None`. `on_close` of a waiting exchange, the device's FIN or the flow's end, drops it and
-  logs `http: <method> <target>: the connection closed before its response, due at <due>: nothing written`.
+  `500` and closes, then hands the exception to `test_error`. A response or a hang-up with a
+  positive `after` waits in the server's `_waiting`, due at the request's `at` plus `after`:
+  `poll()` ends, at the board's `now`, every exchange due by then, earliest first, through
+  `_Exchange.send`, and `quiet_until()` is the earliest due, or `None`. `_Exchange._end` writes a
+  response with `_respond`, or, for an `HttpHangUp`, writes nothing and calls the flow's `close()`,
+  or `close(reset=True)` for `how="reset"`: a plain `close()` for a FIN, so that a `close` of no
+  arguments, as a test's, still works. `on_close` of a waiting exchange, the device's FIN or the
+  flow's end, drops it and logs
+  `http: <method> <target>: the connection closed before its response, due at <due>: nothing written`,
+  `its hang-up` in place of `its response` for an `HttpHangUp`.
   A refusal (`_fail`) logs `http: refused a request: <status> <reason>`, `_phrase(status)`, and
   is not appended. `_respond` writes the status line, `HTTP/1.1 <status> <reason>` with the space
   before an empty reason too (RFC 9112 4), `Content-Type` and `Content-Length` (not for a status in
@@ -614,7 +624,13 @@ threads; a connect in progress ends within `CONNECT_SECONDS`. The backend calls 
   ChangeCipherSpec is out, logs `tls: handshake failed: <message>` before completion, and closes.
   A fatal alert from the client logs `tls: handshake failed: the client sent the alert <name>`
   before completion and closes, after completion it closes without a log line; a `close_notify`
-  closes; other warnings are ignored. Plaintext reaches the inner service only
+  closes; other warnings are ignored. The inner service's `close` is `_Session._end`, which
+  passes `reset=True` through to the TCP flow's `close`, with no alert before the RST, and calls
+  the flow's `close()` with no arguments otherwise, sending no `close_notify` either way. The inner
+  service hears of the end once, but `_ended` (`None`, `"close"`, `"reset"`) alone decides what
+  reaches the flow: one close and one reset at most, so that a reset after the session's close, or
+  from the inner service's `on_close` at the device's FIN, still reaches the stack, as it would
+  without TLS. Plaintext reaches the inner service only
   after handshake completion. TLS errors close the connection and notify the inner service once. `Internet.listen(..., tls=ca)` returns the installed `Tls` object;
   plain listeners return `None`. Its cumulative `handshakes_started` counter increments on the
   first nonempty `on_data` per session, before TLS parsing. Empty input, TCP accept alone,
@@ -877,10 +893,11 @@ ends. The device's own flows keep acknowledging such a segment again, as before.
 which no link calls and the unit tests use as a transport loss, and
 `Network.forget_device(why=None, *, address=None)`, and `Network._retransmit` with `why`), for a
 client flow only `"timed out"` (`Network.poll`), or, for a device flow only, `"abandoned"`
-(`Network._close` on an orphaned flow, and `Network._unfinished`), `"unanswered"`
+(`Network._close` on an orphaned flow, a reset one included, and `Network._unfinished`),
+`"aborted"` (`Network._abort`), `"unanswered"`
 (`Network._unfinished`) and `"unacknowledged"` (`Network._retransmit`), and logs it
 through `_ENDS`: `closed`, `refused by the device`, `reset by the device`, `link lost`, `closed by
-its service with no device to answer`, `lost before the device answered its SYN-ACK`, `timed out:
+its service with no device to answer`, `reset by its service`, `lost before the device answered its SYN-ACK`, `timed out:
 no answer to 7 SYNs`, `timed out: 15 retransmissions unacknowledged`, or `lost: <why>` when `why`
 is given. `_drop` removes the flow from `_flows` only while it is the one
 there for its key, and `_write`, `_close` and `_flush` do nothing for a flow that is not
@@ -889,6 +906,26 @@ another on the same addresses and ports, and that must not end the new one. A cl
 names the test's end first, `net: TCP <ours>:<local> → <device>:<port> <end>`, and
 `on_end(kind, why)` comes before `_notify`, so that `TcpConnection.on_close` sets `closed_at` for a
 FIN only, never for a RST or a loss. The device's flows log after `_notify`, as before.
+
+A service's `close` is a `StreamClose`, `lambda *, reset=False: self._close(flow, reset=reset)`.
+`_close(flow, reset=True)` calls `_abort`, RFC 9293's ABORT (3.10.5): it counts and clears
+`pending` and `unacked`, logs `net: TCP <device>:<port> → <ours>:<port> dropped <n> bytes the
+device had not acknowledged` when there were any, sends `RST|ACK` from `snd_nxt`, past what went
+unacknowledged and a FIN already sent, acknowledging `rcv_nxt`, and drops the flow as `"aborted"`,
+whose `_notify` gives the service's connection its `on_close`. Nothing goes again: the flow is out
+of `_flows`, so its timer is gone, and its `write` and `close` do nothing (`_current`); a reset
+from the service's `on_data` is the last segment of the flow, and a FIN that came with the data is
+not acknowledged after it, and so is one from `on_close` at the device's FIN, which ends the flow
+there. A reset in `accept` itself comes after the SYN-ACK, from `ISN + 1`, and `_tcp` gives the
+connection `accept` returned its `on_close` once it has it, since `_notify` found none during
+`accept`. Once both FINs have crossed (`fin_sent` and `peer_closed`: CLOSING or LAST-ACK), RFC 9293's
+ABORT only deletes the connection, as Linux's `tcp_need_reset` does: `_abort` sends nothing and
+drops the flow as `"closed"`. On a port
+blocked with `drop` (`_held`) the RST is not sent, logged `net: TCP <device>:<port> →
+<ours>:<port> RST dropped: port <port> is blocked`, as the network it stands for would lose it and
+nothing sends a RST again; an orphaned flow is dropped as `"abandoned"`, with no segment. A reset
+is for the device's flows: `Network.connect` hands the test's own connection a `close` of no
+arguments.
 
 `Internet.device_reset(t, why)`, with `_at` set to `t`, calls `Network.forget_device(why)`, which
 drops every client flow as `lost`, drops the device's flows that cannot finish (`_unfinished`,

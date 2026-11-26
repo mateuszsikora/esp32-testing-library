@@ -7,11 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from esp32tl import HttpRequest, HttpResponse, recording
+from esp32tl import HttpHangUp, HttpRequest, HttpResponse, recording
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.interfaces import NeverHappened, SourceError
 from esp32tl.interfaces.console import Console
 from esp32tl.interfaces.wifi import Wifi, emulated_macs
+from esp32tl.net.http import HangUp
 from esp32tl.units import kbit_s, ms, seconds
 
 pytestmark = pytest.mark.app_path("../firmware/http_request")
@@ -90,6 +91,59 @@ def test_a_response_with_after_arrives_no_earlier_than_after_past_the_request(
     line = board.wait_until(printed, within=seconds(5))
     assert line.at - request.at >= seconds(2)
     assert "http: GET / → 200, after 2 s" in board.report()
+
+
+# What the example prints once its reads end (`http_request_example_main.c`): a FIN ends them with
+# 0, a RST with -1 and ECONNRESET (104), its own 5 s SO_RCVTIMEO with -1 and EAGAIN (11).
+@pytest.mark.parametrize(
+    ("how", "last_read"),
+    [("close", r"Last read return=0 errno=\d+\."), ("reset", r"Last read return=-1 errno=104\.")],
+)
+def test_a_hang_up_ends_the_connection_with_no_response(
+    board: Esp32Sim, wifi: Wifi, console: Console, how: HangUp, last_read: str
+) -> None:
+    network = wifi.access_point(SSID, password=PASSWORD)
+    network.http.serve("/", HttpHangUp(how=how))
+    done = console.line(r"done reading from socket\. " + last_read)
+    board.power_on()
+    request = board.wait_until(network.http.next_request("/"), within=seconds(30))
+    line = board.wait_until(done, within=seconds(4))
+    assert line.at - request.at < seconds(4)  # the hang-up, not the device's timeout
+    # Not a byte of a response, which the example prints as it reads it.
+    assert not console.lines("HTTP/")
+    assert network.http.requests[0] is request
+    assert f"http: GET / → hung up ({how})" in board.report()
+
+
+def test_a_hang_up_with_after_ends_the_connection_that_much_later(
+    board: Esp32Sim, wifi: Wifi, console: Console
+) -> None:
+    network = wifi.access_point(SSID, password=PASSWORD)
+    network.http.serve("/", HttpHangUp(how="reset", after=seconds(2)))
+    done = console.line(r"done reading from socket\. Last read return=-1 errno=104\.")
+    board.power_on()
+    request = board.wait_until(network.http.next_request("/"), within=seconds(30))
+    line = board.wait_until(done, within=seconds(5))
+    assert seconds(2) <= line.at - request.at < seconds(5)
+    assert "http: GET / → hung up (reset), after 2 s" in board.report()
+
+
+def test_a_hang_up_later_than_the_device_s_timeout_ends_nothing(
+    board: Esp32Sim, wifi: Wifi, console: Console
+) -> None:
+    network = wifi.access_point(SSID, password=PASSWORD)
+    # Past the 5 s the example waits for a reply: its own timeout runs first.
+    network.http.serve("/", HttpHangUp(how="reset", after=seconds(8)))
+    done = console.line(r"done reading from socket\. Last read return=-1 errno=11\.")
+    board.power_on()
+    request = board.wait_until(network.http.next_request("/"), within=seconds(30))
+    line = board.wait_until(done, within=seconds(7))
+    # The device's 5 s run from its setsockopt, which comes before the server has the request in
+    # full: its read ends a few ms short of 5 s past `request.at` (4.994 s on CI), and long
+    # before the hang-up's 8 s.
+    assert seconds(4.9) <= line.at - request.at < seconds(8)
+    board.wait(seconds(1))
+    assert "http: GET /: the connection closed before its hang-up, due at" in board.report()
 
 
 def test_a_handler_that_waits_on_the_board_fails_the_test_and_the_device_gets_a_500(

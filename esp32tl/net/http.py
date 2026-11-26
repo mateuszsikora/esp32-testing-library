@@ -1,16 +1,19 @@
 """An HTTP/1.1 server the test runs (RFC 9110, 9112): one request per connection, answered from
 what the test serves at each path, a fixed response or one its handler makes from the request,
-now or `after` a delay on the board's clock, and closed. Every request is kept, stamped with the
-board's time, for the test to look at.
+now or `after` a delay on the board's clock, and closed; or, for an `HttpHangUp`, ended with no
+response at all, by a FIN or a RST. Every request is kept, stamped with the board's time, for the
+test to look at.
 """
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
+from typing import Literal
 
 from esp32tl.interfaces.condition import Condition, FirstFrom
 from esp32tl.interfaces.history import History
 from esp32tl.net.handlers import handling, reraise
+from esp32tl.net.ip import StreamClose
 from esp32tl.units import Duration
 
 # The statuses whose response ends with its head (RFC 9112 6.3): no body, and no Content-Length.
@@ -98,8 +101,30 @@ class HttpResponse:
         _fill(self, "HttpResponse", status, body, content_type, headers, after, reason)
 
 
-# A handler: the response to each request for its path, made from the request.
-Handler = Callable[[HttpRequest], HttpResponse]
+# How an `HttpHangUp` ends the connection: with a FIN, or with a RST.
+HangUp = Literal["close", "reset"]
+
+
+@dataclass(frozen=True, init=False)
+class HttpHangUp:
+    """What the server does instead of answering: it ends the connection without writing a byte,
+    as a server, a proxy or a load balancer that read the request and gave up on it. `how` is
+    `"close"`, a FIN, or `"reset"`, a RST. With `after`, the end comes that much later on the
+    board's clock than the request came, as `HttpResponse.after` writes late."""
+
+    how: HangUp
+    after: Duration | None
+
+    def __init__(self, *, how: HangUp = "close", after: Duration | None = None) -> None:
+        if how not in ("close", "reset"):
+            raise ValueError(f"HttpHangUp: how is 'close' or 'reset', not {how!r}")
+        _after("HttpHangUp", after)
+        object.__setattr__(self, "how", how)
+        object.__setattr__(self, "after", after)
+
+
+# A handler: the response to each request for its path, made from the request, or a hang-up.
+Handler = Callable[[HttpRequest], HttpResponse | HttpHangUp]
 
 
 def _fill(
@@ -147,11 +172,7 @@ def _fill(
     if any(c in kind for c in "\r\n"):
         raise ValueError(f"{what}: {kind!r} is not a content type")
     _latin1(what, repr(kind), kind)
-    if after is not None:
-        if not isinstance(after, Duration):
-            raise TypeError(f"{what}: after takes a Duration, as seconds(5), not {after!r}")
-        if after.ns < 0:
-            raise ValueError(f"{what}: after takes a Duration of 0 or more, not {after}")
+    _after(what, after)
     for field_, value_ in [
         ("status", status),
         ("reason", phrase),
@@ -161,6 +182,15 @@ def _fill(
         ("after", after),
     ]:
         object.__setattr__(response, field_, value_)
+
+
+def _after(what: str, after: Duration | None) -> None:
+    """Checks the `after` of an `HttpResponse` or an `HttpHangUp`; `what` names the call."""
+    if after is not None:
+        if not isinstance(after, Duration):
+            raise TypeError(f"{what}: after takes a Duration, as seconds(5), not {after!r}")
+        if after.ns < 0:
+            raise ValueError(f"{what}: after takes a Duration of 0 or more, not {after}")
 
 
 def _latin1(what: str, shown: str, text: str) -> None:
@@ -177,7 +207,8 @@ def _latin1(what: str, shown: str, text: str) -> None:
 class HttpServer:
     """`now` is the board's clock. The `StreamService` of `esp32tl.net.ip`. A path nobody serves
     gets `404 Not Found`. A handler's exception, and the `TypeError` for what it returns that is
-    not an `HttpResponse`, goes to `test_error` once the device has its `500`."""
+    neither an `HttpResponse` nor an `HttpHangUp`, goes to `test_error` once the device has its
+    `500`."""
 
     def __init__(
         self,
@@ -190,8 +221,9 @@ class HttpServer:
         self._log = log
         self._test_error = test_error
         self._requests: list[HttpRequest] = []
-        self._served: dict[str, HttpResponse | Handler] = {}
-        # The exchanges whose response waits for its `after`, in the order their requests came.
+        self._served: dict[str, HttpResponse | HttpHangUp | Handler] = {}
+        # The exchanges whose response or hang-up waits for its `after`, in the order their
+        # requests came.
         self._waiting: list[_Exchange] = []
 
     @property
@@ -201,7 +233,7 @@ class HttpServer:
     def serve(
         self,
         path: str,
-        response: bytes | str | HttpResponse | Handler = b"",
+        response: bytes | str | HttpResponse | HttpHangUp | Handler = b"",
         *,
         status: int | None = None,
         content_type: str | None = None,
@@ -209,11 +241,12 @@ class HttpServer:
         reason: str | None = None,
     ) -> None:
         """Answers every request for `path`, from now on, replacing what was served there.
-        `response` is an `HttpResponse`; a handler, called with each request once it has been
-        read in full, at its `at` on the board's clock, which returns the `HttpResponse`; or the
-        body of one with `status`, `content_type`, `headers` and `reason`, as `HttpResponse`
-        takes them: text goes as UTF-8, `text/plain` unless `content_type` says otherwise, bytes
-        as `application/octet-stream`. A 204, 205 or 304 takes no body; a 204 or 304 is sent
+        `response` is an `HttpResponse`; an `HttpHangUp`, which ends each connection with no
+        response; a handler, called with each request once it has been read in full, at its `at`
+        on the board's clock, which returns the `HttpResponse` or an `HttpHangUp`; or the body of
+        one with `status`, `content_type`, `headers` and `reason`, as `HttpResponse` takes them:
+        text goes as UTF-8, `text/plain` unless `content_type` says otherwise, bytes as
+        `application/octet-stream`. A 204, 205 or 304 takes no body; a 204 or 304 is sent
         without `Content-Type` and `Content-Length`."""
         if not path.startswith("/"):
             raise ValueError(f"http.serve: {path!r} is not a path, which starts with /")
@@ -222,7 +255,7 @@ class HttpServer:
                 f"http.serve: {path!r} holds a query, which a path does not:"
                 " serving the path answers it whatever the query"
             )
-        if isinstance(response, HttpResponse) or callable(response):
+        if isinstance(response, HttpResponse | HttpHangUp) or callable(response):
             given = [
                 name
                 for name, value in [
@@ -233,6 +266,10 @@ class HttpServer:
                 ]
                 if value is not None
             ]
+            if given and isinstance(response, HttpHangUp):
+                raise TypeError(
+                    f"http.serve: {', '.join(given)} with an HttpHangUp, which writes no response"
+                )
             if given:
                 kind = "an HttpResponse" if isinstance(response, HttpResponse) else "a handler"
                 raise TypeError(
@@ -278,39 +315,43 @@ class HttpServer:
         return next(filter(_wants(path, method), self._requests), None)
 
     def accept(
-        self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
+        self, peer: tuple[str, int], write: Callable[[bytes], None], close: StreamClose
     ) -> "_Exchange":
         return _Exchange(self, write, close)
 
     def poll(self) -> None:
-        """Writes each response whose `after` has run out by now, earliest first."""
+        """Writes each response, and ends each connection hung up, whose `after` has run out by
+        now, earliest first."""
         now = self._now()
         due = sorted((e for e in self._waiting if e.due <= now), key=lambda e: e.due)
         for exchange in due:
             exchange.send()
 
     def quiet_until(self) -> int | None:
-        """When the next response waiting for its `after` is due, or `None`."""
+        """When the next response or hang-up waiting for its `after` is due, or `None`."""
         return min((exchange.due for exchange in self._waiting), default=None)
 
-    def _answer(self, request: HttpRequest) -> tuple[HttpResponse, BaseException | None]:
-        """Records `request` and makes its response: the served one, the handler's, or `404`;
-        a `500` and the error for a handler that raised or returned something else."""
+    def _answer(
+        self, request: HttpRequest
+    ) -> tuple[HttpResponse | HttpHangUp, BaseException | None]:
+        """Records `request` and makes its response: the served one or hang-up, the handler's,
+        or `404`; a `500` and the error for a handler that raised or returned something else."""
         self._requests.append(request)
         served = self._served.get(request.path)
         what = f"http: {request.method} {request.target}"
+        response: HttpResponse | HttpHangUp
         if served is None:
             response = HttpResponse(404, "not found\n")
-        elif isinstance(served, HttpResponse):
+        elif isinstance(served, HttpResponse | HttpHangUp):
             response = served
         else:
             try:
                 with handling(f"the HTTP server's handler for {request.path!r}"):
                     answer = served(request)
-                if not isinstance(answer, HttpResponse):
+                if not isinstance(answer, HttpResponse | HttpHangUp):
                     raise TypeError(
                         f"http.serve: the handler for {request.path!r} returned {answer!r},"
-                        " not an HttpResponse"
+                        " not an HttpResponse or an HttpHangUp"
                     )
             except BaseException as error:
                 # pytest.fail and pytest.skip too, which are no `Exception`: on the link's thread
@@ -320,22 +361,25 @@ class HttpServer:
             response = answer
         after = response.after
         delayed = f", after {after}" if after is not None and after.ns else ""
-        self._log(f"{what} → {response.status}{delayed}")
+        if isinstance(response, HttpHangUp):
+            self._log(f"{what} → hung up ({response.how}){delayed}")
+        else:
+            self._log(f"{what} → {response.status}{delayed}")
         return response, None
 
 
 class _Exchange:
     def __init__(
-        self, server: HttpServer, write: Callable[[bytes], None], close: Callable[[], None]
+        self, server: HttpServer, write: Callable[[bytes], None], close: StreamClose
     ) -> None:
         self._server, self._write, self._close = server, write, close
         self._buffer = bytearray()
         self._head: tuple[str, str, str, tuple[tuple[str, str], ...]] | None = None
         self._length = 0
         self._done = False
-        # A response waiting for its `after`: what it answers, as `GET /fw`, whether it goes
-        # without its body, and when it is due on the board's clock.
-        self._waiting: tuple[str, HttpResponse, bool] | None = None
+        # A response or hang-up waiting for its `after`: what it answers, as `GET /fw`, whether
+        # a response goes without its body, and when it is due on the board's clock.
+        self._waiting: tuple[str, HttpResponse | HttpHangUp, bool] | None = None
         self.due = 0
 
     def on_data(self, data: bytes) -> None:
@@ -390,6 +434,7 @@ class _Exchange:
         response, error = self._server._answer(request)
         head_only = method == "HEAD"
         if error is not None:
+            assert isinstance(response, HttpResponse)
             self._respond(response, head_only=head_only)
             self._server._test_error(error)
         elif response.after is not None and response.after.ns:
@@ -397,13 +442,23 @@ class _Exchange:
             self.due = request.at.ns + response.after.ns
             self._server._waiting.append(self)
         else:
-            self._respond(response, head_only=head_only)
+            self._end(response, head_only=head_only)
 
     def send(self) -> None:
-        """Writes the response that waited for its `after`."""
+        """Writes the response, or hangs up, as waited for its `after`."""
         assert self._waiting is not None
         _, response, head_only = self._waiting
-        self._respond(response, head_only=head_only)
+        self._end(response, head_only=head_only)
+
+    def _end(self, response: HttpResponse | HttpHangUp, *, head_only: bool) -> None:
+        if isinstance(response, HttpHangUp):
+            self._unwait()
+            if response.how == "reset":
+                self._close(reset=True)
+            else:
+                self._close()
+        else:
+            self._respond(response, head_only=head_only)
 
     def _fail(self, status: int) -> None:
         self._done = True
@@ -436,10 +491,11 @@ class _Exchange:
     def on_close(self) -> None:
         self._done = True
         if self._waiting is not None:
-            what = self._waiting[0]
+            what, response = self._waiting[:2]
             self._unwait()
+            ending = "hang-up" if isinstance(response, HttpHangUp) else "response"
             self._server._log(
-                f"http: {what}: the connection closed before its response, due at"
+                f"http: {what}: the connection closed before its {ending}, due at"
                 f" {Duration(self.due)}: nothing written"
             )
 

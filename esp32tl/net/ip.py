@@ -26,7 +26,9 @@ never asks for them again: an orphaned flow keeps no retransmission timer. A por
 (`Network.block`) drops the device's segments, or refuses its SYNs, and what a connection on a
 dropped port has to send waits for `unblock` rather than be lost. While a flow is held so, by a
 blocked port, a path that drops every datagram or a link that carries no IP, its retransmission
-timer stops, and it starts again, with the RTO it had, when the hold ends.
+timer stops, and it starts again, with the RTO it had, when the hold ends. A service ends its
+connection with a FIN behind what it wrote (`close()`), or resets it (`close(reset=True)`), as
+RFC 9293's ABORT: what it wrote that is unsent or unacknowledged is dropped and a RST goes at once.
 """
 
 import struct
@@ -112,12 +114,19 @@ class Connection(Protocol):
     def on_close(self) -> None: ...
 
 
+class StreamClose(Protocol):
+    """How a service ends its connection: `close()` queues a FIN behind what it wrote;
+    `close(reset=True)` drops what is still queued or unacknowledged and sends a RST at once."""
+
+    def __call__(self, *, reset: bool = False) -> None: ...
+
+
 class StreamService(Protocol):
     """What listens on a TCP port: makes a `Connection` for each one accepted. `write(bytes)` and
-    `close()` are the connection's way back to the device."""
+    `close()`, a `StreamClose`, are the connection's way back to the device."""
 
     def accept(
-        self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
+        self, peer: tuple[str, int], write: Callable[[bytes], None], close: StreamClose
     ) -> Connection: ...
 
 
@@ -156,6 +165,7 @@ _ENDS = {
     "reset": "reset by the device",
     "lost": "link lost",
     "abandoned": "closed by its service with no device to answer",
+    "aborted": "reset by its service",
     "unanswered": "lost before the device answered its SYN-ACK",
     "renewed": "reset: the device opened a new connection from its port",
     "gapped": "lost with what it had on its way when the link went",
@@ -619,8 +629,13 @@ class Network:
             flow.timing = (ISN + 1, self._now())
             self._segment(flow, SYN | ACK, options=struct.pack(">BBH", 2, 4, MSS))
             flow.connection = service.accept(
-                (src, sport), lambda out: self._write(flow, out), lambda: self._close(flow)
+                (src, sport),
+                lambda out: self._write(flow, out),
+                lambda *, reset=False: self._close(flow, reset=reset),
             )
+            if not self._current(flow):
+                # Its service reset it in `accept`, before the connection to tell existed.
+                self._notify(flow)
             return
         if flow is None:
             return
@@ -654,6 +669,8 @@ class Network:
             self._segment(flow, ACK)
             assert flow.connection is not None
             flow.connection.on_data(data)
+            if not self._current(flow):
+                return  # its service reset it: nothing more goes, not even the ACK of a FIN
         elif data:
             self._segment(flow, ACK)  # a retransmission: acknowledged again
         if flags & FIN and (seq + len(data)) & 0xFFFFFFFF == flow.rcv_nxt:
@@ -661,6 +678,8 @@ class Network:
             flow.peer_closed = True
             self._segment(flow, ACK)
             self._notify(flow)
+            if not self._current(flow):
+                return  # its service reset it from `on_close`: the flow is gone
             self._close(flow)
         self._flush(flow)
         if flow.fin_sent and flow.peer_closed and flow.snd_una >= flow.snd_nxt:
@@ -683,8 +702,11 @@ class Network:
             flow.discarded += len(flow.pending)
             flow.pending.clear()
 
-    def _close(self, flow: _Flow) -> None:
+    def _close(self, flow: _Flow, *, reset: bool = False) -> None:
         if not self._current(flow):
+            return
+        if reset:
+            self._abort(flow)
             return
         if flow.orphaned:
             # Its FIN would reach no stack that holds the connection, and nothing would answer
@@ -693,6 +715,36 @@ class Network:
             return
         flow.fin_pending = True
         self._flush(flow)
+
+    def _abort(self, flow: _Flow) -> None:
+        """A service's reset, as RFC 9293's ABORT (3.10.5): what is queued and what went
+        unacknowledged is dropped, nothing goes again, and a RST goes at once from `snd_nxt`,
+        acknowledging `rcv_nxt`, as Linux's. Once both FINs have crossed (CLOSING, LAST-ACK),
+        ABORT only deletes the connection, with no RST, as Linux's `tcp_need_reset` does. On a
+        port blocked with `drop` the RST is lost, as on the network it stands for, and nothing
+        sends it again; on an orphaned flow there is no stack to send it to."""
+        device, dport, ours, oport = flow.key
+        unsent = len(flow.pending) + len(flow.unacked)
+        flow.pending.clear()
+        flow.unacked.clear()
+        if flow.orphaned:
+            self._drop(flow, "abandoned")
+            return
+        if unsent:
+            self._log(
+                f"net: TCP {device}:{dport} → {ours}:{oport} dropped {unsent} bytes the device"
+                " had not acknowledged"
+            )
+        if flow.fin_sent and flow.peer_closed:
+            self._drop(flow, "closed")
+            return
+        if self._held(flow):
+            self._log(
+                f"net: TCP {device}:{dport} → {ours}:{oport} RST dropped: port {oport} is blocked"
+            )
+        else:
+            self._segment(flow, RST | ACK)
+        self._drop(flow, "aborted")
 
     def _held(self, flow: _Flow) -> bool:
         """Whether `flow` is a device's on a port blocked with `drop`."""
@@ -738,8 +790,8 @@ class Network:
     def _drop(self, flow: _Flow, kind: str, why: str | None = None) -> None:
         """End `flow`: `kind` is `"closed"`, `"refused"`, `"reset"` or `"lost"`, and for a client's
         lost flow `why` says why, the link going down unless given; `"timed out"` is for the
-        test's flows only, and `"abandoned"`, `"unanswered"` and `"unacknowledged"` for the
-        device's only."""
+        test's flows only, and `"abandoned"`, `"aborted"`, `"unanswered"` and `"unacknowledged"`
+        for the device's only."""
         if self._current(flow):
             del self._flows[flow.key]
         device, dport, ours, oport = flow.key

@@ -978,11 +978,12 @@ address, as `network.http`. Until the test serves a path, every request gets `40
 
 | HTTP server API | Meaning |
 |---|---|
-| `serve(path, response=b"", *, status=None, content_type=None, headers=None, reason=None)` | Answer every request for `path` from now on, replacing what was served there before, a handler included. `response` is an `HttpResponse`, a handler (below), or the body of an `HttpResponse` with `status` (200 when not given), `content_type`, `headers` (a dict) and `reason`, so that `serve("/", "text")` is `serve("/", HttpResponse(body="text"))` |
+| `serve(path, response=b"", *, status=None, content_type=None, headers=None, reason=None)` | Answer every request for `path` from now on, replacing what was served there before, a handler included. `response` is an `HttpResponse`, an `HttpHangUp`, a handler (below), or the body of an `HttpResponse` with `status` (200 when not given), `content_type`, `headers` (a dict) and `reason`, so that `serve("/", "text")` is `serve("/", HttpResponse(body="text"))` |
 | `next_request(path=None, *, method=None)` | Condition returning the first request, for `path` and with `method` when given, recorded **after this method call** |
 | `find_request(path=None, *, method=None)` | Immediate history query returning the first recorded request with the same filters, or `None` |
 | `requests` | Every request recorded, in order; refused requests are not |
 | `HttpResponse(status=200, body=b"", *, content_type=None, headers=None, after=None, reason=None)` | A response, from `esp32tl`. `status` is any final status, from 200 to 599 ([below](#any-final-status)); `reason` is the phrase of its status line, `http.HTTPStatus`'s for the status, with RFC 9110's for four of them ([below](#any-final-status)), unless given, and `HttpResponse(...).reason` reads it. A `str` body goes as UTF-8 with `text/plain; charset=utf-8`, `bytes` with `application/octet-stream`, unless `content_type` names another; `headers` (a dict, or name and value pairs, which may repeat a name) are added as given; `after` (a `Duration`) writes it that much later on the board's clock than the request came |
+| `HttpHangUp(*, how="close", after=None)` | No response, from `esp32tl`: the server ends the connection without writing a byte, with a FIN for `how="close"` and a RST for `how="reset"`; `after` (a `Duration`) ends it that much later on the board's clock than the request came ([below](#a-server-that-hangs-up)) |
 
 A request (`HttpRequest`) has `at` (`Duration`), `method`, `target` (as sent), `path` (an
 origin-form target such as `/a?b` without its query, `://` in it or not; an absolute-form one such
@@ -1019,7 +1020,8 @@ for `HEAD`, whose `Content-Length` is still the body's), and closes the connecti
 `304` ends with its head: no body, and no `Content-Type` or `Content-Length` (RFC 9112 6.3). A
 `205 Reset Content` takes no body either (RFC 9110 15.3.6), and is sent with its `Content-Type` and `Content-Length: 0`. A path nobody
 serves gets `404 Not Found` with the body `not found\n`, and is kept in `requests`. The transcript
-logs each answer as `http: GET / → 200`. For HTTPS, put the same server behind TLS on another port:
+logs each answer as `http: GET / → 200`. The one request that gets no response at all is one served
+an [`HttpHangUp`](#a-server-that-hangs-up). For HTTPS, put the same server behind TLS on another port:
 `network.listen(443, network.http, tls=ca)` ([TLS](#dns-time-and-services)).
 
 ### Any final status
@@ -1050,7 +1052,7 @@ response, so a `1xx` is refused, as is anything below 200 or above 599.
 
 When the second argument of `serve` is a function, the server calls it with each request for the
 path, as an `HttpRequest`, once the request has been read in full, at the request's `at` on the
-board's clock, and sends the `HttpResponse` it returns. It runs during whatever wait the test is
+board's clock, and sends the `HttpResponse` it returns, or hangs up for an `HttpHangUp`. It runs during whatever wait the test is
 in, `board.wait` and `board.wait_for_wake` too, so the answer comes in the same turn as the
 request, with no condition to poll. The request is in `requests` before the handler runs. A later
 `serve` on the path replaces the handler, with another one or a fixed response, and a handler
@@ -1092,11 +1094,13 @@ which the run is past while a handler runs; to switch the access point off once 
 answered, wait for the request in the test and switch it there.
 
 A handler that raises, `RuntimeError` above and `pytest.fail` or `pytest.skip` included, or that
-returns something other than an `HttpResponse`, is a test error: the device gets `500 Internal Server Error` with the body
+returns something other than an `HttpResponse` or an `HttpHangUp`, is a test error: the device gets `500 Internal Server Error` with the body
 `internal server error\n`, the request stays in `requests`, the transcript logs
-`http: GET /fw → 500, the handler failed: TypeError: http.serve: the handler for '/fw' returned None, not an HttpResponse`,
+`http: GET /fw → 500, the handler failed: TypeError: http.serve: the handler for '/fw' returned None, not an HttpResponse or an HttpHangUp`,
 and the test's wait raises the exception at the next turn of the link, with the handler's
-traceback: here `TypeError("http.serve: the handler for '/fw' returned None, not an HttpResponse")`.
+traceback: here `TypeError("http.serve: the handler for '/fw' returned None, not an HttpResponse or an HttpHangUp")`.
+A handler that means the device to get nothing returns `HttpHangUp()`: `None` stays an error, so
+that a handler that forgot to return is not taken for one that hangs up.
 `pytest.fail("no Range header")` in a handler fails the test there, and `pytest.skip` skips it.
 The run goes on, so the test may still look at the device's answer to the `500`. Without a
 board, an `HttpServer` driven directly raises the exception from the `on_data` that ran the
@@ -1154,6 +1158,39 @@ transcript says
 `after=ms(0)` answers at once, as without it. In `tests/test_http_request.py`, ESP-IDF's
 `http_request` prints a response with `after=seconds(2)` no earlier than 2 s after its request;
 it gives up on a reply after 5 s (`SO_RCVTIMEO`).
+
+### A server that hangs up
+
+`HttpHangUp()` ends the connection without a byte of response, as a server, a proxy or a load
+balancer that read the request and gave up on it: served as it is,
+`network.http.serve("/enroll", HttpHangUp())`, or returned by a handler, so that a test can check
+what the firmware does when the connection ends before any response (an `esp_http_client` that
+must report the failure, a retry loop that must not count it as a success, an upload that must
+start again). `how="close"`, the default, ends it with a FIN, which the device reads as the end of
+the stream; `how="reset"` with a RST, which it reads as `ECONNRESET`. With `after` (a `Duration`
+of 0 or more), the end comes that much later on the board's clock than the request came, as
+`HttpResponse.after` writes late, so that the device's own timeout can run first.
+
+The request is kept: it is in `requests` and satisfies `next_request` and `find_request`, as an
+answered one does, and the transcript logs `http: POST /enroll → hung up (close)`, or
+`http: GET /enroll → hung up (reset), after 2 s`. If the device closes or resets the connection
+before an `after` runs out, nothing more happens and the transcript says
+`http: GET /enroll: the connection closed before its hang-up, due at 8 s: nothing written`.
+
+`HttpHangUp` checks its parts where it is made: `ValueError` for any other `how`
+(`HttpHangUp: how is 'close' or 'reset', not 'drop'`) and an `after` below 0
+(`HttpHangUp: after takes a Duration of 0 or more, not -0.001 s`), `TypeError` for an `after`
+that is not a `Duration` (`HttpHangUp: after takes a Duration, as seconds(5), not 5`); `serve`
+raises `TypeError` for `status`, `content_type`, `headers` or `reason` given with one
+(`http.serve: status with an HttpHangUp, which writes no response`).
+
+A hang-up is not a blocked port: [`network.block(port, how="refuse")`](#block-a-tcp-port) refuses the
+SYN, `how="drop"` loses every segment, both before the device has sent a byte; a hang-up comes
+after the server has read the request. Behind TLS (`network.listen(443, network.http, tls=ca)`) a
+reset sends no alert before the RST, and a close ends the connection as an answered one does. In
+`tests/test_http_request.py`, ESP-IDF's `http_request` prints `Last read return=0` for a close and
+`Last read return=-1 errno=104` for a reset, and with `after=seconds(8)` its own 5 s timeout ends
+the read first (`errno=11`).
 
 These requests are refused, logged as `http: refused a request: 400 Bad Request` (with their own
 status), answered with the reason in lower case as the body, and not kept in `requests`:
@@ -1740,7 +1777,11 @@ broker and 80 the HTTP server; another service there raises
 `TCP port 80 already has a service`). A service implements `accept(peer, write, close)`, returning
 a connection with
 `on_data(bytes)` and `on_close()`. `peer` is the device's `(address, port)`; `write(bytes)` sends
-back and `close()` closes. `network.ip.udp[port]` accepts a datagram service implementing
+back and `close()` (a `StreamClose`) closes with a FIN behind what was written;
+`close(reset=True)` resets the connection instead: what is written but not yet sent or
+acknowledged is dropped, a RST goes at once, and the transcript logs `reset by its service`; once
+both ends have sent their FIN, a reset sends nothing and the connection ends `closed`. A
+service that never resets may take `close` as a plain callable of no arguments. `network.ip.udp[port]` accepts a datagram service implementing
 `on_datagram(bytes) -> bytes | None`. These callbacks must not block or use wall-clock waits.
 
 Wrap any stream service in TLS by supplying a per-test CA:
