@@ -21,8 +21,8 @@ the same indirect parametrisation. See [the user contract](serial-backend-user.m
    Missing serial options fail with the services requirement message. A cached port different
    from the explicit selection (including `None`) fails with `CACHED_PORT_CONFLICT`, without
    attributing the change to `ESPPORT`. First `serial_chip` checks the profile: the classic ESP32,
-   or a chip `SERIAL_CHIPS` maps to the profile's `console`, `esp32s3` to `usb-serial-jtag`, goes
-   on; a C3 or C6 with that console skips, and any other chip fails
+   or a chip `SERIAL_CHIPS` maps to the profile's `console`, `esp32s3` and `esp32c3` to
+   `usb-serial-jtag`, goes on; a C6 with that console skips, and any other chip fails
    ([Failure modes](#failure-modes)). It validates the build and optional `app_recording`
    once per item.
    `pytest_fixture_setup` runs it before pytest-embedded's `app` fixture, so an explicitly requested
@@ -218,8 +218,8 @@ from pytest-embedded propagate with their original messages.
 | `serial: {build} holds no ESP-IDF or PlatformIO build: no flasher_args.json and no firmware.bin` | Missing build metadata |
 | `serial: {build} …` from a PlatformIO build | The PlatformIO checks of [builds](builds-technical.md#failure-modes): files, images, table, chip and flash encryption |
 | `serial: {build} is built for {target}; the board's chip is {chip}: build for {chip} or choose a board profile with that chip` | A build for another chip than the profile's; `check_artifact` and `PlatformioApp` load the build for the profile's chip |
-| `serial: the board profile {name} carries an {title} with its console on UART0; the serial backend runs the classic ESP32, and the ESP32-S3 with its console on USB-Serial/JTAG` | A profile whose `chip` is not `esp32` and whose console is not one `SERIAL_CHIPS` gives the chip; `serial_chip` in `esp32tl/pytest_plugin.py`, from `serial_artifact`, fails the test before the port is checked or the build loaded |
-| `serial: the board profile {name} has its console on the {title}'s USB-Serial/JTAG controller, which the serial backend has been validated on with the ESP32-S3 only` | A profile for the ESP32-C3 or ESP32-C6 with `console = "usb-serial-jtag"`; `serial_chip` skips the test, before the port is opened |
+| `serial: the board profile {name} carries an {title} with its console on UART0; the serial backend runs the classic ESP32, and the ESP32-S3 and the ESP32-C3 with their console on USB-Serial/JTAG` | A profile whose `chip` is not `esp32` and whose console is not one `SERIAL_CHIPS` gives the chip; `serial_chip` in `esp32tl/pytest_plugin.py`, from `serial_artifact`, fails the test before the port is checked or the build loaded |
+| `serial: the board profile {name} has its console on the {title}'s USB-Serial/JTAG controller, which the serial backend has been validated on with the ESP32-S3 and the ESP32-C3 only` | A profile for the ESP32-C6 with `console = "usb-serial-jtag"`; `serial_chip` skips the test, before the port is opened |
 | `serial: {build} asks for flash encryption, which serial does not support` | Encryption outside the supported workflow |
 | `serial: {build} is not a finished build, missing {files}` | Missing files listed for flashing |
 | `serial: {build}/flasher_args.json names no app image` | No `app.file` entry |
@@ -278,13 +278,13 @@ factory image, and an `app_recording` of `firmware.bin`'s hash;
 `test_an_image_for_another_chip_is_refused_by_its_name` and
 `test_a_build_that_enables_flash_encryption_or_secure_boot_is_refused` cover the checks on serial.
 A PlatformIO build on a board is in [physical validation](#a-platformio-build).
-`test_an_s3_with_its_console_on_usb_serial_jtag_runs_on_the_serial_backend` runs the fixture chain
-with an S3 build and a profile with `console = "usb-serial-jtag"`;
-`test_a_usb_serial_jtag_console_on_a_chip_not_validated_on_hardware_skips` checks the C3's and
-the C6's skip, verbatim, and that the port is never opened; and
+`test_an_s3_or_c3_with_its_console_on_usb_serial_jtag_runs_on_the_serial_backend` runs the
+fixture chain with an S3 build and with a C3 build, each with a profile with
+`console = "usb-serial-jtag"`; `test_a_usb_serial_jtag_console_on_a_chip_not_validated_on_hardware_skips`
+checks the C6's skip, verbatim, and that the port is never opened; and
 `test_the_serial_backend_refuses_a_board_with_another_chip` in `tests/test_pytest_plugin.py` the
 S3 with its console on UART0. `tests/test_usb_console.py` holds the tests that ran on a real
-ESP32-S3 ([physical validation](#an-esp32-s3-on-its-usb-serialjtag-port)).
+ESP32-S3 and ESP32-C3 ([physical validation](#physical-validation)).
 
 ### The backend comparison
 
@@ -388,6 +388,31 @@ esptool's own USB-Serial/JTAG reset to connect, the RTS pulse that resets the ch
 re-enumeration, the whole boot on the console, the 3 s stop in the ROM's banner after a reset in
 the test, and the two times the chip stopped answering after the port was closed and opened
 again, until it was unplugged.
+
+#### An ESP32-C3 on its USB-Serial/JTAG port
+
+On 2026-11-26, a user-identified ESP32-C3 board with its native USB alone connected as
+`/dev/cu.usbmodem1101` (USB 303a:1001). esptool identified an ESP32-C3 (QFN32) revision v0.4, MAC
+`44:7b:30:88:60:d8`, 4 MB of embedded flash (XMC); its flash was overwritten and not restored. The
+image was `firmware/console_repl_usb` built for the C3 in the pinned v5.3.6 container
+(`firmware/build.sh --chips console_repl_usb@esp32c3`); the profile was
+`tests/boards/esp32-c3-usb.toml`.
+
+```sh
+.venv/bin/pytest -p no:cacheprovider tests/test_usb_console.py -k esp32c3 \
+  --esp32tl-backend serial --port /dev/cu.usbmodem1101 -rA
+```
+
+Result: **2 passed, 2 skipped in 10.59 s**, autoflash enabled, the skips those of the S3's run;
+27 sessions in a row, 2 passed and 2 skipped each, about 10.6 s each. Host: macOS 27.0.1 arm64,
+Python 3.14.6, pytest-embedded and pytest-embedded-idf 2.9.3, esptool 5.7.0.
+
+| App binary | SHA-256 |
+|---|---|
+| `firmware/console_repl_usb/build-esp32c3/console_repl_usb.bin` | `9b14423031c42857a6bd716a885123a8d51ede3f91ac91b7d2c5dde6469df1f3` |
+
+The reset, boot and reopening measurements are in
+[the decision](../decisions/harness.md#the-serial-backend-runs-an-esp32-c3-through-its-usb-serialjtag-port-too).
 
 #### A PlatformIO build
 

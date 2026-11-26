@@ -41,13 +41,12 @@ every flash file, and request no flash encryption. A PlatformIO build needs the 
 flash encryption in its `config/sdkconfig.json` when it has one. Encrypted firmware needs
 provisioning and key/efuse management that this backend does not implement or validate; it is
 deliberately outside this milestone. No runner or ROM ELF is needed for serial. The chips it runs
-are the classic ESP32, and the ESP32-S3 with its console on USB-Serial/JTAG
+are the classic ESP32, and the ESP32-S3 and the ESP32-C3 with their console on USB-Serial/JTAG
 ([below](#a-board-whose-console-is-usb-serialjtag)). A board profile for another chip with its
 console on UART0 is refused before the port is opened:
-`serial: the board profile esp32-s3-devkitc carries an ESP32-S3 with its console on UART0; the serial backend runs the classic ESP32, and the ESP32-S3 with its console on USB-Serial/JTAG`.
-One for the ESP32-C3 or ESP32-C6 with its console on USB-Serial/JTAG skips, before the port is
-opened:
-`serial: the board profile my-c3-board has its console on the ESP32-C3's USB-Serial/JTAG controller, which the serial backend has been validated on with the ESP32-S3 only`.
+`serial: the board profile esp32-s3-devkitc carries an ESP32-S3 with its console on UART0; the serial backend runs the classic ESP32, and the ESP32-S3 and the ESP32-C3 with their console on USB-Serial/JTAG`.
+One for the ESP32-C6 with its console on USB-Serial/JTAG skips, before the port is opened:
+`serial: the board profile my-c6-board has its console on the ESP32-C6's USB-Serial/JTAG controller, which the serial backend has been validated on with the ESP32-S3 and the ESP32-C3 only`.
 
 A PlatformIO build is flashed as esp32sim runs it: `firmware.factory.bin` at `0x0`, or else
 `bootloader.bin` at the chip's bootloader offset (`0x1000` on the classic ESP32, `0x0` on the S3,
@@ -188,7 +187,7 @@ cleanup; the bound does not cover its calls or a blocked USB driver.
 
 ## A board whose console is USB-Serial/JTAG
 
-An ESP32-S3 board without a USB-to-UART bridge has one port, the chip's own USB-Serial/JTAG
+An ESP32-S3 or ESP32-C3 board without a USB-to-UART bridge has one port, the chip's own USB-Serial/JTAG
 device (USB 303a:1001, `/dev/cu.usbmodem…` on macOS, `/dev/ttyACM…` on Linux), and its profile
 says `console = "usb-serial-jtag"` ([board profiles](board-profiles-user.md#a-console-on-usb-serialjtag)).
 Pass that port as `--port`; the test is the one that runs on esp32sim:
@@ -208,7 +207,12 @@ not guaranteed, is in [the decision](../decisions/harness.md#the-serial-backend-
 - twice, a measuring script that closed the port and opened it again left the chip answering
   nothing, esptool included, until the board was unplugged and plugged in again; the test runs did
   not meet it;
-- UART0 on such a board was not measured, and the ESP32-C3 not at all.
+- UART0 on such a board was not measured.
+
+An ESP32-C3 runs the same way (`-k esp32c3`). On a real one the prompt came 1.0 s after each
+reset, the ROM's banner with no pause, and closing and opening the port again did not stop the
+chip ([the decision](../decisions/harness.md#the-serial-backend-runs-an-esp32-c3-through-its-usb-serialjtag-port-too)):
+the S3's `timeout` of 10 s after a reset is more than it needs. Its UART0 was not measured either.
 
 An ESP32-C6 with its console on USB-Serial/JTAG still skips. On a real one, with the backend
 fixed for it, the tests passed, but in 4 of 10 sessions a test lost the board: the chip left the

@@ -570,9 +570,10 @@ def serial_artifact(request: pytest.FixtureRequest) -> Artifact:
 
 
 # The chips the serial backend runs besides the classic ESP32, each with the console it has been
-# measured with on a real board: the ESP32-S3 on its USB-Serial/JTAG port (docs/decisions/
-# harness.md, "The serial backend runs an ESP32-S3 through its USB-Serial/JTAG port").
-SERIAL_CHIPS = {"esp32s3": boards.USB_SERIAL_JTAG}
+# measured with on a real board: the ESP32-S3 and the ESP32-C3 on their USB-Serial/JTAG port
+# (docs/decisions/harness.md, "The serial backend runs an ESP32-S3 through its USB-Serial/JTAG
+# port", "The serial backend runs an ESP32-C3 through its USB-Serial/JTAG port too").
+SERIAL_CHIPS = {"esp32s3": boards.USB_SERIAL_JTAG, "esp32c3": boards.USB_SERIAL_JTAG}
 
 
 def serial_chip(profile: BoardProfile) -> None:
@@ -586,13 +587,13 @@ def serial_chip(profile: BoardProfile) -> None:
         skip_at_the_test(
             f"serial: the board profile {profile.name} has its console on the {title}'s"
             " USB-Serial/JTAG controller, which the serial backend has been validated on with the"
-            " ESP32-S3 only"
+            " ESP32-S3 and the ESP32-C3 only"
         )
     backend_failed(
         BackendError(
             f"the board profile {profile.name} carries an {title} with its console on UART0;"
-            " the serial backend runs the classic ESP32, and the ESP32-S3 with its console on"
-            " USB-Serial/JTAG"
+            " the serial backend runs the classic ESP32, and the ESP32-S3 and the ESP32-C3 with"
+            " their console on USB-Serial/JTAG"
         ),
         Serial.name,
     )

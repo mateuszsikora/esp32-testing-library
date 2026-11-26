@@ -4396,10 +4396,12 @@ the flashing path, and on many devkits a console on USB-Serial/JTAG, which the s
 `Wire` on UART0 does not read.
 
 The ESP32-S3 with its console on USB-Serial/JTAG has since been measured and runs
-([the serial backend runs an ESP32-S3 through its USB-Serial/JTAG port](#the-serial-backend-runs-an-esp32-s3-through-its-usb-serialjtag-port));
-a C3 or C6 with that console skips. The refusal stays for a console on UART0 on the S3, C3 and C6:
-`serial: the board profile {name} carries an {title} with its console on UART0; the serial backend
-runs the classic ESP32, and the ESP32-S3 with its console on USB-Serial/JTAG`.
+([the serial backend runs an ESP32-S3 through its USB-Serial/JTAG port](#the-serial-backend-runs-an-esp32-s3-through-its-usb-serialjtag-port)),
+and so has the ESP32-C3
+([too](#the-serial-backend-runs-an-esp32-c3-through-its-usb-serialjtag-port-too)); a C6 with that
+console skips. The refusal stays for a console on UART0 on the S3, C3 and C6: `serial: the board
+profile {name} carries an {title} with its console on UART0; the serial backend runs the classic
+ESP32, and the ESP32-S3 and the ESP32-C3 with their console on USB-Serial/JTAG`.
 
 An ESP32-C6 with its console on USB-Serial/JTAG was measured on 2026-11-26 and still skips: an
 ESP32-C6FH4 (QFN32) rev v0.2 with its native USB alone, on macOS, port `/dev/cu.usbmodem1101` (USB
@@ -4425,8 +4427,8 @@ So the C6 keeps the skip: a backend that leaves the board needing to be plugged 
 sessions is not one a test can rely on. The C6 has no UART bridge on that board, so UART0 was not
 measured.
 
-**Not yet:** a real board of each chip, and of each console, to validate on: the ESP32-C3, and a
-C6 whose sessions do not stop it, on another host or another board.
+**Not yet:** a real board of each chip, and of each console, to validate on: a C6 whose sessions
+do not stop it, on another host or another board, and a console on UART0 on the S3, C3 and C6.
 
 ## Project defaults are esp32tl ini options that the markers override
 
@@ -4831,15 +4833,46 @@ pytest-embedded and esp32tl runs did not meet it, but a test session that opens 
 may. Opening the port also reset the chip once. A board whose console is USB-Serial/JTAG and whose
 UART0 has a bridge was not measured on UART0.
 
-**Not yet:** the C3 and the C6 with a USB-Serial/JTAG console skip on the serial backend
-(`serial: the board profile {name} has its console on the {title}'s USB-Serial/JTAG controller,
-which the serial backend has been validated on with the ESP32-S3 only`), until a board of each is
-measured as above; the S3, C3 and C6 with a console on UART0 are still refused, as
+**Not yet:** the C6 with a USB-Serial/JTAG console skips on the serial backend (`serial: the
+board profile {name} has its console on the {title}'s USB-Serial/JTAG controller, which the serial
+backend has been validated on with the ESP32-S3 and the ESP32-C3 only`), until a board of it is
+measured as above and does not leave the bus; the C3 has been
+([below](#the-serial-backend-runs-an-esp32-c3-through-its-usb-serialjtag-port-too)). The S3, C3
+and C6 with a console on UART0 are still refused, as
 [the serial backend runs the classic ESP32 only](#the-serial-backend-runs-the-classic-esp32-only)
 says.
 
 **Rejected:** skipping the S3 with a USB console too, which the measurement does not call for; and
 reopening the port after each reset to follow a re-enumeration, which the S3 does not do.
+
+## The serial backend runs an ESP32-C3 through its USB-Serial/JTAG port too
+
+Status: decided (#236)
+
+`--esp32tl-backend serial` takes a board profile whose chip is `esp32c3` and whose console is
+`usb-serial-jtag`, as it takes the S3's. Measured on 2026-11-26 on an ESP32-C3 (QFN32) rev v0.4
+with 4 MB of embedded flash, its native USB alone, on macOS, port `/dev/cu.usbmodem1101` (USB
+303a:1001), esptool 5.7.0 and pytest-embedded 2.9.3, with `console_repl_usb` built for the C3, on
+a backend that reads the port's input away before its first reset (`discard_input`,
+[the serial backend runs the classic ESP32 only](#the-serial-backend-runs-the-classic-esp32-only)):
+
+- 27 sessions of the C3's tests of `tests/test_usb_console.py` on `--esp32tl-backend serial --port
+  /dev/cu.usbmodem1101` passed, each with
+  `test_the_usb_console_takes_a_command_and_comes_back_after_a_reset` and
+  `test_a_tap_of_the_usb_console_records_both_ways`; the other two skip on serial, which taps no
+  UART0 and switches no power. None lost the board.
+- Reset: an RTS pulse of 0.1 s resets the chip once (`rst:0x15 (USB_UART_CHIP_RESET)`), and the
+  port stays, the same device node, read on through the descriptor opened before. The ROM's
+  banner came within 0.06 s and the prompt 1.0 s after each of three resets in a row; the S3's
+  3 s pause after the banner's first line did not come.
+- Opening the port again: 20 times, a script opened it with pyserial's default DTR and RTS,
+  closed it, opened it with both released and pulsed RTS, and got the prompt each time; esptool
+  connected afterwards. The S3 stopped answering twice so.
+
+The board has no UART bridge, so UART0 was not measured.
+
+**Rejected:** keeping the C3's skip until a C3 board with a UART bridge is measured too, which the
+USB console, the one the skip is about, does not call for.
 
 ## A USB console through TinyUSB is not a console the profile can name
 

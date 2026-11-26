@@ -2807,8 +2807,8 @@ def test_the_serial_backend_refuses_a_board_with_another_chip(
     result.stdout.fnmatch_lines(
         [
             "*serial: the board profile esp32-s3-devkitc carries an ESP32-S3 with its console on"
-            " UART0; the serial backend runs the classic ESP32, and the ESP32-S3 with its console"
-            " on USB-Serial/JTAG*"
+            " UART0; the serial backend runs the classic ESP32, and the ESP32-S3 and the ESP32-C3"
+            " with their console on USB-Serial/JTAG*"
         ]
     )
 
