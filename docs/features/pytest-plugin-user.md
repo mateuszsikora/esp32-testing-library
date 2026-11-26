@@ -1829,6 +1829,16 @@ def test_the_firmware_opens_spp(board):
   the runner then gets `--bt` and the application's ELF. Asked for the first time after it, it
   raises `SourceError: bluetooth: the board is on already: give an interface its source before
   board.power_on()`.
+- `board.bluetooth.add_elf(path)` before `board.power_on()` names the ELF of another image the
+  firmware may boot, one an OTA update writes into another app partition, built from other
+  sources or at another version: the firmware's controller then starts in that app too. `path`,
+  relative to the test file's directory, is the ELF or a build directory, whose application ELF it
+  takes; it returns the ELF's resolved path, and `board.bluetooth.elfs` lists them, each once. The backend passes
+  the runner one more `--bt` for each ([esp32sim backend](esp32sim-backend-user.md#an-app-from-another-slot-or-another-build-an-ota-update)).
+  After `board.power_on()` it raises as `board.bluetooth` does then; a file that is not an ELF
+  raises `ValueError: bluetooth.add_elf: PATH is not an ELF file`, and a directory that is no
+  build a `BuildError` that starts `bluetooth.add_elf: `. The same image in another slot
+  needs nothing: it is the build's ELF.
 - A build with no ELF of the application: `board.bluetooth` raises `BackendError: bluetooth: BUILD
   holds no ELF of the application, whose symbols the runner's --bt needs` where the test body
   reaches it, and the `bt` fixture is an error at setup with the same message after `esp32sim: `

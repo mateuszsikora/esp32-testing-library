@@ -13,6 +13,10 @@ events go into the run log as they happen, and into the report.
 
 `tap(path)` records the HCI between the firmware's host and its controller, every packet both ways
 at the time it crossed the link, for a btsnoop file the backend writes at the end of the run.
+
+`add_elf(path)` names the ELF of another image the firmware may boot, such as the one an OTA
+update writes: the runner's controller hooks follow the app the bootloader starts, by the SHA-256
+of its ELF, which each image records (`--bt`, repeated).
 """
 
 import os
@@ -22,7 +26,7 @@ from pathlib import Path
 
 from bumble import hci
 
-from esp32tl import recording
+from esp32tl import build, recording
 from esp32tl.backends.clock import seconds
 from esp32tl.bluetooth.air import Air
 from esp32tl.bluetooth.controller import Controller, Pairing, UnknownCommand
@@ -87,6 +91,8 @@ class Bluetooth(Interface):
         self.directory = Path.cwd() if directory is None else directory
         self.files = {} if files is None else files
         self.tapped: Tap | None = None
+        # The ELFs of the other images the firmware may boot, the application's not among them.
+        self.elfs: list[Path] = []
         self.address = address
         self._latency = latency
         self._lock = threading.Lock()
@@ -157,6 +163,45 @@ class Bluetooth(Interface):
         if self.log is not None:
             self.log.test(0, f"{NAME}.tap({str(path)!r})")
         return self.tapped
+
+    def add_elf(self, path: str | os.PathLike[str]) -> Path:
+        """The ELF of another image the firmware may boot, before `board.power_on()`: one an OTA
+        update writes into another app partition, built from other sources or at another
+        version. `path`, relative to the test file's directory, is the ELF, or a build directory,
+        ESP-IDF's or PlatformIO's, whose application ELF it takes. The firmware's controller
+        hooks are over the symbols of the ELF of the app the bootloader starts, the one whose
+        SHA-256 its image records; without this, an app built from another ELF than the build's
+        gets no Bluetooth controller. Puts the guest's controller on the air, as `use` does.
+        Returns the ELF's resolved path, as `elfs` keeps it; an ELF already there is not added
+        again."""
+        self.asked(Request(NAME, source="model"))
+        given = self.directory / path
+        elf = given
+        if given.is_dir():
+            try:
+                found = build.load(str(given), given, chip=self.chip).elf
+            except build.BuildError as error:
+                raise build.BuildError(f"{NAME}.add_elf: {error}") from error
+            if found is None:
+                raise FileNotFoundError(f"{NAME}.add_elf: the build in {given} has no ELF")
+            elf = found
+        try:
+            with elf.open("rb") as file:
+                magic = file.read(4)
+        except OSError as error:
+            raise FileNotFoundError(
+                f"{NAME}.add_elf: cannot read {elf}: {error.strerror}"
+            ) from error
+        if magic != b"\x7fELF":
+            raise ValueError(f"{NAME}.add_elf: {elf} is not an ELF file")
+        self.use()
+        elf = elf.resolve()
+        with self._lock:
+            if elf not in self.elfs:
+                self.elfs.append(elf)
+        if self.log is not None:
+            self.log.test(0, f"{NAME}.add_elf({str(path)!r})")
+        return elf
 
     @property
     def used(self) -> bool:

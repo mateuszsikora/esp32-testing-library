@@ -1,0 +1,6 @@
+# bt_spp_ota_v2: firmware/bt_spp_ota built again, on top of its own sdkconfig.defaults
+# (firmware/build.sh names both), with the update partition holding bt_spp_ota's image, which its
+# first boot copies into ota_1: the app that then runs from ota_1 is a build of another ELF than
+# this build's.
+CONFIG_BT_SPP_OTA_UPDATE=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_v2.csv"

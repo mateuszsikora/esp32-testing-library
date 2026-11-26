@@ -43,7 +43,8 @@ P4_CONTAINER=espressif/idf:$P4_IDF_VERSION@sha256:b9f2d6ea1c19e0c9f7959bdb74a9e3
 # The ESP32-S31 is a target of ESP-IDF v6.1 on, as a preview.
 S31_IDF_VERSION=v6.1
 S31_CONTAINER=espressif/idf:$S31_IDF_VERSION@sha256:81893c71bb5e570088901f21def8684c25cd2a9020281bd01b843a7655edb18c
-IMAGES="hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake reset_reasons deep_sleep bt_spp_initiator bt_spp_initiator_psram hello_world_8mb uart_rate_switch"
+# bt_spp_ota_v2 last, four places after bt_spp_ota: CI's four idf shards then build both in one.
+IMAGES="hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake reset_reasons deep_sleep bt_spp_initiator bt_spp_ota bt_spp_initiator_psram hello_world_8mb uart_rate_switch bt_spp_ota_v2"
 # The images of the other chips: what their tests in tests/test_chips.py run.
 CHIP_IMAGES=
 for chip in esp32s3 esp32c3 esp32c6; do
@@ -166,6 +167,7 @@ project_of() {
 	nvs_reader) echo "$PWD/firmware/nvs_reader" ;;
 	persistence) echo "$PWD/firmware/persistence" ;;
 	ota_state) echo "$PWD/firmware/ota_state" ;;
+	bt_spp_ota | bt_spp_ota_v2) echo "$PWD/firmware/bt_spp_ota" ;;
 	timer_wake) echo "$PWD/firmware/timer_wake" ;;
 	reset_reasons) echo "$PWD/firmware/reset_reasons" ;;
 	sd_remount) echo "$PWD/firmware/sd_remount" ;;
@@ -300,6 +302,17 @@ json_string() {
 	printf '"%s"' "$(printf '%s' "$1" | sed 's/[\\"]/\\&/g')"
 }
 
+# bt_spp_ota_v2 flashes bt_spp_ota's image, from beside its own build directory: bt_spp_ota is
+# built first when it is not there, as in a shard of CI's that has bt_spp_ota_v2 without it.
+case " $* " in
+*" bt_spp_ota_v2 "*)
+	case " $* " in
+	*" bt_spp_ota "*) ;;
+	*) [ -f "$out/bt_spp_ota/build/esp32tl-built" ] || set -- bt_spp_ota "$@" ;;
+	esac
+	;;
+esac
+
 for entry in "$@"; do
 	# IMAGE@CHIP for --chips, IMAGE otherwise; the build directory names a chip other than the
 	# classic ESP32.
@@ -333,7 +346,7 @@ for entry in "$@"; do
 	# firmware/<image>/sdkconfig.defaults, read after the project's; ESP-IDF's
 	# hello_world has none of its own.
 	case $family:$image in
-	firmware:pppos_client | firmware:bt_spp_initiator_psram)
+	firmware:pppos_client | firmware:bt_spp_initiator_psram | firmware:bt_spp_ota_v2)
 		defaults="$project/sdkconfig.defaults;$PWD/firmware/$image/sdkconfig.defaults"
 		;;
 	chips:hello_world_psram | *:hello_world_8mb | chips:hello_world_rev1)

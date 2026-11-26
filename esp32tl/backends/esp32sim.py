@@ -188,6 +188,17 @@ CHIP_GAPS: dict[str, dict[str, str]] = {
 }
 
 
+# The lines of the runner's log the report ends with, from where each starts: esp32sim's Wi-Fi
+# diagnostics, and the runner's when the Bluetooth hooks follow an app the bootloader started from
+# another ELF than the build's, or find none for it, or keep the build's for a first app built from
+# another file than its ELF (`hci::Images`, `bluetooth.add_elf`).
+RADIO_DIAGNOSTICS = (
+    "[emu] wifi",
+    ": the app the bootloader started first was built from an ELF",
+    "esp32tl-runner: Bluetooth controller hooks from ",
+    "esp32tl-runner: the app the bootloader started was built from an ELF",
+)
+
 # The runner's `stats` `end` when the firmware called `esp_bt_controller_init` under `--no-bt`
 # (protocol 5.9 and §9).
 NO_BT_END = "bt_controller"
@@ -357,15 +368,16 @@ def runner_command(
     at the supplied offsets, in order. A `wifi` with an access point puts it, and the networks
     around, on the runner's air, with the network behind it on the link. A `bluetooth` the test uses
     makes the runner forward the guest's HCI on the link (`--bt`), with the symbols of the
-    application's ELF, `app.elf`; one it does not use gives the runner the ELF as `--no-bt`, on a
-    chip esp32sim models Bluetooth on, so that the firmware's call to `esp_bt_controller_init`
-    ends the run. A `realtime` run is paced to wall time, for a real device at the
-    far end of a route. `flash_out` is the file the runner writes the whole flash to when the link
-    asks, and at the end of the run. `console` is the board profile's: `usb-serial-jtag` makes the
-    chip's USB-Serial/JTAG controller the console, on stdout and on the link, in place of UART0
-    (`--console-port usb`). `parent_fd` is the descriptor, inherited by the runner, of the read end
-    of a pipe whose write end the backend holds: the runner ends the run once it reads end of file
-    on it, when the backend's process has ended (`--parent-fd`, protocol §9)."""
+    application's ELF, `app.elf`, then of each other ELF of `bluetooth.add_elf`; one it does not
+    use gives the runner the ELF as `--no-bt`, on a chip esp32sim models Bluetooth on, so that
+    the firmware's call to `esp_bt_controller_init` ends the run. A `realtime` run is paced to
+    wall time, for a real device at the far end of a route. `flash_out` is the file the runner
+    writes the whole flash to when the link asks, and at the end of the run. `console` is the
+    board profile's: `usb-serial-jtag` makes the chip's USB-Serial/JTAG controller the console, on
+    stdout and on the link, in place of UART0 (`--console-port usb`). `parent_fd` is the
+    descriptor, inherited by the runner, of the read end of a pipe whose write end the backend
+    holds: the runner ends the run once it reads end of file on it, when the backend's process
+    has ended (`--parent-fd`, protocol §9)."""
     command = [
         *(str(runner), "--chip", app.chip, "--rom", str(rom)),
         *("--max-seconds", str(max_seconds)),
@@ -392,6 +404,10 @@ def runner_command(
         command += wifi.runner_args()
     if bluetooth is not None and bluetooth.used:
         command += ["--bt", str(app.elf)]
+        own = app.elf.resolve() if app.elf is not None else None
+        for elf in bluetooth.elfs:
+            if elf != own:
+                command += ["--bt", str(elf)]
     elif (
         bluetooth is not None
         and app.elf is not None
@@ -1523,16 +1539,19 @@ class Esp32Sim(Board):
         self._close_link()
         self._waiter.join()
         # The runner and waiter have finished writing. The asynchronous log forwarder can
-        # still lag behind, so keep radio diagnostics directly from the complete source file.
+        # still lag behind, so keep radio diagnostics directly from the complete source file:
+        # esp32sim's Wi-Fi lines, and the runner's on the Bluetooth hooks of an app the
+        # bootloader started from another ELF than the build's (`bluetooth.add_elf`).
         try:
             with open(self.process._logfile, encoding="utf-8", errors="replace") as log:
                 # stdout and stderr share this file: the guest's last console fragment
                 # need not end with a newline before the runner's first diagnostic.
                 self._radio_diagnostics = [
-                    "[emu] wifi" + suffix.rstrip("\r\n")
+                    marker + suffix.rstrip("\r\n")
                     for line in log
-                    for _, marker, suffix in [line.partition("[emu] wifi")]
-                    if marker
+                    for marker in RADIO_DIAGNOSTICS
+                    for _, found, suffix in [line.partition(marker)]
+                    if found
                 ]
         except OSError:
             # Optional diagnostics must not prevent closing the process or writing taps.

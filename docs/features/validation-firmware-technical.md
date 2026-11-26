@@ -157,8 +157,8 @@ the containers, and once inside each, which builds. With `IDF_LOCAL=1` it runs o
 
      runs, with `--preview` first for `esp32s31`, which ESP-IDF v6.1 builds as a preview target,
      and with `-DSDKCONFIG_DEFAULTS=...` before `build` for the images that add options of their
-     own: `pppos_client` and `bt_spp_initiator_psram` (the project's `sdkconfig.defaults`, then
-     `firmware/IMAGE/sdkconfig.defaults`), `hello_world_psram` (`firmware/hello_world_psram/sdkconfig.defaults`
+     own: `pppos_client`, `bt_spp_initiator_psram` and `bt_spp_ota_v2` (the project's
+     `sdkconfig.defaults`, then `firmware/IMAGE/sdkconfig.defaults`), `hello_world_psram` (`firmware/hello_world_psram/sdkconfig.defaults`
      alone: ESP-IDF's `hello_world` has none; ESP-IDF reads `sdkconfig.defaults.esp32s3` after it
      for the S3, `tools/cmake/kconfig.cmake`), `hello_world_rev1` (its own `sdkconfig.defaults`) and
      `hello_world_8mb`, on every chip (`firmware/hello_world_8mb/sdkconfig.defaults` alone).
@@ -174,9 +174,11 @@ next build is still incremental; the marker, removed first, is what says it fini
 
 The Makefile's `firmware` target runs `FIRMWARE_OUT= firmware/build.sh`; the pattern rule
 `firmware/%/build/esp32tl-built` runs `FIRMWARE_OUT= firmware/build.sh $*`, and `test` depends on
-`$(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)` with `FIRMWARE_IMAGES := hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake reset_reasons deep_sleep bt_spp_initiator bt_spp_initiator_psram hello_world_8mb uart_rate_switch`. `determinism` depends on
+`$(FIRMWARE_IMAGES:%=firmware/%/build/esp32tl-built)` with `FIRMWARE_IMAGES := hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake reset_reasons deep_sleep bt_spp_initiator bt_spp_initiator_psram bt_spp_ota bt_spp_ota_v2 hello_world_8mb uart_rate_switch`. `determinism` depends on
 the markers of `nmea_reader`, `pppos_client`, `mqtt_session`, `http_request` and `bt_spp_initiator`,
-and of the `position_tracker` example. The rule has no prerequisites, so make rebuilds
+and of the `position_tracker` example. `firmware/bt_spp_ota_v2/build/esp32tl-built` has
+`firmware/bt_spp_ota/build/esp32tl-built` as an order-only prerequisite, so that `make -j` builds
+`bt_spp_ota` first. Otherwise the rule has no prerequisites, so make rebuilds
 an image only when its marker is missing: an edit to `firmware/nmea_reader/` needs `make firmware`, or
 `firmware/build.sh nmea_reader`, before `make test` sees it.
 
@@ -617,6 +619,48 @@ pin since #180. Measured there on 2026-11-13, the same test passes: the authenti
 the channel at 1.437 s, `speed(1.272723s ~ 4.292856s): 298.953674 kbit/s`, and 423 packets from the
 host, 432 to it, the figures of the local build of that change the week before.
 
+## `bt_spp_ota` and `bt_spp_ota_v2`
+
+`project_of` maps both to `firmware/bt_spp_ota`. `main/CMakeLists.txt` compiles the example's
+`main.c`, `app_spp_msg_prs.c`, `app_spp_msg_set.c` and `console_uart.c` from
+`$IDF_PATH/examples/bluetooth/bluedroid/classic_bt/bt_spp_initiator/main` with the project's own
+`main.c`, the example's `main.c` with `app_main=spp_initiator_main` defined; `main/Kconfig.projbuild`
+sources the example's for its options and adds `CONFIG_BT_SPP_OTA_UPDATE`. The project's
+`sdkconfig.defaults` repeats the example's, which a project of its own does not read, and selects
+`partitions.csv` and a 4 MB flash.
+
+`main.c` decides from `esp_reset_reason()` and the running partition's subtype: `ESP_RST_DEEPSLEEP`
+runs `spp_initiator_main`, which initialises NVS itself; any other reason initialises NVS, and on
+`ota_0` copies an image to `esp_ota_get_next_update_partition(NULL)` (`esp_image_verify` for its
+length, `esp_ota_begin`, `esp_ota_write` in 4096-byte chunks, `esp_ota_end`,
+`esp_ota_set_boot_partition`), then starts and stops the controller
+(`esp_bt_controller_mem_release(ESP_BT_MODE_BLE)`, `esp_bt_controller_init` with
+`BT_CONTROLLER_INIT_CONFIG_DEFAULT()`, `esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT)`, then
+`esp_bt_controller_disable` and `esp_bt_controller_deinit`) and calls `esp_restart()`; elsewhere it
+starts and stops the controller and calls `esp_deep_sleep(100000)`. The image it copies is its own
+partition's, or with `CONFIG_BT_SPP_OTA_UPDATE` the data partition `update`, subtype `0x40`. The
+copy comes before the controller: esp32sim's `install` writes the trampoline into the flash over
+`esp_bt_controller_init` (`esp-soc/src/ble/vhci.rs:177-200`), and the flash keeps it until
+`reboot()`, so that a read of the running partition after it finds other bytes than the image's
+SHA-256 covers, and `esp_image_verify` returns `ESP_ERR_IMAGE_INVALID` (0x2002). A build that
+started the controller first boot-looped on it.
+
+`bt_spp_ota_v2`'s `sdkconfig.defaults` sets `CONFIG_BT_SPP_OTA_UPDATE=y` and
+`CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_v2.csv"`. Then `main/CMakeLists.txt` copies
+`${CMAKE_BINARY_DIR}/../../bt_spp_ota/build/bt_spp_ota.bin` and `.elf` into
+`${CMAKE_BINARY_DIR}/update/` with `configure_file(... COPYONLY)`, failing with `FATAL_ERROR` when
+either is missing, and calls `esptool_py_flash_to_partition(flash "update" ...)`, which puts the
+image in `flasher_args.json` at the partition's offset, `0x320000`, relative to the build
+directory. The copy keeps the image and its ELF together in the build: ESP-IDF's builds are not
+reproducible (the compile time is in `esp_app_desc_t`), and CI builds the images in shards,
+`bt_spp_ota` possibly twice, so a test that named `firmware/bt_spp_ota/build/bt_spp_ota.elf` could
+get another build's ELF than the image `update` holds. They go in `update/` and not at the top of
+the build directory because pytest-embedded's `IdfApp._get_elf_file` takes the first `.elf` that
+`os.listdir` returns for the application's. `build.sh`, in the container, puts `bt_spp_ota`
+before `bt_spp_ota_v2` in the list it builds when `bt_spp_ota_v2` is in it, `bt_spp_ota` is not,
+and `$out/bt_spp_ota/build/esp32tl-built` is missing. CI's firmware tarball takes
+`build/update/*.bin` and `*.elf` along ([CI](../cicd.md)).
+
 ## `sd_remount`
 
 `firmware/sd_remount/main/main.c` depends on `esp_driver_spi`, `fatfs` and `sdmmc`, with the
@@ -902,7 +946,7 @@ top of each build directory, `config/sdkconfig.json`, and the `.bin` and `.elf` 
 |---|---|---|---|
 | `IDF_VERSION` | script constant | `v5.3.6` | the ESP-IDF tag of the container |
 | `CONTAINER` | script constant | `espressif/idf:$IDF_VERSION@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070` | the image the build runs in, pinned by digest (a multi-arch index) |
-| `IMAGES` | script constant | `hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake reset_reasons deep_sleep bt_spp_initiator bt_spp_initiator_psram hello_world_8mb uart_rate_switch` | the images, in build order; `project_of` maps each to its project |
+| `IMAGES` | script constant | `hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake reset_reasons deep_sleep bt_spp_initiator bt_spp_initiator_psram bt_spp_ota bt_spp_ota_v2 hello_world_8mb uart_rate_switch` | the images, in build order; `project_of` maps each to its project |
 | `FIRMWARE_OUT` | environment | `firmware/` | where `IMAGE/build/` goes; empty means the default; `/out` inside the container |
 | `IDF_LOCAL` | environment | unset | `1` builds with the ESP-IDF of the calling shell |
 | `ESP32TL_CONTAINER` | environment, set by the host side | unset | marks the container side and names the image it records |
@@ -928,7 +972,7 @@ of PlatformIO's core directory hashes the same lines. Changing any of them, or a
 
 | Message | Cause |
 |---|---|
-| `unknown image 'NAME'; the images are: hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake reset_reasons deep_sleep bt_spp_initiator bt_spp_initiator_psram hello_world_8mb uart_rate_switch` | an argument not in `IMAGES`; nothing written |
+| `unknown image 'NAME'; the images are: hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake reset_reasons deep_sleep bt_spp_initiator bt_spp_initiator_psram bt_spp_ota bt_spp_ota_v2 hello_world_8mb uart_rate_switch` | an argument not in `IMAGES`; nothing written |
 | `ESP32TL_CONTAINER is set outside a container; unset it` | `ESP32TL_CONTAINER` set and no `/.dockerenv`; nothing written |
 | `IDF_LOCAL=1 needs ESP-IDF in the environment: source $IDF_PATH/export.sh first` | `IDF_LOCAL=1` without `idf.py` on `PATH` or without `IDF_PATH`; nothing written |
 | `needs Docker, or IDF_LOCAL=1 to build with a local ESP-IDF` | no `docker` on `PATH`; nothing written |
@@ -1106,6 +1150,17 @@ in `Failed to mount filesystem.` and is not written; an empty slot ends in
 `Failed to initialize the card (ESP_ERR_TIMEOUT)`. The 512-byte blocks the example reads and
 writes go through SPI DMA: the W registers hold 64 bytes, so the files come back whole only
 because esp32sim models the classic SPI DMA path the example's `SDSPI_DEFAULT_DMA` takes.
+
+`tests/test_bt_spp_ota.py` runs `bt_spp_ota` and `bt_spp_ota_v2` with the `bt` fixture against an
+`SppPeer`: through the three boots, the controller started in the first two, the bootloader's
+`Loaded app from partition at offset 0x210000` for `bt_spp_ota`, the boot reasons `POWERON_RESET`,
+`SW_CPU_RESET` and `DEEPSLEEP_RESET`, SPP from `ota_1` with the example's blocks, and no panic.
+`bt_spp_ota_v2` does the same once `bluetooth.add_elf` names `build/update/bt_spp_ota.elf`, and
+without it reaches `ota_1`, panics there with `StoreProhibited` in ESP-IDF's own controller, boots
+`ota_1` again (`reason=other`) and never starts its controller, while the runner's log says
+`none of the --bt ELFs`. The last test checks that `add_elf` takes a build directory's ELF, returns
+the resolved path and adds an ELF once, and refuses a directory that is no build, a file that is
+not an ELF and one that is not there.
 
 `tests/test_nmea_reader.py` is the first milestone's test (plan M1): the real `nmea_reader` in
 the real runner, on the `esp32-devkitc` profile, fed through the `gnss` fixture's

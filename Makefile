@@ -57,9 +57,11 @@ firmware:
 # esp32tl-built when a build finishes. The CI test jobs receive the images
 # from the firmware job, so they build nothing (and the macOS ones have no
 # Docker). `make firmware` rebuilds them.
-FIRMWARE_IMAGES := hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake reset_reasons deep_sleep bt_spp_initiator bt_spp_initiator_psram hello_world_8mb uart_rate_switch
+FIRMWARE_IMAGES := hello_world console_repl nmea_reader gpio_echo sdspi sd_remount modem_at modem_recovery nvs_reader pppos_client mqtt_session http_request http_server persistence ota_state timer_wake reset_reasons deep_sleep bt_spp_initiator bt_spp_initiator_psram bt_spp_ota bt_spp_ota_v2 hello_world_8mb uart_rate_switch
 firmware/%/build/esp32tl-built:
 	FIRMWARE_OUT= firmware/build.sh $*
+# bt_spp_ota_v2 flashes bt_spp_ota's image, so it comes after it, even under make -j.
+firmware/bt_spp_ota_v2/build/esp32tl-built: | firmware/bt_spp_ota/build/esp32tl-built
 
 # The images of the other chips the runner emulates, each in
 # firmware/<image>/build-<chip>/, built only when missing too.

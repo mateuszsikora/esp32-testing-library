@@ -223,7 +223,14 @@ capacity. This does not yet establish a 5- or 10-minute total CI duration.
 Each group packs only what the backend reads. Of an ESP-IDF build, what pytest-embedded's `IdfApp` reads: the files at the top of each
 `firmware/<image>/build/`, `firmware/<image>/build-<chip>/` and `examples/<name>/build/` (`flasher_args.json`, the ELF, the binaries,
 `esp32tl-build.json`, `esp32tl-built`), `config/sdkconfig.json`, and the `.bin` and `.elf` files of
-`bootloader/` and `partition_table/`. Of a PlatformIO build, `firmware/<image>/.pio/build/esp32dev/`
+`bootloader/` and `partition_table/`, and of `update/` where a build has one: `bt_spp_ota_v2`'s
+copy of `bt_spp_ota`'s image, which its `flasher_args.json` names, and of its ELF, which its test
+names ([validation firmware](features/validation-firmware-technical.md#bt_spp_ota-and-bt_spp_ota_v2)).
+`bt_spp_ota_v2` is last in `IMAGES`, four places after `bt_spp_ota`, so that the four `idf-K`
+shards put both in `idf-4`, which builds `bt_spp_ota` once. `firmware/build.sh` still builds
+`bt_spp_ota` first in a shard that has `bt_spp_ota_v2` without it, at another shard count or when
+the list changes; two tarballs can then hold `firmware/bt_spp_ota/build/`: each holds a whole build,
+and `bt_spp_ota_v2`'s test reads its own copy. Of a PlatformIO build, `firmware/<image>/.pio/build/esp32dev/`
 and `firmware/<image>/.pio/build/esp32s3_usb/`, the two environments the workflow names, the
 `.bin` files, `firmware.elf`, `esp32tl-build.json` and `esp32tl-built` at the top of each. The
 object files and PlatformIO's `firmware.map` stay behind.

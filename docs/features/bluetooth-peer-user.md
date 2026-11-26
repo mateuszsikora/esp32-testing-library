@@ -58,7 +58,10 @@ From the first look on:
 - **The firmware's controller is in the harness.** The run forwards every HCI packet the firmware's
   Bluetooth host sends (ESP-IDF's Bluedroid, through esp32sim's VHCI) to a controller on the air of
   the test's devices, and its answers back, on the board's clock: the backend passes the runner
-  `--bt` with the application's ELF ([esp32sim backend](esp32sim-backend-user.md#bluetooth)). The
+  `--bt` with the application's ELF ([esp32sim backend](esp32sim-backend-user.md#bluetooth)), and
+  with the ELF of each other image the test names with `board.bluetooth.add_elf(path)`, one an OTA
+  update writes, so that the controller starts in that app too
+  ([OTA update](esp32sim-backend-user.md#an-app-from-another-slot-or-another-build-an-ota-update)). The
   firmware finds, pairs with and opens SPP to an `SppPeer` as it would a device on a real air: a
   firmware that runs its controller for Classic alone (mode 2, `CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY`)
   gets it ([runner](runner-user.md#give-the-guest-a-bluetooth-controller)). ESP-IDF's
