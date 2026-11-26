@@ -2499,8 +2499,8 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_pytest_plugin.py::test_runner_command_selects_the_usb_console_of_a_profile_that_has_it`
 - **255.** The serial backend runs a profile for the ESP32-S3 or the ESP32-C3 whose console is on
   USB-Serial/JTAG, skips one for another chip with that console (the ESP32-C6, the ESP32-P4, the
-  ESP32-S31) before the port is opened, and refuses one for any chip but the classic ESP32 whose
-  console is on UART0.
+  ESP32-S31) before the port is opened, and refuses one with its console on UART0 for any chip
+  but the classic ESP32.
   `tests/test_serial_backend.py::test_an_s3_or_c3_with_its_console_on_usb_serial_jtag_runs_on_the_serial_backend`,
   `tests/test_serial_backend.py::test_a_usb_serial_jtag_console_on_a_chip_not_validated_on_hardware_skips`,
   `tests/test_pytest_plugin.py::test_the_serial_backend_refuses_a_board_with_another_chip`

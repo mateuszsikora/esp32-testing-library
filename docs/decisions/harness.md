@@ -4400,9 +4400,9 @@ The ESP32-S3 with its console on USB-Serial/JTAG has since been measured and run
 and so has the ESP32-C3
 ([too](#the-serial-backend-runs-an-esp32-c3-through-its-usb-serialjtag-port-too)); any other chip
 with that console, the C6, the P4 and the S31, skips. The refusal stays for a console on UART0 on
-every chip but the classic ESP32: `serial: the board
-profile {name} carries an {title} with its console on UART0; the serial backend runs the classic
-ESP32, and the ESP32-S3 and the ESP32-C3 with their console on USB-Serial/JTAG`.
+every chip but the classic ESP32: `serial: the board profile {name} carries an {title} with its
+console on UART0; the serial backend runs the classic ESP32, and the ESP32-S3 and the ESP32-C3
+with their console on USB-Serial/JTAG`.
 
 An ESP32-C6 with its console on USB-Serial/JTAG was measured on 2026-11-26 and still skips: an
 ESP32-C6FH4 (QFN32) rev v0.2 with its native USB alone, on macOS, port `/dev/cu.usbmodem1101` (USB
@@ -4838,8 +4838,8 @@ UART0 has a bridge was not measured on UART0.
 (`serial: the board profile {name} has its console on the {title}'s USB-Serial/JTAG controller,
 which the serial backend has been validated on with the ESP32-S3 and the ESP32-C3 only`), until a
 board of each is measured as above, and the C6's does not leave the bus; the C3 has been
-([below](#the-serial-backend-runs-an-esp32-c3-through-its-usb-serialjtag-port-too)). Every chip but
-the classic ESP32 with a console on UART0 is still refused, as
+([below](#the-serial-backend-runs-an-esp32-c3-through-its-usb-serialjtag-port-too)). A console on
+UART0 is still refused on every chip but the classic ESP32, as
 [the serial backend runs the classic ESP32 only](#the-serial-backend-runs-the-classic-esp32-only)
 says.
 

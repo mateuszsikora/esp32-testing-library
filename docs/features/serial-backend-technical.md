@@ -23,7 +23,7 @@ the same indirect parametrisation. See [the user contract](serial-backend-user.m
    attributing the change to `ESPPORT`. First `serial_chip` checks the profile: the classic ESP32,
    or a chip `SERIAL_CHIPS` maps to the profile's `console`, `esp32s3` and `esp32c3` to
    `usb-serial-jtag`, goes on; any other chip with that console (the C6, the P4, the S31) skips,
-   and any chip but the classic one with its console on UART0 fails
+   and any chip with its console on UART0 but the classic one fails
    ([Failure modes](#failure-modes)). It validates the build and optional `app_recording`
    once per item.
    `pytest_fixture_setup` runs it before pytest-embedded's `app` fixture, so an explicitly requested
