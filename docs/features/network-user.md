@@ -1029,7 +1029,9 @@ retry, back-off and give-up paths, `409`, `429` with its `Retry-After`, `502` or
 fixed response or from a handler:
 
 ```python
-network.http.serve("/enroll", HttpResponse(409, '{"error": "exists"}', content_type="application/json"))
+network.http.serve(
+    "/enroll", HttpResponse(409, '{"error": "exists"}', content_type="application/json")
+)
 network.http.serve("/report", HttpResponse(429, headers={"Retry-After": "30"}))
 network.http.serve("/x", "busy", status=503)
 ```
