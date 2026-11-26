@@ -11,7 +11,9 @@ which Bluedroid sends them. The interface that puts it on the board's link is
 """
 
 import asyncio
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
 
 from bumble import hci
 
@@ -76,9 +78,10 @@ class LeController:
     # it does not know gets `Command_Complete`, both with `UNKNOWN_HCI_COMMAND`.
     le_unknown_status: bool
     # Commands answered with `Command_Complete` and these return parameters as they came, by
-    # opcode, where Bumble's handlers answer otherwise: the extended advertising commands a BLE
-    # 4.2 controller refuses or answers with values of its own.
-    answers: dict[int, bytes]
+    # opcode, where Bumble's handlers answer otherwise: three extended advertising commands, which
+    # the probe asks after the legacy `LE_Read_Advertising_Physical_Channel_Tx_Power` (0x2007).
+    # A `MappingProxyType`, read-only, and left out of the hash, which a mapping cannot enter.
+    answers: Mapping[int, bytes] = field(hash=False)
 
     @property
     def supported(self) -> int:
@@ -119,12 +122,15 @@ ESP32S3 = LeController(
     le_unknown_status=False,
     # `LE_Read_Maximum_Advertising_Data_Length` and `LE_Read_Number_of_Supported_Advertising_Sets`
     # refused with `COMMAND_DISALLOWED`, followed by 0x001F and 0; `LE_Read_Transmit_Power` refused
-    # so too, followed by -24 and 21 dBm.
-    answers={
-        0x203A: bytes.fromhex("0c1f00"),
-        0x203B: bytes.fromhex("0c00"),
-        0x204B: bytes.fromhex("0ce815"),
-    },
+    # so too, followed by -24 and 21 dBm: a controller running with `BLE_50:0` has no extended
+    # advertising.
+    answers=MappingProxyType(
+        {
+            0x203A: bytes.fromhex("0c1f00"),
+            0x203B: bytes.fromhex("0c00"),
+            0x204B: bytes.fromhex("0ce815"),
+        }
+    ),
 )
 
 # An ESP32-C6 (ESP32-C6FH4, QFN32, revision v0.2) on 2026-11-26 (`tools/hci_probe/esp32c6.txt`):
@@ -157,12 +163,18 @@ ESP32C6 = LeController(
     command_packets=1,
     le_unknown_status=True,
     # `LE_Read_Maximum_Advertising_Data_Length` and `LE_Read_Number_of_Supported_Advertising_Sets`
-    # refused with `COMMAND_DISALLOWED` alone; `LE_Read_Transmit_Power` -15 and 20 dBm.
-    answers={
-        0x203A: bytes.fromhex("0c"),
-        0x203B: bytes.fromhex("0c"),
-        0x204B: bytes.fromhex("00f114"),
-    },
+    # refused with `COMMAND_DISALLOWED` alone; `LE_Read_Transmit_Power` -15 and 20 dBm. The C6's
+    # features name extended advertising, and the probe asked these after the legacy 0x2007, which
+    # Vol 4, Part E, 3.1.1 lets a controller refuse extended advertising commands for until the
+    # next `HCI_Reset`; the refusal is what the C6 answered in that order. TODO(owner): what the C6
+    # answers to 0x203A and 0x203B before any legacy advertising command.
+    answers=MappingProxyType(
+        {
+            0x203A: bytes.fromhex("0c"),
+            0x203B: bytes.fromhex("0c"),
+            0x204B: bytes.fromhex("00f114"),
+        }
+    ),
 )
 
 # The chips whose controller is Bluetooth LE only, by ESP-IDF target name, and what each reports.

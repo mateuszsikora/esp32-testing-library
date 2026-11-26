@@ -186,7 +186,11 @@ reports is the chip's, which it takes from the board profile's `chip`:
   `Write_Authenticated_Payload_Timeout` completes whatever the handle, where the chip refused an
   unknown one. `LE_Read_Maximum_Advertising_Data_Length` and
   `LE_Read_Number_of_Supported_Advertising_Sets` get `COMMAND_DISALLOWED`, and
-  `LE_Read_Transmit_Power` -15 and 20 dBm, as from the chip. A command it does not know gets
+  `LE_Read_Transmit_Power` -15 and 20 dBm, as from the chip, which was asked them after the
+  legacy `LE_Read_Advertising_Physical_Channel_Tx_Power`: the specification lets a controller
+  refuse extended advertising commands after a legacy one (Vol 4, Part E, 3.1.1), and
+  TODO(owner): what the C6 answers to the first two before any legacy advertising command. A
+  command it does not know gets
   `Command_Status` with `UNKNOWN_HCI_COMMAND_ERROR` when it is an LE command (OGF `0x08`), as
   `LE_Read_Buffer_Size` v2 or `LE_Read_Local_P-256_Public_Key`, and `Command_Complete` otherwise,
   as `Inquiry`. The chip sends no LE event while the host's event mask leaves out LE Meta (bit

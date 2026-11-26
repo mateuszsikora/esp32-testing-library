@@ -5271,9 +5271,14 @@ command (`LE_Read_Buffer_Size` v2, `LE_Read_Local_P-256_Public_Key`, `0x207B`, `
 `Read_Stored_Link_Key`, `0x0CFF`). The three extended advertising commands the probe asks, which
 Bumble's handlers answer with values of their own, get what each chip sent (`answers`): the C6
 refused `LE_Read_Maximum_Advertising_Data_Length` and `LE_Read_Number_of_Supported_Advertising_Sets`
-with `COMMAND_DISALLOWED` alone and answered `LE_Read_Transmit_Power` with -15 and 20 dBm; the S3
-refused all three, each followed by values. So every command of both captures but the C6's LE
-features and LE buffer gets the bytes the chip sent, which
+with `COMMAND_DISALLOWED` alone and answered `LE_Read_Transmit_Power` with -15 and 20 dBm; the S3,
+whose controller runs with `BLE_50:0`, refused all three, each followed by values. The probe asks
+them after the legacy `LE_Read_Advertising_Physical_Channel_Tx_Power`, and Vol 4, Part E, 3.1.1
+lets a controller refuse extended advertising commands once a legacy one has come since the last
+reset; the C6's features name extended advertising, and its refusal, kept as measured, is what it
+answers in that order. TODO(owner): what the C6 answers to `0x203A` and `0x203B` before any legacy
+advertising command. So every command of both captures but `Read_Stored_Link_Key`, which the probe
+sends short, and the C6's LE features and LE buffer gets the bytes the chip sent, which
 `test_an_le_only_chip_s_controller_answers_every_command_of_its_capture` replays. Two things the C6
 does are not modelled: it sends no LE event
 until the host's event mask has LE Meta, bit 61, which the specification's default leaves out

@@ -421,6 +421,10 @@ their addresses masked and the advertising reports of the devices around left ou
 the link cannot carry: its LE buffer of 517 bytes, reported as 491, and its LE features
 `0x1B900F017FFF`, reported as `0xFF`
 ([the decision](decisions/harness.md#the-esp32-c6s-controller-reports-what-a-c6-measured-within-what-the-link-carries)).
+The probe asks the extended advertising commands `0x203A` and `0x203B` after the legacy `0x2007`,
+which lets a controller refuse them (Vol 4, Part E, 3.1.1): the C6's `COMMAND_DISALLOWED` to both is
+its answer in that order. TODO(owner): what the C6 answers to them before any legacy advertising
+command.
 
 The production images, which are not in this repository, ran with `--flash-mb 4 --psram-mb 4` and
 `--flash-at` at `0x1000` (bootloader), `0x8000` (partition table), `0x10000` (otadata) and `0x20000`
