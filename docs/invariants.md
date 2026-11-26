@@ -2616,7 +2616,9 @@ clones, and rejection of serial distributed execution before accessing hardware.
   the bytes the S3 sent, and answers a command the S3's supported commands do not name with
   `Command_Complete` and `UNKNOWN_HCI_COMMAND`. On the C6 it answers every command of the
   ESP32-C6's capture with the bytes the C6 sent, but for the LE features and the LE buffer; takes
-  the commands the C6 answered though its supported commands leave them out; and answers an LE
+  the commands the C6 answered though its supported commands leave them out (`also_known`), but
+  for `Read_Authenticated_Payload_Timeout`, which Bumble has no class for and which it answers as
+  unknown; and answers an LE
   command it does not know with `Command_Status`, any other with `Command_Complete`.
   `tests/test_ble_peer.py::test_an_le_only_chip_s_controller_reports_le_and_no_br_edr`,
   `tests/test_ble_peer.py::test_the_classic_esp32_s_controller_keeps_br_edr_and_no_le`,

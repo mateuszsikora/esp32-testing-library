@@ -486,6 +486,8 @@ def test_an_esp32_c6_s_controller_takes_commands_its_bitmap_leaves_out() -> None
         ),
     )
     send(air, guest, hci.HCI_Read_Remote_Version_Information_Command(connection_handle=1))
+    # Read_Authenticated_Payload_Timeout, which the C6 answered too: Bumble has no class for it
+    air.call(lambda: guest.on_packet(bytes.fromhex("017b0c020100")))
     # Bumble completes the timeout whatever the handle, where the C6 refused an unknown one; the
     # remote version gets UNKNOWN_CONNECTION_IDENTIFIER, as from the C6
     assert [bytes(p).hex() for p in host.packets] == [
@@ -493,8 +495,9 @@ def test_an_esp32_c6_s_controller_takes_commands_its_bitmap_leaves_out() -> None
         "040e0401630c00",
         "040e06017c0c000100",
         "040f0402011d04",
+        "040e04017b0c01",
     ]
-    assert guest.unknown_commands == []
+    assert [c.op_code for c in guest.unknown_commands] == [0x0C7B]
 
 
 # What the guest answers otherwise than the chip did in its capture, by chip and opcode: the C6's

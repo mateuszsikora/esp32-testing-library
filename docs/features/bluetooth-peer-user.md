@@ -215,9 +215,9 @@ reports is the chip's, which it takes from the board profile's `chip`:
   (496 bytes, 5 of them the packet's header): the peer's data cut to fit, also to the firmware's
   `Host_Buffer_Size` when that is smaller, on BR/EDR and on LE. From the firmware, packets of at
   most what the controller's buffer sizes say: on the classic ESP32 `Read_Buffer_Size` says 491;
-  on an LE-only chip `LE_Read_Buffer_Size` says 251, so Bluedroid sends its data in packets of
-  251 bytes. TODO(owner): what the classic ESP32's controller reports in
-  `Read_Buffer_Size`.
+  on the ESP32-S3 and the ESP32-C3 `LE_Read_Buffer_Size` says 251, so Bluedroid sends its data in
+  packets of 251 bytes, and on the ESP32-C6 it says 491. TODO(owner): what the classic ESP32's
+  controller reports in `Read_Buffer_Size`.
 - An answer to every command: one it does not know gets `UNKNOWN_HCI_COMMAND_ERROR` in the event the
   host waits for, `Command_Status` for a command answered so before it completes, `Command_Complete`
   for any other, and is listed in `bt.unknown_commands()`.

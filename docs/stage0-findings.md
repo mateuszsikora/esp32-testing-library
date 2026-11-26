@@ -387,13 +387,16 @@ configuration), from the repository's root:
 
 ```sh
 rm -rf tools/hci_probe/build-probe
-docker run --rm -v "$PWD":/w -w /w \
+docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp -v "$PWD":/w -w /w \
   espressif/idf:v5.3.6@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070 \
   idf.py -C tools/hci_probe -B tools/hci_probe/build-probe \
   -D SDKCONFIG=/w/tools/hci_probe/build-probe/sdkconfig -DIDF_TARGET=CHIP build
 ```
 
-`SDKCONFIG` is an absolute path: idf.py takes a relative one from the project's directory, `-C`,
+The container runs as the host's user, as `firmware/build.sh` runs it, so that the build directory
+is the user's and the next `rm -rf` removes it; run as root, on a Linux host, it would not, and the
+next chip's build would keep the last one's `sdkconfig`. `SDKCONFIG` is an absolute path: idf.py
+takes a relative one from the project's directory, `-C`,
 where `tools/hci_probe/build-probe/sdkconfig` does not exist, and kconfgen fails with
 `FileNotFoundError`. Then, on the host, from `tools/hci_probe/build-probe`, with esptool 5
 (`python -m esptool --chip CHIP --port PORT write-flash @flash_args`; esptool 4, as ESP-IDF v5.3.6
@@ -412,7 +415,10 @@ enough; on a quiet bench the event does not come. Its count is what the scan hea
 104 in the S3's capture, not a constant. The ESP32-S3's answers, of 2026-11-19, are in
 `tools/hci_probe/esp32s3.txt`, and the ESP32-C6's, of 2026-11-26, in `tools/hci_probe/esp32c6.txt`,
 their addresses masked and the advertising reports of the devices around left out;
-`esp32tl/bluetooth/guest.py` reports them for each chip.
+`esp32tl/bluetooth/guest.py` reports them for each chip, but for two of the C6's answers, which
+the link cannot carry: its LE buffer of 517 bytes, reported as 491, and its LE features
+`0x1B900F017FFF`, reported as `0xFF`
+([the decision](decisions/harness.md#the-esp32-c6s-controller-reports-what-a-c6-measured-within-what-the-link-carries)).
 
 The production images, which are not in this repository, ran with `--flash-mb 4 --psram-mb 4` and
 `--flash-at` at `0x1000` (bootloader), `0x8000` (partition table), `0x10000` (otadata) and `0x20000`
