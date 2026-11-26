@@ -138,7 +138,10 @@ def test_a_hang_up_later_than_the_device_s_timeout_ends_nothing(
     board.power_on()
     request = board.wait_until(network.http.next_request("/"), within=seconds(30))
     line = board.wait_until(done, within=seconds(7))
-    assert line.at - request.at >= seconds(5)
+    # The device's 5 s run from its setsockopt, which comes before the server has the request in
+    # full: its read ends a few ms short of 5 s past `request.at` (4.994 s on CI), and long
+    # before the hang-up's 8 s.
+    assert seconds(4.9) <= line.at - request.at < seconds(8)
     board.wait(seconds(1))
     assert "http: GET /: the connection closed before its hang-up, due at" in board.report()
 
