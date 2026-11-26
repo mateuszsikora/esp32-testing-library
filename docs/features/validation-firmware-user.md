@@ -480,7 +480,8 @@ build copies `bt_spp_ota`'s image and ELF, from `firmware/bt_spp_ota/build/` bes
 directory, into `firmware/bt_spp_ota_v2/build/update/`, and flashes the image into `update`
 (`esptool_py_flash_to_partition`); the build fails, `bt_spp_ota_v2 flashes bt_spp_ota's image,
 PATH: build bt_spp_ota first`, without it, and `firmware/build.sh bt_spp_ota_v2` builds
-`bt_spp_ota` first when it is not there. It prints `bt_spp_ota: v2` first, and its first boot
+`bt_spp_ota` first when it is not there, as `firmware/build.sh bt_spp_ota_v2 bt_spp_ota` does
+in that order of its arguments. It prints `bt_spp_ota: v2` first, and its first boot
 copies `update` into `ota_1` rather than itself: the boots from `ota_1` then run `bt_spp_ota`, a
 build of another ELF than `bt_spp_ota_v2.elf`, the build's. The test names that ELF,
 `firmware/bt_spp_ota_v2/build/update/bt_spp_ota.elf`, with `board.bluetooth.add_elf`

@@ -1024,7 +1024,10 @@ not only at the first look as `use()` does, so that one after power-on is refuse
 It resolves `path` against `directory`, takes a directory's application ELF through
 `build.load(str(dir), dir, chip=self.chip).elf`, whose `BuildError` it raises again with
 `bluetooth.add_elf: ` before the message, checks the file's first four bytes, `\x7fELF`, then
-calls `use()` and appends the resolved path to `elfs` under the lock, unless it is there already,
+refuses an ELF that `files` holds as a tap or an SD card's image (`WRITERS`), `SourceError:
+bluetooth.add_elf: PATH is the tap of bluetooth`, calls `use()`, appends the resolved path to
+`elfs` under the lock, unless it is there already, claims it in `files` as `("elf",
+"bluetooth")`, so that a later tap or card image of it is refused as one of any claimed file is,
 and returns it. The backend adds a
 `--bt` for each of `elfs` after the application's ([esp32sim backend](esp32sim-backend-technical.md)).
 

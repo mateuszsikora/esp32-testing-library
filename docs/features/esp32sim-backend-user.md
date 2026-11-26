@@ -209,7 +209,10 @@ board.power_on()`. A path that cannot be read is `FileNotFoundError: bluetooth.a
 PATH: No such file or directory`, a file that is not an ELF `ValueError: bluetooth.add_elf: PATH
 is not an ELF file`, a build directory without one `FileNotFoundError: bluetooth.add_elf: the
 build in PATH has no ELF`, and a directory that is no build, or one of another chip, the
-`BuildError` the backend gives for such a build with `bluetooth.add_elf: ` before it.
+`BuildError` the backend gives for such a build with `bluetooth.add_elf: ` before it. The run
+reads the ELF, so a tap or an SD card image that would write over it is refused, before
+`add_elf` as `SourceError: bluetooth.add_elf: PATH is the tap of bluetooth` and after it as
+`SourceError: bluetooth: cannot tap into PATH: PATH is the elf of bluetooth`.
 
 Without it, an app built from another ELF than the build's gets no controller: its
 `esp_bt_controller_init` runs ESP-IDF's own, which on the classic ESP32 panics with

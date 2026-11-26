@@ -33,7 +33,7 @@ from esp32tl.bluetooth.controller import Controller, Pairing, UnknownCommand
 from esp32tl.bluetooth.guest import ADDRESS, GuestController
 from esp32tl.boards.capabilities import Request
 from esp32tl.interfaces import SourceError
-from esp32tl.interfaces.uart import same_file
+from esp32tl.interfaces.uart import WRITERS, same_file
 from esp32tl.link.boardlink import Direction, Interface, Output, counted
 from esp32tl.link.protocol import HCI_MAX
 from esp32tl.report import RunLog, board_time
@@ -173,7 +173,8 @@ class Bluetooth(Interface):
         SHA-256 its image records; without this, an app built from another ELF than the build's
         gets no Bluetooth controller. Puts the guest's controller on the air, as `use` does.
         Returns the ELF's resolved path, as `elfs` keeps it; an ELF already there is not added
-        again."""
+        again. The ELF is claimed in `files` as the run reads it: a tap into it, or an SD card
+        image of it, is refused, before or after."""
         self.asked(Request(NAME, source="model"))
         given = self.directory / path
         elf = given
@@ -194,11 +195,15 @@ class Bluetooth(Interface):
             ) from error
         if magic != b"\x7fELF":
             raise ValueError(f"{NAME}.add_elf: {elf} is not an ELF file")
+        for claimed, (kind, route) in self.files.items():
+            if kind in WRITERS and same_file(elf, claimed):
+                raise SourceError(f"{NAME}.add_elf: {elf} is the {kind} of {route}")
         self.use()
         elf = elf.resolve()
         with self._lock:
             if elf not in self.elfs:
                 self.elfs.append(elf)
+            self.files.setdefault(elf, ("elf", NAME))
         if self.log is not None:
             self.log.test(0, f"{NAME}.add_elf({str(path)!r})")
         return elf

@@ -658,7 +658,9 @@ get another build's ELF than the image `update` holds. They go in `update/` and 
 the build directory because pytest-embedded's `IdfApp._get_elf_file` takes the first `.elf` that
 `os.listdir` returns for the application's. `build.sh`, in the container, puts `bt_spp_ota`
 before `bt_spp_ota_v2` in the list it builds when `bt_spp_ota_v2` is in it, `bt_spp_ota` is not,
-and `$out/bt_spp_ota/build/esp32tl-built` is missing. CI's firmware tarball takes
+and `$out/bt_spp_ota/build/esp32tl-built` is missing, and moves `bt_spp_ota` to just before
+`bt_spp_ota_v2` when the list names it after (`firmware/build.sh bt_spp_ota_v2 bt_spp_ota`); a
+list with `bt_spp_ota` before keeps its order. CI's firmware tarball takes
 `build/update/*.bin` and `*.elf` along ([CI](../cicd.md)).
 
 ## `sd_remount`

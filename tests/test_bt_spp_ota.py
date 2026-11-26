@@ -14,6 +14,7 @@ from test_bt_spp_initiator import BLOCK, NAME, PIN, Heard
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.bluetooth.peer import SppPeer
 from esp32tl.build import BuildError
+from esp32tl.interfaces import SourceError
 from esp32tl.interfaces.bluetooth import Bluetooth
 from esp32tl.interfaces.console import Console
 from esp32tl.units import seconds
@@ -99,7 +100,7 @@ def test_an_update_built_from_an_elf_the_test_does_not_name_gets_no_controller(
 
 
 def test_add_elf_takes_a_build_directory_s_elf_and_refuses_what_is_not_an_elf(
-    board: Esp32Sim, bt: Bluetooth, tmp_path: Path
+    board: Esp32Sim, bt: Bluetooth, console: Console, tmp_path: Path
 ) -> None:
     assert (
         bt.add_elf(FIRMWARE / "bt_spp_ota" / "build")
@@ -113,3 +114,21 @@ def test_add_elf_takes_a_build_directory_s_elf_and_refuses_what_is_not_an_elf(
         bt.add_elf(text)
     with pytest.raises(FileNotFoundError, match=r"bluetooth.add_elf: cannot read .*missing.elf"):
         bt.add_elf(tmp_path / "missing.elf")
+    # the run reads an ELF of add_elf: a tap that would write over it is refused, either way round
+    elf = tmp_path / "update.elf"
+    elf.write_bytes((FIRMWARE / "bt_spp_ota" / "build" / "bt_spp_ota.elf").read_bytes())
+    bt.add_elf(elf)
+    with pytest.raises(
+        SourceError, match=r"cannot tap into .*update.elf: .* is the elf of bluetooth"
+    ):
+        bt.tap(elf)
+    snoop = tmp_path / "hci.btsnoop"
+    snoop.write_bytes(b"\x7fELF")
+    bt.tap(snoop)
+    with pytest.raises(
+        SourceError, match=r"bluetooth.add_elf: .*hci.btsnoop is the tap of bluetooth"
+    ):
+        bt.add_elf(snoop)
+    # a tap needs a run, and the run takes the ELF
+    board.power_on()
+    console.expect_exact("bt_spp_ota: booted reason=poweron running=ota_0", timeout=seconds(5))

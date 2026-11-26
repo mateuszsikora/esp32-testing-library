@@ -303,11 +303,25 @@ json_string() {
 }
 
 # bt_spp_ota_v2 flashes bt_spp_ota's image, from beside its own build directory: bt_spp_ota is
-# built first when it is not there, as in a shard of CI's that has bt_spp_ota_v2 without it.
+# built first, moved before it when named after it, and added when it is not there,
+# as in a shard of CI's that has bt_spp_ota_v2 without it.
 case " $* " in
 *" bt_spp_ota_v2 "*)
 	case " $* " in
-	*" bt_spp_ota "*) ;;
+	*" bt_spp_ota "*)
+		reordered=
+		moved=
+		for image in "$@"; do
+			case $image:$moved in
+			bt_spp_ota:1) ;;
+			bt_spp_ota:*) moved=0 reordered="$reordered $image" ;;
+			bt_spp_ota_v2:) moved=1 reordered="$reordered bt_spp_ota $image" ;;
+			*) reordered="$reordered $image" ;;
+			esac
+		done
+		# shellcheck disable=SC2086
+		set -- $reordered
+		;;
 	*) [ -f "$out/bt_spp_ota/build/esp32tl-built" ] || set -- bt_spp_ota "$@" ;;
 	esac
 	;;

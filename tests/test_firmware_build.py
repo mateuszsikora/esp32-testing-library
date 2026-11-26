@@ -5,6 +5,7 @@ called: these tests need neither Docker nor ESP-IDF and take milliseconds. The r
 build is `make firmware`, and test_firmware_images.py checks what it built.
 """
 
+import itertools
 import json
 import os
 import shutil
@@ -626,3 +627,17 @@ def test_build_refuses_an_empty_shard(tmp_path: Path) -> None:
     result = run_build({"PATH": minimal_path(tmp_path / "bin")}, "--shard", "2/2", "hello_world")
     assert result.returncode != 0
     assert "shard 2/2 selects no images" in result.stderr
+
+
+def test_bt_spp_ota_is_built_before_bt_spp_ota_v2_whatever_the_order_named(
+    tmp_path: Path, local_idf: dict[str, str]
+) -> None:
+    # bt_spp_ota_v2's build flashes bt_spp_ota's image, which must be there first
+    result = run_build(local_idf, "bt_spp_ota_v2", "hello_world", "bt_spp_ota")
+    assert result.returncode == 0, result.stderr
+    builds = [
+        Path(argument).parent.name
+        for before, argument in itertools.pairwise(logged(tmp_path / "idf.log"))
+        if before == "-B"
+    ]
+    assert builds == ["bt_spp_ota", "bt_spp_ota_v2", "hello_world"]
