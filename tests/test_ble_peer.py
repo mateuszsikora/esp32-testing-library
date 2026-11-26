@@ -505,6 +505,7 @@ def test_an_esp32_c6_s_controller_takes_commands_its_bitmap_leaves_out() -> None
 # takes bits 0 to 7.
 ANSWERED_OTHERWISE = {
     "esp32s3": {},
+    "esp32c3": {},
     "esp32c6": {
         0x2002: "040e0701022000eb010a",
         0x2003: "040e0c01032000ff00000000000000",
@@ -524,13 +525,13 @@ def capture(chip: str) -> list[tuple[bytes, list[str]]]:
     return exchanges
 
 
-@pytest.mark.parametrize("chip", ["esp32s3", "esp32c6"])
+@pytest.mark.parametrize("chip", ["esp32s3", "esp32c3", "esp32c6"])
 def test_an_le_only_chip_s_controller_answers_every_command_of_its_capture(chip: str) -> None:
     air = Air()
     guest, host = raw(air, ADVERTISER, GuestController, chip=chip)
     exchanges = capture(chip)
     # the S3's capture came before the probe set the event mask
-    assert len(exchanges) == {"esp32s3": 29, "esp32c6": 30}[chip]
+    assert len(exchanges) == {"esp32s3": 29, "esp32c3": 30, "esp32c6": 30}[chip]
     for command, sent in exchanges:
         opcode = int.from_bytes(command[1:3], "little")
         if opcode == 0x0C0D:

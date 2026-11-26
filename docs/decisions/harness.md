@@ -5279,8 +5279,10 @@ builds it (`BLE_50:1`), got `UNKNOWN_HCI_COMMAND` for `0xFD09` and LE features `
 the unmodified `gatt_client` on the same board logged no error for `0xFD09`; the controller's mode
 follows the host's configuration at build time (`BT_CTRL_50_FEATURE_SUPPORT`,
 `components/bt/include/esp32c3/include/esp_bt.h`), so the values are those of a BLE 4.2 build,
-which all the BLE validation images are. The C3's controller is built from the same sources; it
-was not measured, and takes the S3's values until it is (`TODO(owner)`). The C6's is not, and has
+which all the BLE validation images are. The C3's controller is built from the same sources, and
+an ESP32-C3 (QFN32, revision v0.4), on 2026-11-26 with the same controller library `51d9dfd`,
+answered every command of the probe as the S3 did, but for its address and the count of the
+discard event (`tools/hci_probe/esp32c3.txt`); so the C3 keeps the S3's values. The C6's is not, and has
 values of its own ([below](#the-esp32-c6s-controller-reports-what-a-c6-measured-within-what-the-link-carries)).
 
 It also takes Espressif's vendor commands `0xFD09` and `0xFD0A`, the flow control of advertising
@@ -5289,6 +5291,17 @@ reports Bluedroid turns on for an LE controller, and keeps to the credits: Blued
 an event, so the controller answers it with none. Past the lost threshold, the next credit given
 back first brings the vendor LE Meta event `0xF0` with the number of reports dropped, as the S3
 sent it (104, when 2 credits came back after 2 reports and a threshold of 3).
+
+A throwaway variant of the probe asked the C3, after `HCI_Reset` and with no connection, commands
+the capture does not hold. Four answers differ from the guest's, which keeps Bumble's: the C3
+answered `Read_Transmit_Power_Level` and `Read_Authenticated_Payload_Timeout` for handle 1 with
+`UNKNOWN_CONNECTION_IDENTIFIER`, where Bumble has no handler or class for them and the guest
+answers them as unknown; it refused `Write_Authenticated_Payload_Timeout` for that handle so too,
+where Bumble completes it; and it answered `LE_Read_Local_P-256_Public_Key` with `Command_Status`
+`SUCCESS`, where Bumble 0.0.236's handler returns a status for a command that takes
+`Command_Status`, so the guest sends no event at all. Bluedroid and NimBLE make their P-256 keys in
+software, and send none of the four with no connection. TODO(owner): whether a firmware's host
+sends `LE_Read_Local_P-256_Public_Key`, which would then wait for an event that never comes.
 
 **Rejected:** leaving the vendor commands to the unknown-command answer, because `0xFD0A`'s
 `Command_Complete` reaches a host that waits for none (`filter_incoming_event command complete event

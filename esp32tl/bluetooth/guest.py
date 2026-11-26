@@ -179,8 +179,10 @@ ESP32C6 = LeController(
 
 # The chips whose controller is Bluetooth LE only, by ESP-IDF target name, and what each reports.
 # The ESP32-C3's controller is built from the S3's sources (`components/bt/controller/esp32c3`) and
-# takes its values; TODO(owner): measured on an ESP32-C3. The classic ESP32's is dual-mode, and the
-# firmware runs it BR/EDR only.
+# takes its values: an ESP32-C3 (QFN32, revision v0.4) on 2026-11-26
+# (`tools/hci_probe/esp32c3.txt`), controller library `51d9dfd` too, answered every command of the
+# probe as the S3 did, but for its address and the count of the discard event. The classic ESP32's
+# is dual-mode, and the firmware runs it BR/EDR only.
 LE_CONTROLLERS = {"esp32s3": ESP32S3, "esp32c3": ESP32S3, "esp32c6": ESP32C6}
 LE_CHIPS = frozenset(LE_CONTROLLERS)
 # The OGF of the LE commands (Vol 4, Part E, 7.8), the top 6 bits of an opcode.

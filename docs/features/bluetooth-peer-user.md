@@ -171,8 +171,8 @@ reports is the chip's, which it takes from the board profile's `chip`:
   commands it refused, `LE_Read_Maximum_Advertising_Data_Length`,
   `LE_Read_Number_of_Supported_Advertising_Sets` and `LE_Read_Transmit_Power`, get its answers,
   `COMMAND_DISALLOWED` each. The ESP32-C3's
-  controller is built from the same sources; TODO(owner): measured on an ESP32-C3, which takes
-  the S3's values meanwhile.
+  controller is built from the same sources, and an ESP32-C3 (QFN32, revision v0.4) answered the
+  probe on 2026-11-26 as the S3 did, but for its address (`tools/hci_probe/esp32c3.txt`).
 - **The ESP32-C6**, whose controller is Bluetooth LE only too, and another: what an ESP32-C6
   (ESP32-C6FH4, QFN32, revision v0.2) answered on 2026-11-26, with ESP-IDF v5.3.6's controller
   `18aafc6` (`tools/hci_probe/esp32c6.txt`); v5.5.4's `bc223ab`, the release esp32sim's C6 hooks

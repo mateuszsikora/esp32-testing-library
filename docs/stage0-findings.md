@@ -415,8 +415,8 @@ comes only when more legacy advertising than the 2 credits and the lost threshol
 3 s scan: a device that advertises in range, at an interval of a few hundred ms or less, is
 enough; on a quiet bench the event does not come. Its count is what the scan heard and dropped,
 104 in the S3's capture, not a constant. The ESP32-S3's answers, of 2026-11-19, are in
-`tools/hci_probe/esp32s3.txt`, and the ESP32-C6's, of 2026-11-26, in `tools/hci_probe/esp32c6.txt`,
-their addresses masked and the advertising reports of the devices around left out;
+`tools/hci_probe/esp32s3.txt`, and the ESP32-C3's and the ESP32-C6's, of 2026-11-26, in
+`tools/hci_probe/esp32c3.txt` and `tools/hci_probe/esp32c6.txt`, their addresses masked and the advertising reports of the devices around left out;
 `esp32tl/bluetooth/guest.py` reports them for each chip, but for two of the C6's answers, which
 the link cannot carry: its LE buffer of 517 bytes, reported as 491, and its LE features
 `0x1B900F017FFF`, reported as `0xFF`

@@ -2633,8 +2633,8 @@ clones, and rejection of serial distributed execution before accessing hardware.
   ESP32-C6 it reports page 0 alone, `LE Supported (Controller)` and `BR/EDR Not Supported`, the
   chip's LE ACL buffer (251 bytes on the S3 and the C3, 491 of the C6's 517 on the C6) and no
   extended advertising; on the classic ESP32 it keeps BR/EDR and no LE.
-  On the S3 and the C3 it answers every command of the ESP32-S3's `tools/hci_probe` capture but
-  `Read_Stored_Link_Key`, which the probe sends short, with the bytes the S3 sent, and answers a
+  On the S3 and the C3 it answers every command of the chip's own `tools/hci_probe` capture but
+  `Read_Stored_Link_Key`, which the probe sends short, with the bytes the chip sent, and answers a
   command the S3's supported commands do not name with `Command_Complete` and
   `UNKNOWN_HCI_COMMAND`. On the C6 it answers every command of the ESP32-C6's capture with the
   bytes the C6 sent, but for `Read_Stored_Link_Key`, the LE features and the LE buffer; takes the
