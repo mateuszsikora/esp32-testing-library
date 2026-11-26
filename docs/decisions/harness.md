@@ -4396,10 +4396,13 @@ the flashing path, and on many devkits a console on USB-Serial/JTAG, which the s
 `Wire` on UART0 does not read.
 
 The ESP32-S3 with its console on USB-Serial/JTAG has since been measured and runs
-([the serial backend runs an ESP32-S3 through its USB-Serial/JTAG port](#the-serial-backend-runs-an-esp32-s3-through-its-usb-serialjtag-port));
-a C3 or C6 with that console skips. The refusal stays for a console on UART0 on the S3, C3 and C6:
-`serial: the board profile {name} carries an {title} with its console on UART0; the serial backend
-runs the classic ESP32, and the ESP32-S3 with its console on USB-Serial/JTAG`.
+([the serial backend runs an ESP32-S3 through its USB-Serial/JTAG port](#the-serial-backend-runs-an-esp32-s3-through-its-usb-serialjtag-port)),
+and so has the ESP32-C3
+([too](#the-serial-backend-runs-an-esp32-c3-through-its-usb-serialjtag-port-too)); any other chip
+with that console, the C6, the P4 and the S31, skips. The refusal stays for a console on UART0 on
+every chip but the classic ESP32: `serial: the board profile {name} carries an {title} with its
+console on UART0; the serial backend runs the classic ESP32, and the ESP32-S3 and the ESP32-C3
+with their console on USB-Serial/JTAG`.
 
 An ESP32-C6 with its console on USB-Serial/JTAG was measured on 2026-11-26 and still skips: an
 ESP32-C6FH4 (QFN32) rev v0.2 with its native USB alone, on macOS, port `/dev/cu.usbmodem1101` (USB
@@ -4425,8 +4428,8 @@ So the C6 keeps the skip: a backend that leaves the board needing to be plugged 
 sessions is not one a test can rely on. The C6 has no UART bridge on that board, so UART0 was not
 measured.
 
-**Not yet:** a real board of each chip, and of each console, to validate on: the ESP32-C3, and a
-C6 whose sessions do not stop it, on another host or another board.
+**Not yet:** a real board of each chip, and of each console, to validate on: a C6 whose sessions
+do not stop it, on another host or another board, and a console on UART0 on the S3, C3 and C6.
 
 ## Project defaults are esp32tl ini options that the markers override
 
@@ -4831,15 +4834,46 @@ pytest-embedded and esp32tl runs did not meet it, but a test session that opens 
 may. Opening the port also reset the chip once. A board whose console is USB-Serial/JTAG and whose
 UART0 has a bridge was not measured on UART0.
 
-**Not yet:** the C3 and the C6 with a USB-Serial/JTAG console skip on the serial backend
+**Not yet:** the C6, the P4 and the S31 with a USB-Serial/JTAG console skip on the serial backend
 (`serial: the board profile {name} has its console on the {title}'s USB-Serial/JTAG controller,
-which the serial backend has been validated on with the ESP32-S3 only`), until a board of each is
-measured as above; the S3, C3 and C6 with a console on UART0 are still refused, as
+which the serial backend has been validated on with the ESP32-S3 and the ESP32-C3 only`), until a
+board of each is measured as above, and the C6's does not leave the bus; the C3 has been
+([below](#the-serial-backend-runs-an-esp32-c3-through-its-usb-serialjtag-port-too)). A console on
+UART0 is still refused on every chip but the classic ESP32, as
 [the serial backend runs the classic ESP32 only](#the-serial-backend-runs-the-classic-esp32-only)
 says.
 
 **Rejected:** skipping the S3 with a USB console too, which the measurement does not call for; and
 reopening the port after each reset to follow a re-enumeration, which the S3 does not do.
+
+## The serial backend runs an ESP32-C3 through its USB-Serial/JTAG port too
+
+Status: decided (#236)
+
+`--esp32tl-backend serial` takes a board profile whose chip is `esp32c3` and whose console is
+`usb-serial-jtag`, as it takes the S3's. Measured on 2026-11-26 on an ESP32-C3 (QFN32) rev v0.4
+with 4 MB of embedded flash, its native USB alone, on macOS, port `/dev/cu.usbmodem1101` (USB
+303a:1001), esptool 5.7.0 and pytest-embedded 2.9.3, with `console_repl_usb` built for the C3, on
+a backend that reads the port's input away before its first reset (`discard_input`,
+[the serial backend runs the classic ESP32 only](#the-serial-backend-runs-the-classic-esp32-only)):
+
+- 27 sessions of the C3's tests of `tests/test_usb_console.py` on `--esp32tl-backend serial --port
+  /dev/cu.usbmodem1101` passed, each with
+  `test_the_usb_console_takes_a_command_and_comes_back_after_a_reset` and
+  `test_a_tap_of_the_usb_console_records_both_ways`; the other two skip on serial, which taps no
+  UART0 and switches no power. None lost the board.
+- Reset: an RTS pulse of 0.1 s resets the chip once (`rst:0x15 (USB_UART_CHIP_RESET)`), and the
+  port stays, the same device node, read on through the descriptor opened before. The ROM's
+  banner came within 0.06 s and the prompt 1.0 s after each of three resets in a row; the S3's
+  3 s pause after the banner's first line did not come.
+- Opening the port again: 20 times, a script opened it with pyserial's default DTR and RTS,
+  closed it, opened it with both released and pulsed RTS, and got the prompt each time; esptool
+  connected afterwards, where the S3 twice stopped answering.
+
+The board has no UART bridge, so UART0 was not measured.
+
+**Rejected:** keeping the C3's skip until a C3 board with a UART bridge is measured too, which the
+USB console, the one the skip is about, does not call for.
 
 ## A USB console through TinyUSB is not a console the profile can name
 
@@ -5246,9 +5280,11 @@ builds it (`BLE_50:1`), got `UNKNOWN_HCI_COMMAND` for `0xFD09` and LE features `
 the unmodified `gatt_client` on the same board logged no error for `0xFD09`; the controller's mode
 follows the host's configuration at build time (`BT_CTRL_50_FEATURE_SUPPORT`,
 `components/bt/include/esp32c3/include/esp_bt.h`), so the values are those of a BLE 4.2 build,
-which all the BLE validation images are. The C3's controller is built from the same sources; it
-was not measured, and takes the S3's values until it is (`TODO(owner)`). The C6's is not, and has
-values of its own ([below](#the-esp32-c6s-controller-reports-what-a-c6-measured-within-what-the-link-carries)).
+which all the BLE validation images are. The C3's controller is built from the same sources, and
+an ESP32-C3 (QFN32, revision v0.4), on 2026-11-26 with the same controller library `51d9dfd`,
+answered every command of the probe as the S3 did, but for its address and the count of the
+discard event (`tools/hci_probe/esp32c3.txt`); so the C3 keeps the S3's values. The C6's is not,
+and has values of its own ([below](#the-esp32-c6s-controller-reports-what-a-c6-measured-within-what-the-link-carries)).
 
 It also takes Espressif's vendor commands `0xFD09` and `0xFD0A`, the flow control of advertising
 reports Bluedroid turns on for an LE controller, and keeps to the credits: Bluedroid asserts in
@@ -5256,6 +5292,17 @@ reports Bluedroid turns on for an LE controller, and keeps to the credits: Blued
 an event, so the controller answers it with none. Past the lost threshold, the next credit given
 back first brings the vendor LE Meta event `0xF0` with the number of reports dropped, as the S3
 sent it (104, when 2 credits came back after 2 reports and a threshold of 3).
+
+A throwaway variant of the probe asked the C3, after `HCI_Reset` and with no connection, commands
+the capture does not hold. Four answers differ from the guest's, which keeps Bumble's: the C3
+answered `Read_Transmit_Power_Level` and `Read_Authenticated_Payload_Timeout` for handle 1 with
+`UNKNOWN_CONNECTION_IDENTIFIER`, where Bumble has no handler or class for them and the guest
+answers them as unknown; it refused `Write_Authenticated_Payload_Timeout` for that handle so too,
+where Bumble completes it; and it answered `LE_Read_Local_P-256_Public_Key` with `Command_Status`
+`SUCCESS`, where Bumble 0.0.236's handler returns a status for a command that takes
+`Command_Status`, so the guest sends no event at all. Bluedroid and NimBLE make their P-256 keys in
+software, and send none of the four with no connection. TODO(owner): whether a firmware's host
+sends `LE_Read_Local_P-256_Public_Key`, which would then wait for an event that never comes.
 
 **Rejected:** leaving the vendor commands to the unknown-command answer, because `0xFD0A`'s
 `Command_Complete` reaches a host that waits for none (`filter_incoming_event command complete event

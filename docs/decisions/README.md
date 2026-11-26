@@ -350,6 +350,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A board profile's console is UART0 or the chip's USB-Serial/JTAG controller](harness.md#a-board-profiles-console-is-uart0-or-the-chips-usb-serialjtag-controller) | `harness.md` | decided (#248) |
 | [On the S3, C3 and C6 the ROM prints on UART0 and on USB-Serial/JTAG](harness.md#on-the-s3-c3-and-c6-the-rom-prints-on-uart0-and-on-usb-serialjtag) | `harness.md` | decided (#248) |
 | [The serial backend runs an ESP32-S3 through its USB-Serial/JTAG port](harness.md#the-serial-backend-runs-an-esp32-s3-through-its-usb-serialjtag-port) | `harness.md` | decided (#248) |
+| [The serial backend runs an ESP32-C3 through its USB-Serial/JTAG port too](harness.md#the-serial-backend-runs-an-esp32-c3-through-its-usb-serialjtag-port-too) | `harness.md` | decided (#236) |
 | [A USB console through TinyUSB is not a console the profile can name](harness.md#a-usb-console-through-tinyusb-is-not-a-console-the-profile-can-name) | `harness.md` | postponed (#248) |
 | [A message the broker published as a Will says so in Message.will](harness.md#a-message-the-broker-published-as-a-will-says-so-in-messagewill) | `harness.md` | decided (#243) |
 | [The P4's ROM is the one of its build's revision](harness.md#the-p4s-rom-is-the-one-of-its-builds-revision) | `harness.md` | decided (#233) |

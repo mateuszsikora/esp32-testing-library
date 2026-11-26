@@ -402,10 +402,10 @@ there already. `SDKCONFIG` is an absolute path: idf.py takes a relative one from
 directory, `-C`, where `tools/hci_probe/build-probe/sdkconfig` does not exist, and kconfgen fails
 with `FileNotFoundError`. Then, on the host, from `tools/hci_probe/build-probe`, with esptool 5
 (`python -m esptool --chip CHIP --port PORT write-flash @flash_args`; esptool 4, as ESP-IDF v5.3.6
-ships, spells it `write_flash`), read the console for 20 s after a reset. On the S3, check that the
-console says `BLE_INIT: Feature Config, …, BLE_50:0, …` before comparing what follows; the C6's
-controller prints no such line, and answered the same with Bluedroid configured for BLE 5.0, and on
-ESP-IDF v5.5.4.
+ships, spells it `write_flash`), read the console for 20 s after a reset. On the S3 and the C3,
+check that the console says `BLE_INIT: Feature Config, …, BLE_50:0, …` before comparing what
+follows; the C6's controller prints no such line, and answered the same with Bluedroid
+configured for BLE 5.0, and on ESP-IDF v5.5.4.
 Its `sdkconfig.defaults` configure Bluedroid as ESP-IDF's BLE 4.2 examples do, without starting it,
 so that the controller runs as under them; without Bluedroid in the build the S3's controller runs
 with `BLE_50:1` and answers otherwise. Before its scan the probe sets the event mask Bluedroid
@@ -415,8 +415,9 @@ comes only when more legacy advertising than the 2 credits and the lost threshol
 3 s scan: a device that advertises in range, at an interval of a few hundred ms or less, is
 enough; on a quiet bench the event does not come. Its count is what the scan heard and dropped,
 104 in the S3's capture, not a constant. The ESP32-S3's answers, of 2026-11-19, are in
-`tools/hci_probe/esp32s3.txt`, and the ESP32-C6's, of 2026-11-26, in `tools/hci_probe/esp32c6.txt`,
-their addresses masked and the advertising reports of the devices around left out;
+`tools/hci_probe/esp32s3.txt`, and the ESP32-C3's and the ESP32-C6's, of 2026-11-26, in
+`tools/hci_probe/esp32c3.txt` and `tools/hci_probe/esp32c6.txt`, their addresses masked and the
+advertising reports of the devices around left out;
 `esp32tl/bluetooth/guest.py` reports them for each chip, but for two of the C6's answers, which
 the link cannot carry: its LE buffer of 517 bytes, reported as 491, and its LE features
 `0x1B900F017FFF`, reported as `0xFF`
