@@ -1401,3 +1401,48 @@ change while the trampoline is in the flash leave it there for good: its `Ble` f
 `original_flash` at a new `enable` and keeps it `pub(crate)`, so the runner cannot put the code
 back as it does on the other chips; that needs esp32sim to expose the C6's `restore_flash`. Nothing
 makes the hooks change while an app runs, so no run reaches it.
+
+## A Bluetooth controller esp32sim cannot start ends the run
+
+Status: decided (#355)
+
+Under `--bt`, when esp32sim cannot start the guest's Bluetooth controller, it notes one `[ble]` line
+and gives the guest's `esp_bt_controller_init` an error: its trampoline refused or not written into
+the guest's memory (`install`, `esp-soc/src/ble/vhci.rs:182-198` at the pin, `357b0e5`), its task
+not created (`:257`), or on the C6 its native initialization failed (`esp32c6/src/ble.rs:197-241`).
+The guest then runs on with no controller. A firmware that takes a missing controller as a runtime
+fault, retrying or reporting its peer lost, does what it would on a board whose peer is gone, and a
+test passes on that, or fails much later on a timeout that does not say why. A consumer's OTA
+scenario was lost that way: the app booted from `ota_1`, of another build, ran with the hooks of the
+application's ELF and never got a controller (#347, since fixed by
+[hooks that follow the app](#the-bluetooth-hooks-follow-the-app-the-bootloader-started-by-its-elfs-sha-256)),
+and the only trace was `[ble] controller task creation failed: 0x3ffea240` in `dut.log`. A firmware
+without a controller tests nothing true of the chip, so the run ends.
+
+The runner has esp32sim keep its `[ble]` lines (`SocBus::ble_keep_log`) from `forward_bt` on,
+takes them at the end of every slice and prints each on stderr as esp32sim would have, so
+`dut.log` keeps every line it had, at most one emulated millisecond later. A line that begins
+with one of `chip::BT_CONTROLLER_FAILURES` ends the run at the end of that slice, as `--no-bt`
+does, with `stats` `end: bt_controller_failed`, the line as `detail`, and exit code 6, the next
+free one (protocol §9). The backend turns that into `esp32sim could not start the firmware's
+Bluetooth controller by {time}: {line}; …`. The C6's native controller's lines are in the list
+beside those of the VHCI chips: it fails the same way, and the same test would be misled.
+
+The lines are known by their text, held in one constant beside the pin's files and lines, which a
+pin bump checks again. esp32sim leaves no structural sign the run loop can read instead:
+`Ble::status` is 0 after a failed init as before any init, and `Ble::task_created` is false in
+both, so telling the two apart would mean hooking `esp_bt_controller_init`'s return as well.
+
+`Ble::enable` carries the kept lines over to the `Ble` it builds
+(`next.lines = std::mem::take(&mut self.lines)`, `esp-soc/src/ble/vhci.rs:141`), so `keep()`
+need not come after it; the runner calls it after anyway.
+
+The failure is not always esp32sim's alone: `xTaskCreatePinnedToCore` or the C6's `calloc` can
+fail on a guest heap that is exhausted, as they would on a chip. The message therefore says that
+esp32sim stands in for the chip's controller, not that a real chip cannot fail there; either way
+the firmware would go on without a controller the test asked for.
+
+**Rejected:** a `warn` on the socket and a run that goes on, because the firmware would still run
+without a controller, and the test would read what it does then as its behaviour. **Rejected:**
+scanning `dut.log` for `[ble]` lines at teardown, because the test would fail only after the wait
+it was in had timed out, and the wait's message would not say why.

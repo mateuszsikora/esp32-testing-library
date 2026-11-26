@@ -78,6 +78,8 @@ enum Act {
     Uart0Stream(Vec<u8>),
     /// The guest calls `esp_bt_controller_init`, which the stub of `--no-bt` answers.
     BtInit,
+    /// esp32sim notes one of its `[ble]` lines, which it keeps under `--bt`.
+    BtLine(&'static str),
 }
 
 /// A guest that does what its script says at the cycles it says, and records UART bytes the way
@@ -135,6 +137,8 @@ struct FakeGuest {
     uart0_in: Vec<(u64, Vec<u8>)>,
     /// With `--no-bt`: the guest's calls to `esp_bt_controller_init` so far.
     bt_inits: Option<u64>,
+    /// esp32sim's `[ble]` lines the run loop has not taken yet.
+    bt_lines: VecDeque<String>,
     /// The reset-reason hint register, as `Act::Hint` last wrote it.
     hint: u32,
 }
@@ -181,6 +185,7 @@ impl FakeGuest {
             uart0: None,
             uart0_in: Vec::new(),
             bt_inits: None,
+            bt_lines: VecDeque::new(),
             hint: 0,
         }
     }
@@ -324,6 +329,7 @@ impl Guest for FakeGuest {
                     .expect("a guest whose UART0 has no pins")
                     .extend(data),
                 Act::BtInit => *self.bt_inits.as_mut().expect("a guest with --no-bt") += 1,
+                Act::BtLine(line) => self.bt_lines.push_back(line.into()),
             }
         }
         self.now = end;
@@ -429,6 +435,9 @@ impl Guest for FakeGuest {
     }
     fn bt_controller_inits(&self) -> u64 {
         self.bt_inits.unwrap_or(0)
+    }
+    fn take_bt_line(&mut self) -> Option<String> {
+        self.bt_lines.pop_front()
     }
     fn sleeps_through(&self) -> bool {
         self.steppable && self.asleep().is_some_and(|&(_, to, _)| self.now < to)
@@ -4759,4 +4768,89 @@ fn under_no_bt_a_guest_that_never_starts_its_controller_runs_to_the_end() {
         .with_no_bt();
     let r = run_for(0.01, guest, FakePeer::new(&[], idle(None, None)), true);
     assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+}
+
+/// One line of each kind esp32sim notes when it cannot start the guest's controller
+/// (`chip::BT_CONTROLLER_FAILURES`), as it notes them.
+const BT_FAILURES: [&str; 9] = [
+    "BLE controller init does not match the guest calling convention",
+    "BLE controller init crosses a noncontiguous flash mapping",
+    "BLE cannot read trampoline memory",
+    "load: address 0x400d1234 not mapped",
+    "controller task creation failed: 0x3ffea240",
+    "BLE init is not mapped to flash",
+    "BLE init crosses a noncontiguous flash mapping",
+    "native initialization step 9 failed: 0x101",
+    "native initialization step 11 returned invalid result 0x0",
+];
+
+#[test]
+fn under_bt_a_controller_esp32sim_cannot_start_ends_the_run_at_the_slice_end() {
+    let ms = cycles(MS);
+    for line in BT_FAILURES {
+        let mut script = tx(ms, 0, b"ab", 100);
+        script.extend([
+            (
+                ms + 200,
+                Act::BtLine("t=0.001000s a line of the controller's session"),
+            ),
+            (ms + 300, Act::BtLine(line)),
+            // what the guest does after it, in the same slice, still goes out; nothing later
+            (ms + 400, Act::Tx(0, b'c')),
+            (
+                ms + 500,
+                Act::BtLine("controller task creation failed: 0x3ffe5fd0"),
+            ),
+            (3 * ms, Act::Tx(0, b'd')),
+        ]);
+        let guest = FakeGuest::new(script)
+            .with_routes(&[route(0, Some(1), Some(3), Some(115_200))])
+            .with_bt();
+        let r = run_for(1.0, guest, FakePeer::new(&[], idle(None, None)), true);
+        assert!(
+            matches!(&r.end, End::BtControllerFailed(detail) if detail == line),
+            "{line}: {:?}",
+            r.end
+        );
+        assert_eq!(r.end.exit_code(), 6);
+        // every line of the slice was taken, and printed, the later failure too
+        assert!(r.guest.bt_lines.is_empty(), "{line}");
+        let console: Vec<u8> = r.peer.of("console").iter().flat_map(|m| data(m)).collect();
+        assert_eq!(console, b"abc", "{line}");
+        let stats = r.peer.msgs.last().expect("stats");
+        assert_eq!(kind(stats), "stats");
+        assert_eq!(
+            stats.get("end").and_then(Json::as_str),
+            Some("bt_controller_failed")
+        );
+        // the first failure is the one the run ended for
+        assert_eq!(stats.get("detail").and_then(Json::as_str), Some(line));
+        // the end of the slice the line came in: the next whole millisecond
+        assert_eq!(num(stats, "t"), ns(2 * ms), "{line}");
+    }
+}
+
+#[test]
+fn under_bt_esp32sim_s_other_lines_do_not_end_the_run() {
+    let ms = cycles(MS);
+    let guest = FakeGuest::new(vec![
+        (
+            ms,
+            Act::BtLine(
+                "the virtual controller is LE-only: enabled in mode 2 (BR/EDR), its commands get Unknown HCI Command",
+            ),
+        ),
+        (
+            ms + 100,
+            Act::BtLine("rejected invalid VHCI packet pointer, length or controller state"),
+        ),
+        (ms + 200, Act::BtLine("rejected oversized or unmapped controller packet")),
+        (ms + 300, Act::BtLine("native ACL allocation failed; retrying")),
+        (ms + 400, Act::BtLine("dropped=3")),
+        (2 * ms, Act::BtLine("t=0.002000s a line of the controller's session")),
+    ])
+    .with_bt();
+    let r = run_for(0.01, guest, FakePeer::new(&[], idle(None, None)), true);
+    assert!(matches!(r.end, End::MaxSeconds), "{:?}", r.end);
+    assert!(r.guest.bt_lines.is_empty());
 }

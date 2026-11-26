@@ -214,7 +214,9 @@ or `POWER_ON_UTC`, for `Esp32Sim.utc`, `Esp32Sim.utc_at` and the GNSS receiver's
    `the runner exited with code {code}; its last output:\n{output}`, prefixed with
    `the link failed: {error}; ` when the link has an error, then with `_runner_reason()` and `; `
    when the runner's `stats` say `end: bt_controller` (`NO_BT_END`), which is
-   `no_bluetooth(stats.t)`: a waiting test gets `RunEnded` with
+   `no_bluetooth(stats.t)`, or `end: bt_controller_failed` (`BT_FAILED_END`), which is
+   `bluetooth_failed(stats.t, stats.detail)`, esp32sim's line from the stats' `detail` (`""`
+   without one): a waiting test gets `RunEnded` with
    that reason, and with `stats.t`, where the runner says the run ended, when it sent its stats.
    Because the clock ends only once the link has been read to its end, the reason holds the
    link's final error, and a test's last look at the console sees everything the guest printed
@@ -663,6 +665,8 @@ repository makes.
 | `LOG_POLL_SECONDS` | `0.02`, wall seconds: how long `LogForwarder` sleeps when the runner's log has nothing new, and so how long after `SIGTERM` it may still take | `LogForwarder` |
 | `NO_BT_END` | `"bt_controller"`: the runner's `stats` `end` when the firmware called `esp_bt_controller_init` under `--no-bt` (protocol §9) | `Esp32Sim._runner_reason` |
 | `no_bluetooth(at)` | The reason a run under `--no-bt` ended at `at` ns, which names `board.bluetooth`, the `bt` fixture and `board.bluetooth.use()` | `Esp32Sim._runner_reason` |
+| `BT_FAILED_END` | `"bt_controller_failed"`: the runner's `stats` `end` when esp32sim could not start the firmware's Bluetooth controller under `--bt`, with esp32sim's line as `detail` (protocol §9) | `Esp32Sim._runner_reason` |
+| `bluetooth_failed(at, line)` | The reason a run under `--bt` ended at `at` ns for esp32sim's `line`, which quotes the line and says the failure is esp32sim's | `Esp32Sim._runner_reason` |
 | `EXIT_SECONDS` | `5`, wall seconds: for the runner's exit after `stop` at teardown, for its `hello`, then for its exit after `SIGTERM`, for each join of the link thread, and for the log's forwarder to be ready and to end | `close`, `_mark_end_of_run`, `_close_link`, `RunnerPopen.close` |
 | `SUN_PATH_MAX` | `104`, the longest Unix socket path on macOS with its NUL; Linux takes 108 | `listen` |
 
@@ -701,6 +705,7 @@ the first problem shows; the socket and the start come at `power_on()`, in the t
 | `cannot start {command[0]}: {error.strerror}` | `Esp32Sim.power_on` | `OSError` from the start, for example `Exec format error` |
 | `the runner exited with code {code}; its output is in {self.dut.logfile}` | `Esp32Sim.close` | Exit code not 0; error at teardown, unless the call already failed on `RunEnded` |
 | `the firmware started its Bluetooth controller (esp_bt_controller_init) by {time}, and the test gave the board no Bluetooth: look at board.bluetooth (or take the bt fixture) before board.power_on(); board.bluetooth.use() gives the firmware the harness's controller with no device on the air` | `no_bluetooth`, through `Esp32Sim._runner_reason`, in `RunEnded` and before `the runner exited with code 5` at teardown | The runner's `stats` say `end: bt_controller`: under `--no-bt` the firmware called `esp_bt_controller_init`; `{time}` is `stats.t` |
+| `esp32sim could not start the firmware's Bluetooth controller by {time}: {line}; the failure is esp32sim's, which stands in for the chip's controller, so the run ended rather than let the firmware go on without one` | `bluetooth_failed`, through `Esp32Sim._runner_reason`, in `RunEnded` and before `the runner exited with code 6` at teardown | The runner's `stats` say `end: bt_controller_failed`: under `--bt` esp32sim noted that it could not start the controller; `{line}` is the stats' `detail`, `{time}` is `stats.t` |
 | `the runner did not exit within {EXIT_SECONDS} s of SIGTERM, and was killed; its output is in {self.dut.logfile}` | `Esp32Sim.close` | No exit within `EXIT_SECONDS` of the signal |
 | `the link failed: {link.error}; its output is in {self.dut.logfile}` | `Esp32Sim.close` | `BoardLink` found the run wrong; after an exit-code problem when there is one |
 | `the tap of {interface} cannot be written: {error}; its output is in {self.dut.logfile}` | `Esp32Sim.close` | An `OSError` from writing the tap's recording, or a `RecordingError` from making it; first, before any other problem |
@@ -728,7 +733,7 @@ In the test body:
 | `{call}: called from {name}: a {handler\|policy} must not wait`, as `board.wait_until: called from the broker's on_publish handler for 'dev/+/req': a handler must not wait` | `RuntimeError` | `wait`, `wait_until`, `wait_for_wake` or `wait_on_clock`, or `console.expect`/`expect_exact`, from inside a handler or a policy of the test's, which the link's thread runs |
 | `{call}: called from {name}: a {handler\|policy} must not call the board`, as `board.flash: called from the broker's on_publish handler for 'dev/+/req': a handler must not call the board` | `RuntimeError` | `flash`, `nvs`, `reset`, `power_on` or `power_off` from inside a handler or a policy of the test's |
 | `the board is off: board.wait_for_wake() waits for a board that is on` | `BoardOff` | `wait_for_wake` after `power_off()` |
-| `the run ended {when} while the test waited {what}: {reason}` | `RunEnded` | The run ended during, or before, a wait. `{when}` is `at {time}` from the runner's `stats`, `after the turn at {time}` without them, the last held turn being only a bound, or `before its first turn`. `{what}` is `until {time}` for `wait`, `for {description}` for `wait_until`, `for a wake from deep sleep` for `wait_for_wake`; `{reason}` is `[the link failed: {error}; ][{no_bluetooth}; ]the runner exited with code {code}; its last output:` and the tail |
+| `the run ended {when} while the test waited {what}: {reason}` | `RunEnded` | The run ended during, or before, a wait. `{when}` is `at {time}` from the runner's `stats`, `after the turn at {time}` without them, the last held turn being only a bound, or `before its first turn`. `{what}` is `until {time}` for `wait`, `for {description}` for `wait_until`, `for a wake from deep sleep` for `wait_for_wake`; `{reason}` is `[the link failed: {error}; ][{no_bluetooth}; ][{bluetooth_failed}; ]the runner exited with code {code}; its last output:` and the tail |
 
 Times in these messages are `seconds(ns)`: seconds without trailing zeros, `1.5 s`, `0 s`.
 Anything else `IdfApp` raises for an ESP-IDF build, a `flasher_args.json` that is not JSON or has
@@ -818,7 +823,20 @@ proving serial-only validation does not reach the simulator.
   `test_runner_command_gives_no_bluetooth_where_esp32sim_has_none_or_the_build_no_elf`: no
   `--no-bt` for builds of `esp32p4` and `esp32s31`, nor for one without its ELF.
   `test_a_run_the_firmware_s_bluetooth_controller_ended_says_what_to_do`: the text of
-  `no_bluetooth`. In `tests/test_bt_spp_initiator.py`,
+  `no_bluetooth`.
+  `test_the_end_of_a_bluetooth_controller_esp32sim_cannot_start_names_its_line_and_time`: the
+  text of `bluetooth_failed`.
+  `test_a_bluetooth_controller_esp32sim_cannot_start_fails_the_test_quoting_its_line`: a fake
+  runner (`FAKE_LINK=bt_failed`) that ends the run with `end: bt_controller_failed` and exit code
+  6 fails the test's wait with `RunEnded` quoting esp32sim's line and the time, and esp32sim's
+  `[ble]` line in the runner's last output. No emulator test makes esp32sim fail to start a
+  controller: no validation image does, now that the hooks follow the app the bootloader started
+  (#347), and making one would mean an app of another build that the run gives the application's
+  hooks on purpose; the runner's tests cover `forward_bt` keeping the lines on each of the four
+  chips, and the run loop's end. In
+  `tests/test_bt_spp_initiator.py`, `test_the_firmware_finds_pairs_with_and_streams_to_the_peer`
+  also finds esp32sim's mode-2 note in the runner's output, which the runner prints for esp32sim.
+  Also there,
   `test_a_test_that_gives_the_board_no_bluetooth_fails_naming_board_bluetooth` runs the issue's
   test of `bt_spp_initiator` without `board.bluetooth`: it fails with `RunEnded` naming
   `board.bluetooth` and code 5, after one boot. In `tests/test_chips.py`,

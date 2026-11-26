@@ -2568,6 +2568,22 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_bt_spp_initiator.py::test_a_test_that_gives_the_board_no_bluetooth_fails_naming_board_bluetooth`,
   `tests/test_chips.py::TestOnESP32S3::test_without_bt_the_controller_s_start_ends_the_run_naming_board_bluetooth`,
   `tests/test_chips.py::TestOnESP32C3::test_without_bt_the_controller_s_start_ends_the_run_naming_board_bluetooth`
+- **312.** A Bluetooth controller esp32sim cannot start ends the run: under `--bt`, a slice in which
+  esp32sim notes one of the lines of `chip::BT_CONTROLLER_FAILURES` ends there, with `stats`
+  `end: bt_controller_failed`, the first such line as `detail`, and exit code 6, and the test
+  fails with a reason that quotes the line and the board's time. Every other `[ble]` line ends
+  nothing. Each of esp32sim's `[ble]` lines still reaches the runner's stderr, as esp32sim printed
+  it, from the slice it came in.
+  `runner/src/session/tests.rs::under_bt_a_controller_esp32sim_cannot_start_ends_the_run_at_the_slice_end`,
+  `runner/src/session/tests.rs::under_bt_esp32sim_s_other_lines_do_not_end_the_run`,
+  `runner/src/tests.rs::the_lines_of_a_controller_esp32sim_cannot_start_are_known_by_their_start`,
+  `runner/src/tests.rs::forward_keeps_esp32sims_bluetooth_lines_for_the_run_loop`,
+  `runner/src/tests.rs::on_the_s3_forward_keeps_esp32sims_bluetooth_lines_for_the_run_loop`,
+  `runner/src/tests.rs::on_the_c3_forward_keeps_esp32sims_bluetooth_lines_for_the_run_loop`,
+  `runner/src/tests.rs::on_the_c6_forward_keeps_esp32sims_bluetooth_lines_for_the_run_loop`,
+  `tests/test_pytest_plugin.py::test_the_end_of_a_bluetooth_controller_esp32sim_cannot_start_names_its_line_and_time`,
+  `tests/test_pytest_plugin.py::test_a_bluetooth_controller_esp32sim_cannot_start_fails_the_test_quoting_its_line`,
+  `tests/test_bt_spp_initiator.py::test_the_firmware_finds_pairs_with_and_streams_to_the_peer`
 
 ## History conditions
 

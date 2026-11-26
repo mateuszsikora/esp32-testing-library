@@ -215,6 +215,22 @@ def no_bluetooth(at: int) -> str:
     )
 
 
+# The runner's `stats` `end` when esp32sim could not start the firmware's Bluetooth controller under
+# `--bt`, with esp32sim's line as `detail` (protocol 5.9 and §9).
+BT_FAILED_END = "bt_controller_failed"
+
+
+def bluetooth_failed(at: int, line: str) -> str:
+    """Why a run under `--bt` ended at `at`, the end of the slice in which esp32sim noted `line`:
+    it could not start the firmware's Bluetooth controller, so the firmware would have gone on
+    without one."""
+    return (
+        f"esp32sim could not start the firmware's Bluetooth controller by {seconds(at)}: {line};"
+        " the failure is esp32sim's, which stands in for the chip's controller, so the run ended"
+        " rather than let the firmware go on without one"
+    )
+
+
 class BackendError(Exception):
     """What keeps the backend from starting, said so that the reader knows what to do."""
 
@@ -1456,11 +1472,14 @@ class Esp32Sim(Board):
         )
 
     def _runner_reason(self) -> str | None:
-        """What the runner's `stats` say the test must change, when they say it: a firmware
-        that started its Bluetooth controller under `--no-bt`."""
+        """What the runner's `stats` say ended the run, when the runner's own words do not say it
+        for the test: a firmware that started its Bluetooth controller under `--no-bt`, or a
+        controller esp32sim could not start under `--bt`."""
         stats = self.link.stats
         if stats is not None and stats.end == NO_BT_END:
             return no_bluetooth(stats.t)
+        if stats is not None and stats.end == BT_FAILED_END:
+            return bluetooth_failed(stats.t, stats.detail or "")
         return None
 
     def close(self) -> None:

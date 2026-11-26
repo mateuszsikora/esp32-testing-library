@@ -72,6 +72,179 @@ fn forward_leaves_the_forwarder_as_the_guests_controller() {
     assert_eq!(m.bus.ble.session.pop_packet(), None);
 }
 
+/// The symbols the S3's and the C3's `Ble::enable` takes, as esp32sim's own tests give them
+/// (`esp32s3/src/ble.rs`, `esp32c3/src/ble.rs`), from `base` in IRAM.
+fn le_controller_elf(base: u32) -> esp_soc::elf::Elf {
+    let mut elf = esp_soc::elf::Elf::default();
+    for (name, address) in [
+        ("esp_bt_controller_init", base),
+        ("xTaskCreatePinnedToCore", base + 0x400),
+        ("vTaskDelay", base + 0x500),
+        ("esp_bt_controller_enable", base + 0x610),
+        ("esp_vhci_host_check_send_available", base + 0x620),
+        ("esp_vhci_host_send_packet", base + 0x630),
+        ("esp_vhci_host_register_callback", base + 0x640),
+        ("_bt_controller_bss_start", 0x3fc9_0000),
+        ("_bt_controller_bss_end", 0x3fc9_1000),
+    ] {
+        elf.by_name.insert(name.into(), address);
+    }
+    elf.symbol_sizes
+        .insert("esp_bt_controller_init".into(), 0x400);
+    elf
+}
+
+/// The symbols the C6's native `Ble::enable` takes, as esp32sim's own tests give them
+/// (`esp32c6/src/ble.rs`), in flash, and an `esp_app_desc` of ESP-IDF v5.5.4: it takes v5.5.x
+/// only (`supported_idf`).
+fn c6_controller_elf() -> esp_soc::elf::Elf {
+    const FLASH: u32 = 0x4200_0000;
+    let mut elf = esp_soc::elf::Elf::default();
+    for (i, name) in [
+        "esp_bt_controller_enable",
+        "hci_transport_host_callback_register",
+        "r_ble_hci_trans_buf_alloc",
+        "r_ble_hci_trans_buf_free",
+        "ble_transport_to_ll_cmd_impl",
+        "ble_transport_to_ll_acl_impl",
+        "npl_freertos_funcs_init",
+        "npl_freertos_funcs_get",
+        "esp_register_npl_funcs",
+        "npl_freertos_mempool_init",
+        "nimble_port_get_dflt_eventq",
+        "npl_freertos_eventq_init",
+        "calloc",
+        "malloc",
+        "free",
+        "r_os_mempool_init",
+        "r_os_mbuf_pool_init",
+        "r_os_msys_register",
+        "r_os_msys_get_pkthdr",
+        "r_os_mbuf_append",
+        "r_os_mbuf_free_chain",
+        "xTaskCreatePinnedToCore",
+        "vTaskDelay",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        elf.by_name
+            .insert(name.into(), FLASH + 0x1000 + i as u32 * 4);
+    }
+    elf.by_name
+        .insert("esp_bt_controller_init".into(), FLASH + 2);
+    elf.symbol_sizes
+        .insert("esp_bt_controller_init".into(), 0x400);
+    // esp_app_desc_t: its magic, then the version string at 112 (`Elf::idf_version`)
+    let desc = 0x3c00_0020;
+    let mut data = vec![0; 256];
+    data[..4].copy_from_slice(&0xabcd_5432u32.to_le_bytes());
+    data[112..118].copy_from_slice(b"v5.5.4");
+    elf.sections.push(esp_soc::elf::Section {
+        name: ".flash.appdesc".into(),
+        addr: desc,
+        data,
+        is_bss: false,
+    });
+    elf.by_name.insert("esp_app_desc".into(), desc);
+    elf
+}
+
+/// From `forward_bt` on, esp32sim keeps its `[ble]` lines for the run loop, which prints them and
+/// ends the run on one that says the controller did not start, rather than print them itself, and
+/// keeps them so when the hooks follow another app: on each of the four chips that have esp32sim's
+/// Bluetooth.
+macro_rules! keeps_bt_lines_test {
+    ($name:ident, $machine:ty, $elf:expr) => {
+        #[test]
+        fn $name() {
+            let mut m = <$machine as chip::Target>::new(4 << 20);
+            assert_eq!(session::Guest::take_bt_line(&mut m), None);
+            m.forward_bt(&$elf, hci::Shared::default()).unwrap();
+            m.bus
+                .ble
+                .lines
+                .note("controller task creation failed: 0x3ffea240".into());
+            assert_eq!(
+                session::Guest::take_bt_line(&mut m).as_deref(),
+                Some("controller task creation failed: 0x3ffea240")
+            );
+            assert_eq!(session::Guest::take_bt_line(&mut m), None);
+            // the hooks of another app, or none, keep them kept
+            for elf in [None, Some(&$elf)] {
+                session::Guest::bt_hooks(&mut m, elf).unwrap();
+                m.bus
+                    .ble
+                    .lines
+                    .note("BLE cannot read trampoline memory".into());
+                assert_eq!(
+                    session::Guest::take_bt_line(&mut m).as_deref(),
+                    Some("BLE cannot read trampoline memory")
+                );
+            }
+        }
+    };
+}
+
+keeps_bt_lines_test!(
+    forward_keeps_esp32sims_bluetooth_lines_for_the_run_loop,
+    ::esp32::Machine,
+    controller_elf()
+);
+keeps_bt_lines_test!(
+    on_the_s3_forward_keeps_esp32sims_bluetooth_lines_for_the_run_loop,
+    ::esp32s3::Machine,
+    le_controller_elf(0x4038_8000)
+);
+keeps_bt_lines_test!(
+    on_the_c3_forward_keeps_esp32sims_bluetooth_lines_for_the_run_loop,
+    ::esp32c3::Machine,
+    le_controller_elf(0x4038_0000)
+);
+keeps_bt_lines_test!(
+    on_the_c6_forward_keeps_esp32sims_bluetooth_lines_for_the_run_loop,
+    ::esp32c6::Machine,
+    c6_controller_elf()
+);
+
+/// esp32sim's lines for a controller it could not start, and only those.
+#[test]
+fn the_lines_of_a_controller_esp32sim_cannot_start_are_known_by_their_start() {
+    for line in [
+        "BLE controller init does not match the guest calling convention",
+        "BLE controller init crosses a noncontiguous flash mapping",
+        "BLE cannot read trampoline memory",
+        "load: address 0x400d1234 not mapped",
+        "load: address 0x3f800000: Prohibited",
+        "controller task creation failed: 0x3ffea240",
+        "BLE init is not mapped to flash",
+        "BLE init crosses a noncontiguous flash mapping",
+        "native initialization step 3 failed: 0x101",
+        "native initialization step 11 returned invalid result 0x0",
+    ] {
+        assert!(chip::bt_controller_failed(line), "{line}");
+    }
+    for line in [
+        "the virtual controller is LE-only: enabled in mode 2 (BR/EDR), its commands get Unknown HCI Command",
+        "rejected invalid VHCI packet pointer, length or controller state",
+        "rejected oversized or unmapped controller packet",
+        "native packet exceeds 260 bytes; dropping",
+        "native ACL append failed: 1",
+        "native event allocation failed; retrying",
+        "native receive callback failed: 1",
+        // the C6's packet refusals begin as its init refusals do
+        "BLE invalid packet pointer or length",
+        "BLE invalid mbuf chain",
+        "BLE incomplete ACL packet",
+        "BLE inconsistent mbuf lengths",
+        "BLE unmapped packet",
+        "dropped=2",
+        "t=0.100000s controller task creation failed: 0x1",
+    ] {
+        assert!(!chip::bt_controller_failed(line), "{line}");
+    }
+}
+
 #[test]
 fn forward_refuses_an_elf_without_the_controller() {
     let mut m = esp32::machine(chip::esp32::MAC, 4 << 20);
