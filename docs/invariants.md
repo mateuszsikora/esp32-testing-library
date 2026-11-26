@@ -2924,6 +2924,7 @@ clones, and rejection of serial distributed execution before accessing hardware.
   is refused with `ValueError` (`HttpResponse: status 100 is not a final status, from 200 to 599`),
   and so is a reason with a line break or that Latin-1 cannot encode; a 205, as a 204 and a 304,
   takes no body.
+  `tests/test_net_http.py::test_each_status_from_200_to_599_is_sent_as_given_served_fixed_with_a_body_or_handled`,
   `tests/test_net_http.py::test_every_final_status_is_sent_with_its_phrase`,
   `tests/test_net_http.py::test_a_429_carries_its_retry_after_and_a_body_s_status_its_phrase`,
   `tests/test_net_http.py::test_a_handler_answers_429_then_201`,

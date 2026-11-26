@@ -2,6 +2,7 @@
 
 import re
 from collections.abc import Callable
+from http import HTTPStatus
 
 import pytest
 from conftest import CountingList
@@ -246,6 +247,10 @@ def test_the_path_follows_the_form_of_the_target(
     [
         (HttpResponse(409, "exists\n"), "HTTP/1.1 409 Conflict"),
         (HttpResponse(418), "HTTP/1.1 418 I'm a Teapot"),
+        # RFC 9110's phrases, which Python 3.11's `HTTPStatus` spells the older way
+        (HttpResponse(413), "HTTP/1.1 413 Content Too Large"),
+        (HttpResponse(414), "HTTP/1.1 414 URI Too Long"),
+        (HttpResponse(416), "HTTP/1.1 416 Range Not Satisfiable"),
         (HttpResponse(422), "HTTP/1.1 422 Unprocessable Content"),
         (HttpResponse(502), "HTTP/1.1 502 Bad Gateway"),
         (HttpResponse(504), "HTTP/1.1 504 Gateway Timeout"),
@@ -264,6 +269,45 @@ def test_every_final_status_is_sent_with_its_phrase(
     client.send(b"GET / HTTP/1.1\r\n\r\n")
     assert bytes(client.received).split(b"\r\n")[0] == line.encode("latin-1")
     assert response.reason == line.split(" ", 2)[2]
+
+
+RFC9110 = {
+    413: "Content Too Large",
+    414: "URI Too Long",
+    416: "Range Not Satisfiable",
+    422: "Unprocessable Content",
+}
+
+
+def phrase(status: int) -> str:
+    """The phrase a status goes with by default: RFC 9110's for the four Python 3.13 renamed,
+    else `HTTPStatus`'s, else none."""
+    try:
+        return RFC9110.get(status) or HTTPStatus(status).phrase
+    except ValueError:
+        return ""
+
+
+def answering(response: HttpResponse) -> Callable[[HttpRequest], HttpResponse]:
+    """A handler that answers every request with `response`."""
+    return lambda request: response
+
+
+def test_each_status_from_200_to_599_is_sent_as_given_served_fixed_with_a_body_or_handled(
+    server: HttpServer,
+) -> None:
+    for status in range(200, 600):
+        body = "" if status in (204, 205, 304) else "x"
+        line = f"HTTP/1.1 {status} {phrase(status)}".encode()
+        response = HttpResponse(status, body)
+        server.serve("/fixed", response)
+        server.serve("/body", body, status=status)
+        server.serve("/handled", answering(response))
+        for path in ("/fixed", "/body", "/handled"):
+            client = Client(server)
+            client.send(f"GET {path} HTTP/1.1\r\n\r\n".encode())
+            assert bytes(client.received).split(b"\r\n")[0] == line, path
+            assert client.body == body.encode() and client.closed
 
 
 def test_a_429_carries_its_retry_after_and_a_body_s_status_its_phrase(server: HttpServer) -> None:
