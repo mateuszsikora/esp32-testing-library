@@ -28,6 +28,7 @@ from esp32tl.net.ip import (
     Connection,
     Fragmented,
     Network,
+    StreamClose,
     StreamService,
     ipv4,
 )
@@ -981,7 +982,7 @@ class _Traced:
         self._connections = 0
 
     def accept(
-        self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
+        self, peer: tuple[str, int], write: Callable[[bytes], None], close: StreamClose
     ) -> Connection:
         self._connections += 1
         identity = f"{self.port}/{self._connections}"

@@ -73,7 +73,7 @@ class Device:
         self.closed = 0
         self.connection = network.ip.tcp[port].accept(DEVICE, self.received.extend, self._close)
 
-    def _close(self) -> None:
+    def _close(self, *, reset: bool = False) -> None:
         self.closed += 1
 
     def until(self, done: Callable[[], bool], now: int = 0) -> None:

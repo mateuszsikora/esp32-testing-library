@@ -28,7 +28,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM, ChaCha20Poly1305
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from esp32tl.interfaces.condition import Condition
-from esp32tl.net.ip import Connection, StreamService
+from esp32tl.net.ip import Connection, StreamClose, StreamService
 
 # Wide enough that a device whose clock is wrong, or not set, still finds the dates valid.
 NOT_BEFORE = datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)
@@ -413,7 +413,7 @@ class Tls:
         return Condition(find, f"{scope} TLS handshake to {event}", "TLS")
 
     def accept(
-        self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
+        self, peer: tuple[str, int], write: Callable[[bytes], None], close: StreamClose
     ) -> "_Session":
         self._log("tls: handshake started")
         stream = _Stream(f"authority {self.ca.number} connection {self._accepted}")
@@ -427,7 +427,7 @@ class _Session:
         tls: Tls,
         peer: tuple[str, int],
         write: Callable[[bytes], None],
-        close: Callable[[], None],
+        close: StreamClose,
         stream: _Stream,
     ) -> None:
         self._write, self._close = write, close
@@ -709,10 +709,15 @@ class _Session:
         self._send(APPLICATION_DATA, data)
         self._flush()
 
-    def _end(self) -> None:
+    def _end(self, *, reset: bool = False) -> None:
+        """Ends the connection: the inner service's `close`, which passes `reset` through, so that
+        a reset ends the TCP connection with its RST and no alert before it."""
         if not self._closed:
             self.on_close()
-            self._close()
+            if reset:
+                self._close(reset=True)
+            else:
+                self._close()
 
     def on_close(self) -> None:
         if not self._closed:

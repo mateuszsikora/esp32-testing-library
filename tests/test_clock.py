@@ -181,7 +181,7 @@ def test_a_condition_that_holds_at_once_lets_no_time_pass() -> None:
 
 def test_mqtt_immediate_response_is_visible_after_waiting_for_connection() -> None:
     broker = Broker(lambda: 100 * MS)
-    session = broker.accept(("10.64.0.2", 4000), lambda data: None, lambda: None)
+    session = broker.accept(("10.64.0.2", 4000), lambda data: None, lambda **_: None)
 
     class MqttRun(Run):
         def _print(self, until: int) -> None:
@@ -297,7 +297,7 @@ def a_broker_with_deadlines(
     network, interface = a_network(clock, behind, tmp_path)
     broker = network.broker
     broker.puback = puback
-    session = broker.accept(("10.0.0.2", 4000), lambda data: None, lambda: None)
+    session = broker.accept(("10.0.0.2", 4000), lambda data: None, lambda **_: None)
     session.on_data(CONNECT_AND_PUBLISH)
     [message] = broker.messages
     assert message.publication is not None
@@ -391,7 +391,7 @@ def test_a_wait_that_ends_at_a_delayed_http_response_finds_it_written(
     network, interface = a_network(clock, behind, tmp_path)
     network.http.serve("/", HttpResponse(body="slow", after=ms(100)))
     received = bytearray()
-    exchange = network.http.accept(("10.64.0.2", 4000), received.extend, lambda: None)
+    exchange = network.http.accept(("10.64.0.2", 4000), received.extend, lambda **_: None)
     exchange.on_data(b"GET / HTTP/1.1\r\n\r\n")
     run = Run(clock=clock, interfaces=[interface])
     try:
@@ -409,7 +409,7 @@ def test_a_handler_s_error_is_raised_by_the_test_s_wait_and_the_run_goes_on() ->
     clock = HeldClock()
     server = HttpServer(lambda: clock.now, test_error=clock.fail)
     received = bytearray()
-    exchange = server.accept(("10.64.0.2", 4000), received.extend, lambda: None)
+    exchange = server.accept(("10.64.0.2", 4000), received.extend, lambda **_: None)
     link_threads: list[threading.Thread] = []
 
     def handler(request: HttpRequest) -> HttpResponse:
@@ -447,7 +447,7 @@ def a_handler_run(handler: Callable[[HttpRequest], HttpResponse]) -> tuple[Run, 
     clock = HeldClock()
     server = HttpServer(lambda: clock.now, test_error=clock.fail)
     received = bytearray()
-    exchange = server.accept(("10.64.0.2", 4000), received.extend, lambda: None)
+    exchange = server.accept(("10.64.0.2", 4000), received.extend, lambda **_: None)
     server.serve("/fw", handler)
 
     class HttpRun(Run):

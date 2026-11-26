@@ -2932,6 +2932,31 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_net_http.py::test_a_reason_is_text_of_one_latin_1_line`,
   `tests/test_net_http.py::test_a_205_takes_no_body_and_is_sent_with_a_length_of_zero`
 
+## An HTTP server that hangs up
+
+- **316.** A request served an `HttpHangUp`, as it is or from a handler, is recorded in `requests`
+  and satisfies `next_request` as an answered one does, and its connection gets no byte of
+  response: `how="close"` ends it with a FIN, `how="reset"` with a RST, `after` past the
+  request's `at` on the board's clock when given, and a connection the device closes first gets
+  nothing. A service's `close(reset=True)` drops what is queued or unacknowledged and sends one
+  `RST|ACK` from `snd_nxt`, acknowledging `rcv_nxt`, and nothing goes again; a reset once both
+  FINs have crossed sends nothing and ends the connection as closed, once; TLS passes the reset
+  through with no alert before it.
+  `tests/test_net_http.py::test_a_hang_up_ends_the_connection_without_a_byte_and_keeps_the_request`,
+  `tests/test_net_http.py::test_a_hang_up_after_ends_the_connection_that_much_later`,
+  `tests/test_net_http.py::test_a_hang_up_whose_connection_closed_first_ends_nothing`,
+  `tests/test_net_http.py::test_a_hang_up_is_checked_where_it_is_made`,
+  `tests/test_net_ip.py::test_a_reset_drops_what_is_queued_and_sends_a_rst_from_snd_nxt_at_once`,
+  `tests/test_net_ip.py::test_a_reset_after_a_close_still_resets`,
+  `tests/test_net_ip.py::test_a_reset_on_a_dropped_port_is_lost_and_an_orphaned_flow_s_is_abandoned`,
+  `tests/test_net_ip.py::test_a_reset_in_answer_to_data_with_a_fin_is_the_last_segment`,
+  `tests/test_net_ip.py::test_a_reset_once_both_fins_have_crossed_sends_nothing_and_ends_closed`,
+  `tests/test_net_ip.py::test_a_reset_from_on_close_at_the_device_s_fin_resets_and_ends_once`,
+  `tests/test_net_tls.py::test_a_hang_up_behind_tls_passes_its_reset_through_and_writes_no_alert`,
+  `tests/test_http_request.py::test_a_hang_up_ends_the_connection_with_no_response`,
+  `tests/test_http_request.py::test_a_hang_up_with_after_ends_the_connection_that_much_later`,
+  `tests/test_http_request.py::test_a_hang_up_later_than_the_device_s_timeout_ends_nothing`
+
 ## A refused PPP negotiation
 
 - **310.** With `modem.refuse_ppp("lcp")` every dial from the next connects and the far end answers

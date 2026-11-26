@@ -3249,7 +3249,7 @@ Wi-Fi network, which would make tests of one firmware differ by its link.
 
 ## An HTTP server answers on port 80 of every simulated network
 
-Status: decided (#31), responses amended (#338), statuses amended (#356)
+Status: decided (#31), responses amended (#338), statuses amended (#356), hang-ups amended (#357)
 
 `network.http` is an HTTP/1.1 server on TCP 80, behind the modem and behind the access point alike,
 as the broker is on 1883: `serve(path, body)` says what a path answers, `requested(...)` is a
@@ -3292,6 +3292,22 @@ For #356: adding `409` and `429` to the table, because the next firmware needs a
 a table of every registered status of the server's own, because `http.HTTPStatus` already has
 them and only four of its phrases differ between Pythons; and interim `1xx` responses, until a
 firmware's test needs `100 Continue`.
+
+Since #357 the server can also give no answer: `HttpHangUp(*, how="close", after=None)`, served or
+returned by a handler, ends the connection without a byte of response, with a FIN or, for
+`how="reset"`, a RST, `after` past the request on the board's clock, and the request is kept as an
+answered one is. A server, a proxy or a load balancer that reads a request and ends the connection
+is a common failure in the field, and none of the others stood for it: `network.block` acts before
+the device has sent a byte, and `HttpResponse(after=...)` still answers. The RST comes from
+`close(reset=True)` on the `close` the stack hands every `StreamService`, which drops what is queued
+and sends the RST at once, RFC 9293's ABORT; a keyword of the existing callable, so that every
+service and every `close` of no arguments keeps working, and TLS passes it through. `HttpHangUp` is
+a value of its own, checked where it is made as `HttpResponse` is, rather than `None` from a
+handler: a `None` would hide a handler that forgot to return, which stays a `500` and a test error.
+
+**Rejected** for #357: a `network.block`-style switch per port, because the device must have sent
+its request first, and a hang-up is the server's answer to that request, per path and per request
+from a handler.
 
 ## The HTTP client opens one plain connection per request
 

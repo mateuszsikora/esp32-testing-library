@@ -3,7 +3,7 @@
 import struct
 from collections.abc import Callable
 
-from esp32tl.net.ip import ISN, Network
+from esp32tl.net.ip import ISN, Network, StreamClose
 
 SRC, DST = b"\x0a\x40\0\x02", b"\xcb\0\x71\x99"
 
@@ -44,10 +44,10 @@ class Echo:
         self.received: list[bytes] = []
         self.closed = 0
         self.write: Callable[[bytes], None] = lambda b: None
-        self.close: Callable[[], None] = lambda: None
+        self.close: StreamClose = lambda *, reset=False: None
 
     def accept(
-        self, peer: tuple[str, int], write: Callable[[bytes], None], close: Callable[[], None]
+        self, peer: tuple[str, int], write: Callable[[bytes], None], close: StreamClose
     ) -> "Echo":
         self.write, self.close = write, close
         return self
@@ -509,3 +509,115 @@ def test_a_device_that_answers_each_rto_with_a_zero_window_keeps_its_connection(
         "net: TCP 203.0.113.153:1883 → 10.64.0.2:4000: sent again 1 byte from sequence"
         f" {ISN + 1}, the 20th probe of a zero window, after an RTO of 120 s"
     )
+
+
+# A service's reset: `close(reset=True)`.
+
+
+def test_a_reset_drops_what_is_queued_and_sends_a_rst_from_snd_nxt_at_once() -> None:
+    device = Device().established()
+    device.net.receive(tcp(1, ISN + 1, 0x18, b"hi"))  # echoed: 2 bytes from ISN + 1
+    device.seq = 3
+    device.ack(ISN + 1, window=2)  # nothing acknowledged, and no room for more
+    device.echo.write(b"queued")
+    start = len(device.sent)
+    device.echo.close(reset=True)
+    [rst] = device.sent[start:]
+    # RST|ACK from snd_nxt, past what went unacknowledged, acknowledging all the device sent.
+    assert device.segments(start) == [(ISN + 3, 0x14, b"")]
+    assert int.from_bytes(rst[28:32], "big") == 3
+    assert device.lines[-2:] == [
+        "net: TCP 10.64.0.2:4000 → 203.0.113.153:1883 dropped 8 bytes the device had not"
+        " acknowledged",
+        "net: TCP 10.64.0.2:4000 → 203.0.113.153:1883 reset by its service",
+    ]
+    assert not device.net._flows and device.echo.closed == 1
+    # Nothing goes again, and the flow's write and close are no more.
+    assert device.net.quiet_until() is None and device.poll(100 * S) == []
+    device.echo.write(b"late")
+    device.echo.close(reset=True)
+    device.echo.close()
+    assert len(device.sent) == start + 1
+
+
+def test_a_reset_after_a_close_still_resets() -> None:
+    device = Device().established()
+    device.echo.close()
+    assert device.segments()[-1] == (ISN + 1, 0x11, b"")
+    start = len(device.sent)
+    device.echo.close(reset=True)
+    # The FIN took a sequence number: the RST follows it.
+    assert device.segments(start) == [(ISN + 2, 0x14, b"")]
+    assert not device.net._flows
+
+
+def test_a_reset_on_a_dropped_port_is_lost_and_an_orphaned_flow_s_is_abandoned() -> None:
+    held = Device().established()
+    held.net.block(1883, "drop")
+    start = len(held.sent)
+    held.echo.close(reset=True)
+    assert held.sent[start:] == [] and not held.net._flows
+    assert held.lines[-2:] == [
+        "net: TCP 10.64.0.2:4000 → 203.0.113.153:1883 RST dropped: port 1883 is blocked",
+        "net: TCP 10.64.0.2:4000 → 203.0.113.153:1883 reset by its service",
+    ]
+    orphaned = Device().established()
+    orphaned.net.forget_device()
+    start = len(orphaned.sent)
+    orphaned.echo.close(reset=True)
+    assert orphaned.sent[start:] == [] and not orphaned.net._flows
+    assert orphaned.lines[-1] == (
+        "net: TCP 10.64.0.2:4000 → 203.0.113.153:1883 closed by its service with no device to"
+        " answer"
+    )
+
+
+def test_a_reset_in_answer_to_data_with_a_fin_is_the_last_segment() -> None:
+    device = Device().established()
+
+    def reset(data: bytes) -> None:
+        device.echo.close(reset=True)
+
+    device.echo.on_data = reset  # type: ignore[method-assign]
+    start = len(device.sent)
+    device.net.receive(tcp(1, ISN + 1, 0x19, b"GET"))  # FIN|PSH|ACK
+    # The ACK of the data, then the RST, which acknowledges the data but not the FIN.
+    assert device.segments(start) == [(ISN + 1, 0x10, b""), (ISN + 1, 0x14, b"")]
+    assert int.from_bytes(device.sent[-1][28:32], "big") == 4
+    assert not device.net._flows
+
+
+def test_a_reset_once_both_fins_have_crossed_sends_nothing_and_ends_closed() -> None:
+    device = Device().established()
+    device.echo.close()  # our FIN goes
+    device.ack(ISN + 2)  # and the device acknowledges it
+
+    def on_close() -> None:
+        device.echo.closed += 1
+        device.echo.close(reset=True)  # in answer to the device's FIN
+
+    device.echo.on_close = on_close  # type: ignore[method-assign]
+    start = len(device.sent)
+    device.net.receive(tcp(1, ISN + 2, 0x11))  # the device's FIN|ACK
+    # The ACK of its FIN and no RST: ABORT only deletes the connection now (RFC 9293, 3.10.5).
+    assert device.segments(start) == [(ISN + 2, 0x10, b"")]
+    assert not device.net._flows and device.echo.closed == 1
+    ends = [line for line in device.lines if "closed" in line or "reset" in line]
+    assert ends == ["net: TCP 10.64.0.2:4000 → 203.0.113.153:1883 closed"]
+
+
+def test_a_reset_from_on_close_at_the_device_s_fin_resets_and_ends_once() -> None:
+    device = Device().established()
+
+    def on_close() -> None:
+        device.echo.closed += 1
+        device.echo.close(reset=True)
+
+    device.echo.on_close = on_close  # type: ignore[method-assign]
+    start = len(device.sent)
+    device.net.receive(tcp(1, ISN + 1, 0x11))  # the device's FIN, before ours
+    # CLOSE-WAIT: the ACK of its FIN, then the RST, and no FIN of ours.
+    assert device.segments(start) == [(ISN + 1, 0x10, b""), (ISN + 1, 0x14, b"")]
+    assert not device.net._flows and device.echo.closed == 1
+    assert device.lines[-1] == "net: TCP 10.64.0.2:4000 → 203.0.113.153:1883 reset by its service"
+    assert not [line for line in device.lines if line.endswith(" closed")]

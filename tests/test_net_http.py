@@ -8,7 +8,7 @@ import pytest
 from conftest import CountingList
 
 from esp32tl.net.handlers import refuse_board, refuse_wait
-from esp32tl.net.http import HttpRequest, HttpResponse, HttpServer
+from esp32tl.net.http import HangUp, HttpHangUp, HttpRequest, HttpResponse, HttpServer
 from esp32tl.units import ms, seconds
 
 
@@ -16,10 +16,13 @@ class Client:
     def __init__(self, server: HttpServer) -> None:
         self.received = bytearray()
         self.closed = False
+        # How the server ended the connection: `"close"` or `"reset"`, `None` while it is open.
+        self.ended: str | None = None
         self.connection = server.accept(("10.64.0.2", 40000), self.received.extend, self.close)
 
-    def close(self) -> None:
+    def close(self, *, reset: bool = False) -> None:
         self.closed = True
+        self.ended = "reset" if reset else "close"
 
     def send(self, *chunks: bytes) -> None:
         for chunk in chunks:
@@ -482,12 +485,13 @@ def raises(request: HttpRequest) -> HttpResponse:
         (
             lambda request: None,
             TypeError,
-            "http.serve: the handler for '/fw' returned None, not an HttpResponse",
+            "http.serve: the handler for '/fw' returned None, not an HttpResponse or an HttpHangUp",
         ),
         (
             lambda request: "text",
             TypeError,
-            "http.serve: the handler for '/fw' returned 'text', not an HttpResponse",
+            "http.serve: the handler for '/fw' returned 'text', not an HttpResponse or an"
+            " HttpHangUp",
         ),
         (raises, ZeroDivisionError, "a bug of the test's"),
     ],
@@ -703,3 +707,80 @@ def test_serve_takes_status_and_headers_with_a_body_only(
         TypeError, match=rf"^http\.serve: reason with {kind}: the HttpResponse carries"
     ):
         server.serve("/", response, reason="Fine")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("how", ["close", "reset"])
+@pytest.mark.parametrize("handled", [False, True])
+def test_a_hang_up_ends_the_connection_without_a_byte_and_keeps_the_request(
+    how: HangUp, handled: bool
+) -> None:
+    log: list[str] = []
+    server = HttpServer(lambda: 42, log.append)
+    hang_up = HttpHangUp(how=how)
+    server.serve("/enroll", (lambda request: hang_up) if handled else hang_up)
+    requested = server.next_request("/enroll", method="POST")
+    client = Client(server)
+    client.send(b"POST /enroll HTTP/1.1\r\nContent-Length: 2\r\n\r\nhi")
+    assert client.received == bytearray() and client.ended == how
+    request = requested()
+    assert request is not None and request.text == "hi" and request.at.ns == 42
+    assert list(server.requests) == [request]
+    assert server.quiet_until() is None
+    assert log == [f"http: POST /enroll → hung up ({how})"]
+
+
+@pytest.mark.parametrize("how", ["close", "reset"])
+@pytest.mark.parametrize("handled", [False, True])
+def test_a_hang_up_after_ends_the_connection_that_much_later(how: HangUp, handled: bool) -> None:
+    clock = Clock()
+    clock.now = 1_000
+    log: list[str] = []
+    server = HttpServer(clock, log.append)
+    hang_up = HttpHangUp(how=how, after=seconds(2))
+    server.serve("/enroll", (lambda request: hang_up) if handled else hang_up)
+    client = Client(server)
+    client.send(b"GET /enroll HTTP/1.1\r\n\r\n")
+    assert log == [f"http: GET /enroll → hung up ({how}), after 2 s"]
+    assert len(server.requests) == 1 and client.ended is None
+    assert server.quiet_until() == 1_000 + 2_000_000_000
+    clock.now = 2_000_000_999
+    server.poll()
+    assert client.ended is None
+    clock.now = 2_000_001_000
+    server.poll()
+    assert client.received == bytearray() and client.ended == how
+    assert server.quiet_until() is None
+
+
+def test_a_hang_up_whose_connection_closed_first_ends_nothing() -> None:
+    clock = Clock()
+    log: list[str] = []
+    server = HttpServer(clock, log.append)
+    server.serve("/", HttpHangUp(how="reset", after=seconds(5)))
+    client = Client(server)
+    client.send(b"GET / HTTP/1.1\r\n\r\n")
+    client.connection.on_close()
+    assert server.quiet_until() is None
+    clock.now = 10_000_000_000
+    server.poll()
+    assert client.received == bytearray() and client.ended is None
+    assert log[-1] == (
+        "http: GET /: the connection closed before its hang-up, due at 5 s: nothing written"
+    )
+    assert len(server.requests) == 1
+
+
+def test_a_hang_up_is_checked_where_it_is_made(server: HttpServer) -> None:
+    assert HttpHangUp() == HttpHangUp(how="close", after=None)
+    with pytest.raises(ValueError, match=r"^HttpHangUp: how is 'close' or 'reset', not 'drop'$"):
+        HttpHangUp(how="drop")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match=r"^HttpHangUp: after takes a Duration, as seconds\(5\)"):
+        HttpHangUp(after=5)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match=r"^HttpHangUp: after takes a Duration of 0 or more"):
+        HttpHangUp(after=ms(-1))
+    with pytest.raises(AttributeError):
+        HttpHangUp().how = "reset"  # type: ignore[misc]
+    with pytest.raises(
+        TypeError, match=r"^http\.serve: status with an HttpHangUp, which writes no response$"
+    ):
+        server.serve("/", HttpHangUp(), status=200)

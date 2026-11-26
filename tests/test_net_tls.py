@@ -12,6 +12,7 @@ import pytest
 from cryptography import x509
 
 from esp32tl.net import Internet, tls
+from esp32tl.net.http import HangUp, HttpHangUp
 from esp32tl.net.ip import Connection
 from esp32tl.net.tls import (
     NOT_AFTER,
@@ -44,7 +45,7 @@ def tls_exchange() -> dict[str, object]:
     def receive(data: bytes) -> None:
         incoming.write(data)
 
-    server = listener.accept(("10.64.0.2", 4000), receive, lambda: closed.append(True))
+    server = listener.accept(("10.64.0.2", 4000), receive, lambda **_: closed.append(True))
     assert listener.handshakes_started == 0
     for _ in range(20):
         with contextlib.suppress(ssl.SSLWantReadError):
@@ -115,7 +116,7 @@ def test_tls_rejects_unknown_ca_or_wrong_hostname(trusted: bool) -> None:
     def receive(data: bytes) -> None:
         incoming.write(data)
 
-    server = listener.accept(("10.64.0.2", 4000), receive, lambda: closed.append(True))
+    server = listener.accept(("10.64.0.2", 4000), receive, lambda **_: closed.append(True))
     with pytest.raises(ssl.SSLCertVerificationError):
         for _ in range(10):
             with contextlib.suppress(ssl.SSLWantReadError):
@@ -175,7 +176,7 @@ def test_server_dates_require_a_nonempty_forward_interval(end_year: int) -> None
 def test_tls_attempts_count_nonempty_input_once_per_connection() -> None:
     net = Internet(lambda: 0)
     listener = net.listen(8883, net.broker, tls=CertificateAuthority(["broker.example"]))
-    first = listener.accept(("10.64.0.2", 4000), lambda data: None, lambda: None)
+    first = listener.accept(("10.64.0.2", 4000), lambda data: None, lambda **_: None)
     first.on_data(b"")
     assert listener.handshakes_started == 0
     first.on_data(b"\x16")  # First fragment, without a full ClientHello yet.
@@ -183,10 +184,10 @@ def test_tls_attempts_count_nonempty_input_once_per_connection() -> None:
     assert listener.handshakes_started == 1
     first.on_close()
     first.on_data(b"ignored after closure")
-    idle = listener.accept(("10.64.0.2", 4001), lambda data: None, lambda: None)
+    idle = listener.accept(("10.64.0.2", 4001), lambda data: None, lambda **_: None)
     idle.on_close()
     assert listener.handshakes_started == 1
-    second = listener.accept(("10.64.0.2", 4002), lambda data: None, lambda: None)
+    second = listener.accept(("10.64.0.2", 4002), lambda data: None, lambda **_: None)
     second.on_data(b"invalid TLS input")
     assert listener.handshakes_started == 2
     assert not net.broker.clients
@@ -203,7 +204,7 @@ def test_tls_conditions_are_live_named_and_reject_truth_testing(completed: bool)
     assert not condition()
     with pytest.raises(TypeError, match="call the TLS condition"):
         bool(condition)
-    server = listener.accept(("10.64.0.2", 4000), lambda data: None, lambda: None)
+    server = listener.accept(("10.64.0.2", 4000), lambda data: None, lambda **_: None)
     assert not condition()  # Accept alone is not TLS input.
     server.on_data(b"\x16")
     assert condition() is (not completed)  # Input is not handshake completion.
@@ -236,7 +237,7 @@ def test_next_tls_handshake_excludes_previous_success_across_reconnects() -> Non
         def receive(data: bytes) -> None:
             incoming.write(data)
 
-        server = listener.accept(("10.64.0.2", port), receive, lambda: None)
+        server = listener.accept(("10.64.0.2", port), receive, lambda **_: None)
         # Begin before arming another completion condition: completion, not TCP accept
         # or first input, is the boundary for next_handshake_completed().
         with contextlib.suppress(ssl.SSLWantReadError):
@@ -264,7 +265,7 @@ def test_next_tls_handshake_excludes_previous_success_across_reconnects() -> Non
     completed = listener.next_handshake_completed()
     assert not started() and not completed()
     assert listener.handshake_started() and listener.handshake_completed()
-    failed = listener.accept(("10.64.0.2", 4001), lambda data: None, lambda: None)
+    failed = listener.accept(("10.64.0.2", 4001), lambda data: None, lambda **_: None)
     assert not started() and not completed()  # TCP accept is neither event.
     failed.on_data(b"invalid TLS input")
     assert started() and not completed()
@@ -342,7 +343,7 @@ def connect(listener: Tls, context: ssl.SSLContext, port: int = 4000) -> Client:
     client = Client(
         context.wrap_bio(incoming, outgoing, server_hostname="broker.example"),
         outgoing,
-        listener.accept(("10.64.0.2", port), receive, lambda: closed.append(True)),
+        listener.accept(("10.64.0.2", port), receive, lambda **_: closed.append(True)),
         wrote,
         closed,
     )
@@ -403,11 +404,11 @@ def test_the_server_sends_the_same_bytes_in_every_run() -> None:
         ca = CertificateAuthority(["broker.example"])
         listener = net.listen(8883, net.broker, tls=ca)
         for port in (4000, 4001):
-            listener.accept(("10.64.0.2", port), flights.append, lambda: None).on_data(hello)
+            listener.accept(("10.64.0.2", port), flights.append, lambda **_: None).on_data(hello)
         other = CertificateAuthority(["broker.example"])
         del net.ip.tcp[8883]
         listener = net.listen(8883, net.broker, tls=other)
-        listener.accept(("10.64.0.2", 4002), flights.append, lambda: None).on_data(hello)
+        listener.accept(("10.64.0.2", 4002), flights.append, lambda **_: None).on_data(hello)
         assert other.ca_pem != ca.ca_pem
         return ca.ca_pem, flights
 
@@ -475,7 +476,7 @@ def test_a_maximum_fragment_length_limits_the_servers_records() -> None:
     listener = net.listen(8883, Echo(), tls=ca)
     hello = client_hello(extensions=[(1, b"\x01"), (10, b"\x00\x02\x00\x1d")])
     wrote: list[bytes] = []
-    listener.accept(("10.64.0.2", 4000), wrote.append, lambda: None).on_data(hello)
+    listener.accept(("10.64.0.2", 4000), wrote.append, lambda **_: None).on_data(hello)
     flight = b"".join(wrote)
     lengths = []
     while flight:
@@ -544,7 +545,43 @@ def test_a_client_hello_the_server_cannot_serve_is_refused(
     listener = net.listen(8883, Echo(), tls=CertificateAuthority(["broker.example"]))
     wrote: list[bytes] = []
     closed: list[bool] = []
-    server = listener.accept(("10.64.0.2", 4000), wrote.append, lambda: closed.append(True))
+    server = listener.accept(("10.64.0.2", 4000), wrote.append, lambda **_: closed.append(True))
     server.on_data(client_hello(extensions))
     assert wrote == [b"\x15\x03\x03\x00\x02\x02" + bytes([alert])] and closed == [True]
     assert net.events[-1]["event"] == f"tls: handshake failed: {message}"
+
+
+@pytest.mark.parametrize("how", ["close", "reset"])
+def test_a_hang_up_behind_tls_passes_its_reset_through_and_writes_no_alert(
+    how: HangUp,
+) -> None:
+    net = Internet(lambda: 0)
+    ca = CertificateAuthority(["api.example"])
+    listener = net.listen(443, net.http, tls=ca)
+    net.http.serve("/enroll", HttpHangUp(how=how))
+    context = ssl.create_default_context(cadata=ca.ca_pem)
+    context.maximum_version = ssl.TLSVersion.TLSv1_2
+    incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
+    client = context.wrap_bio(incoming, outgoing, server_hostname="api.example")
+    ended: list[bool] = []
+
+    def end(*, reset: bool = False) -> None:
+        ended.append(reset)
+
+    def receive(data: bytes) -> None:
+        incoming.write(data)
+
+    server = listener.accept(("10.64.0.2", 4000), receive, end)
+    for _ in range(20):
+        with contextlib.suppress(ssl.SSLWantReadError):
+            client.do_handshake()
+        server.on_data(outgoing.read())
+        if client.version() and listener.handshake_completed():
+            break
+    else:
+        pytest.fail("TLS did not finish its handshake")
+    assert incoming.pending == 0
+    client.write(b"GET /enroll HTTP/1.1\r\nHost: api.example\r\n\r\n")
+    server.on_data(outgoing.read())
+    assert ended == [how == "reset"] and incoming.pending == 0
+    assert [request.path for request in net.http.requests] == ["/enroll"]
