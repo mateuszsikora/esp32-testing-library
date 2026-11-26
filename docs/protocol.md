@@ -543,7 +543,9 @@ where the run ended: the end of the last slice, or, after a `stop`, that turn's 
 says why: `max_seconds`, `stop`, `signal`, `emulator` (then also `stop`, the `Stop` variant's name,
 and `detail`, its `Debug` form), `protocol_error` (then also `detail`), or `bt_controller`: under
 `--no-bt` the guest called `esp_bt_controller_init`, and `t` is the end of the slice it called it
-in, at most one emulated millisecond later (§9). `inputs_not_applied`
+in, at most one emulated millisecond later (§9), or `bt_controller_failed` (then also `detail`,
+esp32sim's line without its `[ble]` prefix): under `--bt` esp32sim could not start the guest's
+Bluetooth controller, and `t` is the end of the slice it said so in (§9). `inputs_not_applied`
 counts the queued input messages not yet applied when the run ended, and `rx_bytes_not_paced` the
 received bytes not yet paced into the chip, of `uart_rx` messages already applied (a message still
 in the queue counts in `inputs_not_applied` only), so `BoardLink` can tell inputs that reached
@@ -1111,8 +1113,17 @@ bytes back.
 other, as ESP-IDF does (`esp-soc/src/ble/vhci.rs:261-275`, from mikroverk/esp32sim#347): a
 firmware that enables mode 2, BR/EDR only, as ESP-IDF's `bt_spp_initiator` does, sends its packets
 as `hci_tx` like any other. esp32sim then prints `[ble] the virtual controller is LE-only: enabled
-in mode 2 (BR/EDR), its commands get Unknown HCI Command` on the runner's stderr, which with `--bt`
-does not hold: the controller is the peer's.
+in mode 2 (BR/EDR), its commands get Unknown HCI Command`, which the runner prints on its stderr
+and which with `--bt` does not hold: the controller is the peer's.
+
+Under `--bt` esp32sim keeps its `[ble]` lines for the runner (`BleLog::keep`,
+`esp-soc/src/ble/log.rs:16`), which prints each on its stderr at the end of the slice it came in.
+Nothing of them goes on the socket, but one: a line that says esp32sim could not start the guest's
+controller (its trampoline refused or not written, `install`, `esp-soc/src/ble/vhci.rs:182-198`;
+its task not created, `:257`; on the C6, `esp32c6/src/ble.rs:197-241`) ends the run at the end of
+that slice, with `stats` `end: bt_controller_failed` and the line as `detail` (§9). The guest's
+`esp_bt_controller_init` has returned an error by then, and the guest would go on with no
+controller.
 
 ### 5.23 `console_rx` *ext* (USB console)
 
@@ -1505,6 +1516,7 @@ the runner at or before its `t` (rule 1).
 | `SIGTERM` or `SIGINT` | ends the slice in progress (at most one emulated millisecond, or the rest of a deep sleep, a few wall microseconds), or at once if it is waiting for the peer's turn or, under `--realtime`, for wall time on its own clock (12.2). A sleep inside esp32sim's pacing comes to its end first, which is about 2 ms at most but for the board kept off from power-on (12.2); sends the events and `warn`s not yet sent, `stats` with `end: signal`, closes | 0 |
 | any other `Stop` (`esp-soc/src/soc.rs:9`: `MaxInsns`, `Breakpoint`, `Unimplemented`, `Simcall`, `Ebreak`, `Watch`, `Exceptions`, `CostModel`, `CostModelLifecycle`) | events not yet sent, `stats` with `end: emulator` and the variant, closes | 1 |
 | under `--no-bt`, the guest calls `esp_bt_controller_init`, which the runner's stub answers with `ESP_ERR_NOT_SUPPORTED` | ends the slice the call came in, sends events not yet sent, `stats` with `end: bt_controller`, closes | 5 |
+| under `--bt`, esp32sim notes that it could not start the guest's Bluetooth controller (5.22): `BLE controller init does not match the guest calling convention`, `BLE controller init crosses a noncontiguous flash mapping`, `BLE cannot read trampoline memory`, `load: address …` (the trampoline not written), `controller task creation failed: …`, and on the C6 `BLE init is not mapped to flash`, `BLE init crosses a noncontiguous flash mapping`, `native initialization step …` | ends the slice the line came in, sends events not yet sent, `stats` with `end: bt_controller_failed` and the line as `detail`, closes | 6 |
 | usage error, or an image or ROM that cannot be loaded | nothing on the socket (it may not be connected yet) | 2 |
 | protocol error by the peer: malformed or oversized line, unknown `type`, version or chip mismatch, late `t`, wrong `ack`, `quiet_until` not after the `sync`, a `baud` of `0`, a `watch` with a pin the chip does not have, a message the runner does not implement yet, `eth_rx` without either Wi-Fi mode (`eth_rx without --wifi or --wifi-sta`), `wifi_ap` without `--wifi` (`wifi_ap without --wifi`), or `wifi_ap` in station mode (`wifi_ap with --wifi-sta: there is no virtual access point to switch`), an `eth_rx` frame outside 14 to 1518 bytes (`eth_rx: an Ethernet frame of N bytes; one without FCS has 14 to 1518`), `hci_rx` without `--bt` (`hci_rx without --bt`), an `hci_rx` packet outside 1 to 496 bytes (`hci_rx: an H4 packet of N bytes; esp32sim's VHCI carries 1 to 496`), an `on` that is not `true` or `false`, `sd_card` without `--sd-spi` (`sd_card without --sd-spi`), an `image` that is not a string, `sd_fault` or `sd_clear` without `--sd-spi` (`sd_fault without --sd-spi`, `sd_clear without --sd-spi`), an `sd_fault` that 5.20 does not allow (an `op` or `action` it does not list, an erase that fails, a `delay` missing, out of range or with `error`, a `count` out of range, `blocks` that are not `[first, last]`, an `id` in use already), `flash_dump` without `--flash-out` (`flash_dump without --flash-out`), `flash_write` with the board's supply on (`flash_write with the supply on`) | `stats` with `end: protocol_error`, closes | 3 |
 | the peer is gone: the connection failed, the socket closed, a read or write failed, the peer's turn took longer than `--peer-timeout`, or a write made no progress for that long (in or outside a turn) | nothing more | 4 |

@@ -91,6 +91,14 @@ def test_the_firmware_finds_pairs_with_and_streams_to_the_peer(
     assert len(stream) >= 100 * len(BLOCK)
     assert stream == (BLOCK * (len(stream) // len(BLOCK) + 1))[: len(stream)]
     assert bt.unknown_commands() == []
+    # esp32sim's note of the mode-2 enable, which the runner keeps from esp32sim and prints at
+    # the end of the slice, is in the runner's output as esp32sim printed it, and ends nothing
+    assert board.process is not None
+    output = Path(board.process._logfile).read_text(errors="replace")
+    assert (
+        "[ble] the virtual controller is LE-only: enabled in mode 2 (BR/EDR), its commands get"
+        " Unknown HCI Command" in output
+    )
 
 
 @pytest.mark.app_path("../firmware/bt_spp_initiator_psram")

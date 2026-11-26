@@ -2026,7 +2026,9 @@ def test_release(board, console):
 # `linger` leaves a child holding the link open for 300 s after it exits, and writes the child's pid
 # to `linger.pid` beside the runner; `slow` loads for half a second before it connects, and dies of
 # SIGTERM until then, as the real runner does; `gone` exits 4 in turn 0 without reading it, as the
-# real runner does when the harness is gone. $FAKE_WATCH is the pins the harness's hello must
+# real runner does when the harness is gone; `bt_failed` prints esp32sim's `[ble]` line for a
+# controller task it could not create after the console line, and ends the run for it with exit
+# code 6, as the real runner does under --bt. $FAKE_WATCH is the pins the harness's hello must
 # watch, comma-separated: the default profile's console RX and GNSS route's.
 # $FAKE_PSRAM is the --psram-mb the runner must be given: the default profile's 0.
 # $FAKE_SD is the --sd-spi and --sd-rw it must be given, one per line:
@@ -2107,6 +2109,9 @@ send(p.Console(1000, b"Hello world!\\r\\n"))
 send(p.Warn(1000, "unrouted_rx", "uart_rx on GPIO 5: 72 bytes dropped", pin=5, nbytes=72))
 if mode == "late":
     send(p.Reset(5, 2000, 12, 0))
+if mode == "bt_failed":
+    print("[ble] controller task creation failed: 0x3ffea240", file=sys.stderr, flush=True)
+    end("bt_controller_failed", 6, detail="controller task creation failed: 0x3ffea240")
 if mode == "tx":
     send(p.UartTx(1, 1000, 1, (4,), 9600, b"$PMTK314,0*28\\r\\n"))
 if mode == "stall":
@@ -2516,6 +2521,41 @@ def test_a_mismatched_handshake_fails_the_test_with_both_sides_reasons(
             "E *esp32tl-runner: the run ended: protocol_error",
             "*stats: the run ended at 0.000000000 s (protocol_error, version 2 from the peer*",
         ]
+    )
+
+
+def test_a_bluetooth_controller_esp32sim_cannot_start_fails_the_test_quoting_its_line(
+    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_LINK", "bt_failed")
+    link_runner.makepyfile(
+        test_fake="""
+        def test_bluetooth(board, console):
+            board.power_on()
+            console.expect("Goodbye", timeout=5)
+        """
+    )
+    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider")
+    result.assert_outcomes(failed=1)
+    result.stdout.fnmatch_lines(
+        [
+            "E *RunEnded: the run ended at 0.000001 s while the test waited for 'Goodbye' on the"
+            " console: esp32sim could not start the firmware's Bluetooth controller by 0.000001 s:"
+            " controller task creation failed: 0x3ffea240; the failure is esp32sim's, which stands"
+            " in for the chip's controller, so the run ended rather than let the firmware go on"
+            " without one; the runner exited with code 6; its last output:",
+            # esp32sim's line is in the runner's output, where it was before the runner kept it
+            # ([[] is fnmatch's literal [)
+            "E *[[]ble] controller task creation failed: 0x3ffea240",
+        ]
+    )
+
+
+def test_the_end_of_a_bluetooth_controller_esp32sim_cannot_start_names_its_line_and_time() -> None:
+    assert esp32sim.bluetooth_failed(12_345_000_000, "BLE cannot read trampoline memory") == (
+        "esp32sim could not start the firmware's Bluetooth controller by 12.345 s: BLE cannot"
+        " read trampoline memory; the failure is esp32sim's, which stands in for the chip's"
+        " controller, so the run ended rather than let the firmware go on without one"
     )
 
 

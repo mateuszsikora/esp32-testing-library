@@ -72,6 +72,9 @@ impl Target for esp32::Machine {
             Box::new(hci::Forwarder(hci)),
             esp_soc::ble::Link::default(),
         );
+        // its `[ble]` lines go to the run loop (`Guest::take_bt_line`), not to stderr: `enable_ble`
+        // carries them over, so this may come before or after it
+        SocBus::ble_keep_log(&mut self.bus);
         Ok(())
     }
     fn wifi_report(&self) -> String {
@@ -390,6 +393,9 @@ impl Guest for esp32::Machine {
     fn bt_controller_inits(&self) -> u64 {
         // the stub of `--no-bt` is the only one the runner puts in
         self.stub_hits
+    }
+    fn take_bt_line(&mut self) -> Option<String> {
+        SocBus::ble_log_take(&mut self.bus)
     }
     fn uptime(&mut self) -> crate::session::Uptime {
         use crate::session::Uptime;

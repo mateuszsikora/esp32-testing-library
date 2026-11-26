@@ -118,7 +118,9 @@ usage: esp32tl-runner --chip CHIP --flash-at OFFSET=FILE... --max-seconds S [opt
                         ELF, the application's; needs --board; repeatable, the first the
                         application's: each ELF of another image the guest may boot, such
                         as an OTA update, and the hooks follow the app the bootloader
-                        started, by the app_elf_sha256 of its esp_app_desc_t
+                        started, by the app_elf_sha256 of its esp_app_desc_t; a controller
+                        esp32sim cannot start ends the run (end bt_controller_failed, exit
+                        code 6)
   --no-bt ELF           the guest has no Bluetooth controller: its call to
                         esp_bt_controller_init, at that symbol of ELF, the application's,
                         ends the run (end bt_controller, exit code 5); needs --board,
@@ -434,8 +436,9 @@ What the guest sees:
   `esp_bt_controller_init` names, and no other, as ESP-IDF does: mode 1 (BLE), 2 (Classic alone,
   `CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY`) or 3 (dual mode). Another mode gets `ESP_ERR_INVALID_ARG`.
 - At an enable in mode 2 esp32sim prints `[ble] the virtual controller is LE-only: enabled in mode
-  2 (BR/EDR), its commands get Unknown HCI Command` on stderr. With `--bt` it is not so: the
-  controller is the peer, and the runner cannot keep esp32sim's line out of its stderr.
+  2 (BR/EDR), its commands get Unknown HCI Command`, which the runner prints on stderr. With
+  `--bt` it is not so: the controller is the peer. The runner prints the line as esp32sim would
+  have, and it ends nothing.
 - The host reads the peer's packets at its controller task's VHCI polls, not at the instant the
   peer stamped them: at most one packet a FreeRTOS tick, 10 ms at ESP-IDF's default
   `CONFIG_FREERTOS_HZ=100`, while packets wait.
@@ -452,8 +455,46 @@ The command line refuses `--bt` without `--board`, with exit code 2. An ELF esp3
 that is not an ELF or lacks a symbol the hooks need, ends the run before it starts with exit code
 2 and esp32sim's message after the path: `esp32tl-runner: --bt ELF: BLE requires ELF symbol
 esp_bt_controller_init`. One that cannot be read does too, as `esp32tl-runner: ELF: ERROR`. esp32sim
-checks the rest when the firmware calls `esp_bt_controller_init`: a failure then is a `[ble] …`
-line on stderr, the call fails, and the run goes on without a controller.
+checks the rest when the firmware calls `esp_bt_controller_init`, which installs its controller
+task and creates it. A failure there fails the call and would leave the firmware with no
+controller, so the runner ends the run instead.
+
+### A controller esp32sim cannot start
+
+With `--bt`, the runner takes esp32sim's `[ble]` lines from esp32sim rather than letting esp32sim
+print them, and prints each on stderr, as esp32sim would have, at the end of the slice it came in:
+the runner's output has the same lines as before, at most one emulated millisecond later. When one
+of them says esp32sim could not start the controller, the run ends at the end of that slice:
+`stats` with `end: bt_controller_failed` and esp32sim's line as `detail`
+([protocol, section 9](../protocol.md#9-ending-a-run)), then
+
+```text
+[ble] controller task creation failed: 0x3ffea240
+esp32tl-runner: end: esp32sim could not start the guest's Bluetooth controller: controller task creation failed: 0x3ffea240 at T s (W s wall, N resets, K turns)
+```
+
+and exit code 6. What the guest did in the rest of that slice still reaches the peer. The lines
+that end the run are, on the classic ESP32, the ESP32-S3 and the ESP32-C3:
+
+- `BLE controller init does not match the guest calling convention`
+- `BLE controller init crosses a noncontiguous flash mapping`
+- `BLE cannot read trampoline memory`
+- `load: address ADDRESS not mapped`, or on the classic ESP32's PSRAM `load: address ADDRESS:
+  FAULT`: esp32sim could not write its trampoline into the guest's memory
+- `controller task creation failed: RESULT`, `RESULT` what `xTaskCreatePinnedToCore` returned,
+  which an app running with the hooks of an ELF it was not built from can get
+
+and on the ESP32-C6:
+
+- `BLE init is not mapped to flash`
+- `BLE init crosses a noncontiguous flash mapping`
+- `native initialization step N failed: RESULT`
+- `native initialization step N returned invalid result RESULT`
+
+Every other `[ble]` line goes to stderr and ends nothing: the LE-only note above, `rejected invalid
+VHCI packet pointer, length or controller state`, `rejected oversized or unmapped controller
+packet`, the C6's notes of packets and allocations, and `dropped=N`, which stands for N lines
+esp32sim had to drop after it had kept 1024 the runner had not taken yet.
 
 With `--flash-out`, the file holds the flash as the firmware has it, although esp32sim has written
 its controller task's code over `esp_bt_controller_init` in the emulated flash: the runner puts
@@ -636,6 +677,7 @@ to `--board`, and nothing after it.
 | 3 | with `--board`: a protocol error by the peer, such as a malformed line, a version or chip mismatch, an input stamped before its turn's `sync`, an `eth_rx` without `--wifi` or `--wifi-sta`, or `wifi_ap` without `--wifi` (including station mode), an `hci_rx` on a run without `--bt` or outside 1 to 496 bytes, an `sd_card` on a run without `--sd-spi` | `end: protocol error by the peer at BOARD: WHAT: LINE at ...`, `LINE` cut after 200 characters |
 | 4 | with `--board`: the connection failed, or the peer is gone: it closed the socket, a read or write failed, `--peer-timeout` ran out, or `--parent-fd` reached end of file | `end: cannot connect to the peer at ...`, or `end: the peer at BOARD is gone: WHY at ...` |
 | 5 | with `--no-bt`: the guest called `esp_bt_controller_init` | `end: the guest called esp_bt_controller_init, and the run has no --bt: it has no Bluetooth controller at ...` |
+| 6 | with `--bt`: esp32sim could not start the guest's Bluetooth controller ([above](#a-controller-esp32sim-cannot-start)) | `end: esp32sim could not start the guest's Bluetooth controller: LINE at ...`, `LINE` esp32sim's |
 | 101 | a panic, in the runner or in esp32sim during the run | Rust's panic message, no stop line |
 | 128 + N | with `--board`: a second `SIGTERM` or `SIGINT` (signal number N) | whatever came before it |
 

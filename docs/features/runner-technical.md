@@ -81,8 +81,9 @@ its pin, `357b0e5`.
      then the `flash` line. Nothing checks that files overlap; a later one overwrites.
    - With `--bt` ([below](#bluetooth-the-guests-hci-on-the-socket)): `bluetooth` parses each ELF
      and takes its SHA-256, installs esp32sim's VHCI hooks over the first's symbols, puts the
-     `Forwarder` in esp32sim's session, checks that esp32sim takes the hooks of every other ELF
-     (`Images::check`), and prints the `Bluetooth controller on the socket` line for each.
+     `Forwarder` in esp32sim's session, has esp32sim keep its `[ble]` lines for the run loop,
+     checks that esp32sim takes the hooks of every other ELF (`Images::check`), and prints the
+     `Bluetooth controller on the socket` line for each.
    - With `--no-bt` ([below](#no-bluetooth-controller---no-bt)): `no_bluetooth` parses the ELF and
      puts an esp32sim stub at its `esp_bt_controller_init`, or prints that it has none.
    - `m.boot_rom()` (core 0 to the reset vector); `m.console.mask = CONSOLE_UART0` (`2`, bit 1 of
@@ -784,13 +785,46 @@ controller puts on the link. Every error of the two calls ends the run before it
 as `--bt {path}: {error}`, `{error}` esp32sim's: `not an ELF file`, `BLE requires ELF symbol
 {name}`, `BLE controller init has no room for the guest task trampoline`, `BLE controller BSS is
 too small or outside DRAM`. A file that cannot be read is `{path}: {error}`, as for the other
-inputs. esp32sim checks the rest only when the guest calls `esp_bt_controller_init`, which installs
-the controller task's trampoline (`install`, `esp-soc/src/ble/vhci.rs:177-200`): a failure there
-is a line on stderr, `[ble] BLE controller init does not match the guest calling convention`,
-`[ble] BLE controller init crosses a noncontiguous flash mapping` or `[ble] BLE cannot read
-trampoline memory`, the guest's call returns `u32::MAX` (`:245-248`), and the run goes on, with
-no controller. A run that starts is no proof the controller works; the `Send` and `Poll` hooks'
-refusals are lines on stderr too (protocol 5.22).
+inputs. After the session, `forward_bt` calls `SocBus::ble_keep_log` (`esp32/src/soc.rs:87`), so
+that esp32sim keeps its `[ble]` lines in `Ble::lines` (`BleLog`, `esp-soc/src/ble/log.rs`, at most
+1024, then one `dropped=N` line for those lost) rather than print them. `Ble::enable` carries the
+lines over to the `Ble` it builds (`next.lines = std::mem::take(&mut self.lines)`, `:141`), so the
+order of the two calls does not matter for them. `Guest::bt_hooks`, which puts in the hooks of
+the app the bootloader started (`follow_app!`), moves `Ble::lines` into the new `Ble` too, so the
+lines stay kept whatever app runs. The classic ESP32, the S3, the C3 and the C6 do this alike; the
+C6's `Ble` is its own native controller's (`esp32c6/src/ble.rs`) with the same `BleLog`.
+
+esp32sim checks the rest only when the guest calls `esp_bt_controller_init`, which installs the
+controller task's trampoline (`install`, `esp-soc/src/ble/vhci.rs:177-200`) and creates its task. A
+failure there gives the guest's call an error (`u32::MAX`, `:244-258`) and leaves it with no
+controller. At the end of every slice the run loop takes every kept line (`Guest::take_bt_line`,
+`SocBus::ble_log_take`) and prints it on stderr as `[ble] {line}`, as esp32sim would have, so the
+runner's output keeps every line it had before, a slice (at most one emulated millisecond) later. A
+line that begins with one of `chip::BT_CONTROLLER_FAILURES` ends the run at the end of that slice,
+as `--no-bt` does: events not yet sent, then `stats` with `end: bt_controller_failed` and the first
+such line as `detail`, then the socket closes, exit code 6 (`End::BtControllerFailed`, protocol §9).
+The lines, at the pin, are `BLE controller init does not match the guest calling convention`, `BLE
+controller init crosses a noncontiguous flash mapping` and `BLE cannot read trampoline memory`
+(`install`'s refusals, `:182`, `:186`, `:192`), the errors of `install`'s three `load_bytes`
+(`:196-198`), `load: address {a:#010x} not mapped` (`esp32/src/bus.rs:599`,
+`esp32s3/src/bus.rs:686`, `esp32c3/src/bus.rs:412`) or, into the classic chip's PSRAM, `load:
+address {a:#010x}: {fault:?}` (`esp32/src/bus.rs:594`), which no other `[ble]` line begins as,
+`controller task creation failed: {arg:#x}` (the `Created` hook, `:257`, `arg` the result of
+`xTaskCreatePinnedToCore`, which an app running with the hooks of another build's ELF can get), and
+on the C6 `BLE init is not mapped to flash`, `BLE init crosses a noncontiguous flash mapping`
+(`esp32c6/src/ble.rs:197`, `:199`), `native initialization step {step} failed: {result:#x}` and
+`native initialization step {step} returned invalid result {result:#x}` (`:209`, `:241`). They are
+known by their text: esp32sim leaves no other sign the run loop can read (`Ble::status` stays 0
+after a failed init, as before any init). A pin bump checks them again. Other lines end nothing: the
+LE-only note of a mode-2 enable, the `Send` and `Poll` hooks' refusals (protocol 5.22), the C6's
+packet and allocation notes, and the session's own `t=…s` lines.
+
+The run loop takes the lines right after `run_until`, before the `--no-bt` check and before it
+looks at the `Stop`: a failure in a slice that also reset the chip ends the run without the
+`reset`, as `--no-bt` does. All the slice's lines are printed, the later ones too; the first
+failure is the `detail`. `finish` collects and sends what the guest did up to the end of the slice,
+as for `MaxSeconds`. A chip without the hooks, and a run without `--bt`, keeps nothing, and
+`take_bt_line` is `None`: without `--bt` esp32sim installs no hooks and notes nothing.
 
 **The flash.** `install` writes the trampoline over `esp_bt_controller_init`'s code. When that is in
 flash, the bus writes into `m.bus.flash` itself and esp32sim keeps the code it covered in
@@ -1213,6 +1247,7 @@ peer come from `session.rs` and `transport.rs`:
 | 3 | `protocol error by the peer at {board}: a line longer than 1 MiB` or `…: a line that is not UTF-8` | from the socket, without the line |
 | 4 | `the peer at {board} is gone: {why}` | `{why}` is `the peer closed the socket`, `read failed: {error}`, `write failed: {error}`, `the socket accepts no more data`, `the peer's turn took longer than --peer-timeout`, `the peer read nothing for longer than --peer-timeout` or, while the last messages are written, `the peer did not read the last messages in time`; with `--parent-fd`, `end of file on --parent-fd: the process that started the runner has ended` (`parent::GONE`), for which no `stats` is sent |
 | 5 | `the guest called esp_bt_controller_init, and the run has no --bt: it has no Bluetooth controller` | under `--no-bt`, the stub answered the call (`End::BtController`) |
+| 6 | `esp32sim could not start the guest's Bluetooth controller: {line}` | under `--bt`, one of esp32sim's `[ble]` lines begins with one of `chip::BT_CONTROLLER_FAILURES` (`End::BtControllerFailed`, [Bluetooth](#bluetooth-the-guests-hci-on-the-socket)); `{line}` is esp32sim's, without its `[ble]` prefix |
 
 A failure to write the last messages does not change the exit code: the first cause decides it.
 

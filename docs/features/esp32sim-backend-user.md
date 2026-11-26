@@ -265,6 +265,30 @@ where esp32sim models no Bluetooth, the runner gets neither flag, and neither do
 with no ELF; there a firmware that starts its controller runs it as it did before. Why the run ends rather than giving every such firmware a controller:
 [decision](../decisions/harness.md#a-firmware-that-starts-its-bluetooth-controller-without-boardbluetooth-ends-the-run).
 
+#### A controller esp32sim cannot start
+
+With `board.bluetooth`, esp32sim starts the firmware's controller when the firmware calls
+`esp_bt_controller_init`. When it cannot, the call fails and the firmware would go on with no
+controller, as on a real board whose radio never came up: a firmware that retries, or reports its
+peer lost, would do what it does there, and the test would take that for the firmware's behaviour,
+or time out much later without saying why. Instead the runner ends the run at the end of the slice
+esp32sim said so in ([runner](runner-user.md#a-controller-esp32sim-cannot-start)), and the test
+fails in the wait it was in:
+
+```text
+esp32sim could not start the firmware's Bluetooth controller by 12.345 s: controller task
+creation failed: 0x3ffea240; the failure is esp32sim's, which stands in for the chip's controller,
+so the run ended rather than let the firmware go on without one
+```
+
+then `the runner exited with code 6`. The time is the end of that slice, at most 1 ms after
+esp32sim's line, which is quoted as esp32sim wrote it. An app that runs with the hooks of an ELF it
+was not built from can get `controller task creation failed: …`, as the first app the bootloader
+starts can when it keeps the build's hooks over an image of another build
+([above](#an-app-from-another-slot-or-another-build-an-ota-update)). esp32sim's `[ble]` lines are
+in `dut.log` as before, this one included. Why the run ends:
+[decision](../decisions/runner.md#a-bluetooth-controller-esp32sim-cannot-start-ends-the-run).
+
 A test that gives a route a [real source](real-source-user.md), as `gnss.real(port)` does, puts the
 whole run on the wall clock: the runner starts with `--realtime`, every recording says `clock: wall`,
 and the board's time costs its own length in wall time. The test still holds the clock, as above. A
@@ -373,7 +397,11 @@ esp32sim: the runner exited with code 3; the link failed: {reason}; its output i
 The teardown says nothing when the test has already failed on `RunEnded`: it names the code and the
 link's reason already. A test that failed for any other reason still gets the teardown error.
 
-The runner's exit codes are in [how a run ends](runner-user.md#how-a-run-ends).
+The runner's exit codes are in [how a run ends](runner-user.md#how-a-run-ends). Two of them come
+with a reason of the backend's before the code, in `RunEnded` and at teardown: 5, a firmware that
+started its Bluetooth controller without `board.bluetooth`
+([above](#a-firmware-that-starts-its-controller-without-boardbluetooth)), and 6, a controller
+esp32sim could not start ([above](#a-controller-esp32sim-cannot-start)).
 
 An HTTP handler of the test's that raises, or returns something other than an `HttpResponse`,
 does not fail the link: the device gets `500 Internal Server Error`, the run goes on, and the

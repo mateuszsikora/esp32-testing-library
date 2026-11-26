@@ -227,6 +227,14 @@ pub trait Guest {
     fn bt_controller_inits(&self) -> u64 {
         0
     }
+    // `--bt`: the default is a chip without esp32sim's Bluetooth controller hooks.
+
+    /// The oldest of esp32sim's `[ble]` lines, without the prefix, that the run loop has not
+    /// taken yet: esp32sim keeps them from `Target::forward_bt` on (`SocBus::ble_keep_log`), and
+    /// `None` without `--bt`.
+    fn take_bt_line(&mut self) -> Option<String> {
+        None
+    }
 }
 
 /// What the chip's uptime counter, the one ESP-IDF's `esp_timer` reads, is doing at a slice
@@ -357,6 +365,9 @@ pub enum End {
     PeerGone(String),
     /// Under `--no-bt`, the guest called `esp_bt_controller_init`.
     BtController,
+    /// Under `--bt`, esp32sim could not start the guest's Bluetooth controller, with its line
+    /// (`chip::BT_CONTROLLER_FAILURES`).
+    BtControllerFailed(String),
 }
 
 impl End {
@@ -367,6 +378,7 @@ impl End {
             End::Protocol(_) => 3,
             End::PeerGone(_) => 4,
             End::BtController => 5,
+            End::BtControllerFailed(_) => 6,
         }
     }
 }
@@ -664,6 +676,10 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 images.follow(&mut *self.guest);
             }
             let stop = self.guest.run_until(end);
+            // the guest has had the error, and would go on without a controller
+            if let Some(line) = self.bt_lines() {
+                return Err(End::BtControllerFailed(line));
+            }
             // the stub answered the call; the guest stops here, whatever it did after it
             if self.opts.no_bt && self.guest.bt_controller_inits() > 0 {
                 return Err(End::BtController);
@@ -683,6 +699,20 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 stop => return Err(End::Emulator(stop)),
             }
         }
+    }
+
+    /// esp32sim's `[ble]` lines from the slice that has just ended, on stderr as esp32sim prints
+    /// them when it does not keep them, `dropped=N` included; the first that says esp32sim could
+    /// not start the guest's controller, if one does (`chip::bt_controller_failed`).
+    fn bt_lines(&mut self) -> Option<String> {
+        let mut failed = None;
+        while let Some(line) = self.guest.take_bt_line() {
+            eprintln!("[ble] {line}");
+            if failed.is_none() && crate::chip::bt_controller_failed(&line) {
+                failed = Some(line);
+            }
+        }
+        failed
     }
 
     fn handshake(&mut self) -> Result<(), End> {
@@ -1888,7 +1918,11 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
         self.link.closing();
         let t = match &end {
             End::PeerGone(_) => return end,
-            End::MaxSeconds | End::Signal | End::Emulator(_) | End::BtController => {
+            End::MaxSeconds
+            | End::Signal
+            | End::Emulator(_)
+            | End::BtController
+            | End::BtControllerFailed(_) => {
                 self.collect();
                 if self
                     .process_pending(true)
@@ -1923,6 +1957,9 @@ impl<'a, G: Guest, L: Link> Session<'a, G, L> {
                 protocol::stats(t, "protocol_error", &[("detail", detail)], &self.stats)
             }
             End::BtController => protocol::stats(t, "bt_controller", &[], &self.stats),
+            End::BtControllerFailed(line) => {
+                protocol::stats(t, "bt_controller_failed", &[("detail", line)], &self.stats)
+            }
             End::PeerGone(_) => unreachable!("returned above"),
         };
         if self.send(&line).and_then(|()| self.flush()).is_ok() {

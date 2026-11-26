@@ -190,6 +190,41 @@ pub(crate) fn ap_leave(link: &mut esp_soc::wifi::StationLink, now_us: u64) -> bo
     true
 }
 
+/// How esp32sim's `[ble]` lines begin when it could not start the guest's Bluetooth controller,
+/// at the pin, `357b0e5`: a line that begins with one of these ends a run under `--bt`
+/// (`Guest::take_bt_line`, protocol §9). The guest's `esp_bt_controller_init` has had an error
+/// then, and goes on with no controller.
+///
+/// The classic ESP32, the S3 and the C3, `esp-soc/src/ble/vhci.rs`: `install`'s three refusals
+/// (`:182`, `:186`, `:192`) and the errors of its three `load_bytes` (`:196-198`), the bus's
+/// `load: address {a:#010x} not mapped` (`esp32/src/bus.rs:599`, `esp32s3/src/bus.rs:686`,
+/// `esp32c3/src/bus.rs:412`) or on the classic chip's PSRAM `load: address {a:#010x}: {fault:?}`
+/// (`esp32/src/bus.rs:594`), all of which the `Init` hook notes (`:244-247`); and the `Created`
+/// hook's `controller task creation failed: {arg:#x}` (`:257`). The C6's native controller,
+/// `esp32c6/src/ble.rs`: `install`'s two refusals (`:197`, `:199`), which the `Init` hook notes
+/// (`:353-355`), and `init_next`'s `native initialization step {step} failed: {result:#x}`
+/// (`:209`) and `native initialization step {step} returned invalid result {result:#x}`
+/// (`:241`). Other `[ble]` lines, the LE-only note of mode 2 or a refused packet, do not end it.
+pub const BT_CONTROLLER_FAILURES: &[&str] = &[
+    "BLE controller init does not match the guest calling convention",
+    "BLE controller init crosses a noncontiguous flash mapping",
+    "BLE cannot read trampoline memory",
+    // no other `[ble]` line at the pin begins so: only `install` loads into the bus
+    "load: address ",
+    "controller task creation failed: ",
+    "BLE init is not mapped to flash",
+    "BLE init crosses a noncontiguous flash mapping",
+    "native initialization step ",
+];
+
+/// Whether `line`, one of esp32sim's `[ble]` lines without the prefix, says it could not start
+/// the guest's Bluetooth controller ([`BT_CONTROLLER_FAILURES`]).
+pub fn bt_controller_failed(line: &str) -> bool {
+    BT_CONTROLLER_FAILURES
+        .iter()
+        .any(|start| line.starts_with(start))
+}
+
 /// `Guest::flash` on a chip whose Bluetooth is esp32sim's VHCI: with `--bt`, from the guest's
 /// `esp_bt_controller_init` until the next `reboot()`, esp32sim's trampoline sits in the flash
 /// over the function's code (`install`, `esp-soc/src/ble/vhci.rs:177-200`), which the guest never

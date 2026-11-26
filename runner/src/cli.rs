@@ -57,7 +57,9 @@ usage: esp32tl-runner --chip CHIP --flash-at OFFSET=FILE... --max-seconds S [opt
                         ELF, the application's; needs --board; repeatable, the first the
                         application's: each ELF of another image the guest may boot, such
                         as an OTA update, and the hooks follow the app the bootloader
-                        started, by the app_elf_sha256 of its esp_app_desc_t
+                        started, by the app_elf_sha256 of its esp_app_desc_t; a controller
+                        esp32sim cannot start ends the run (end bt_controller_failed, exit
+                        code 6)
   --no-bt ELF           the guest has no Bluetooth controller: its call to
                         esp_bt_controller_init, at that symbol of ELF, the application's,
                         ends the run (end bt_controller, exit code 5); needs --board,

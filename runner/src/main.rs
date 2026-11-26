@@ -23,11 +23,16 @@
 //! - 3: a protocol error by the peer;
 //! - 4: the peer is gone, or never answered the connection; with `--parent-fd`, also the process
 //!   that started the runner (see [`parent`]);
-//! - 5: under `--no-bt`, the guest started its Bluetooth controller.
+//! - 5: under `--no-bt`, the guest started its Bluetooth controller;
+//! - 6: under `--bt`, esp32sim could not start the guest's Bluetooth controller.
 //!
 //! With `--bt ELF` the guest's Bluetooth controller is the peer's: esp32sim's VHCI hooks, over the
 //! symbols of `ELF`, hand the guest's H4 packets to the [`hci::Forwarder`], and the run loop sends
 //! them to the peer as `hci_tx` and gives the guest the peer's `hci_rx` (protocol 5.22).
+//! esp32sim keeps its `[ble]` lines for the run loop, which prints them on stderr at the end of
+//! each slice as esp32sim would, and ends the run at the end of the slice in which one says it
+//! could not start the controller (`chip::BT_CONTROLLER_FAILURES`), with `stats`
+//! `end: bt_controller_failed`, the line as `detail`, and exit code 6 (protocol §9).
 //!
 //! With `--no-bt ELF` the guest has no Bluetooth controller: a stub at ELF's
 //! `esp_bt_controller_init` returns `ESP_ERR_NOT_SUPPORTED` in place of ESP-IDF's controller,
@@ -292,6 +297,9 @@ fn run_with_board<T: Target>(
         session::End::BtController => format!(
             "the guest called {BT_CONTROLLER_INIT}, and the run has no --bt: it has no Bluetooth controller"
         ),
+        session::End::BtControllerFailed(line) => {
+            format!("esp32sim could not start the guest's Bluetooth controller: {line}")
+        }
     };
     eprintln!(
         "esp32tl-runner: end: {cause} at {:.6} s ({:.1} s wall, {} resets, {} turns)",
