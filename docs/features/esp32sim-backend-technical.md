@@ -520,14 +520,13 @@ cut at its start, rather than dropped. A log it cannot read gives
    With `--board` the runner exits 0 on `stop` and on `SIGTERM`, so a signal's code never passes.
 
 **The report.** `Esp32Sim.report(run=False)` is `build_line(app, app_sha256)`
-([run-report-technical.md](run-report-technical.md#schema)), `link.report()`, then
-`routes:` and one line per
-UART route of the profile, `  {interface}: {source}; {bytes}{tap}`: `{source}` is
+([run-report-technical.md](run-report-technical.md#schema)), `link.report()`, then `routes:` and
+one line per UART route of the profile, `  {interface}: {source}; {bytes}{tap}`: `{source}` is
 `the {kind} of {detail}` (`the replay of gnss.jsonl`) or `nothing at the far end`, `{bytes}` is
 `{in} bytes in, {out} out` from `log.traffic`, or `no bytes`, and `{tap}` is
 `; tapped into {path}` for a tapped route. With `run`, `log.lines()` follows: the plugin passes it
-for a test that failed. `Esp32Sim.properties()` is `link.properties()` with `build`,
-`build_properties(app, app_sha256)`, and `routes`, by
+for a test that failed, and for every test with `--esp32tl-show-run`. `Esp32Sim.properties()` is
+`link.properties()` with `build`, `build_properties(app, app_sha256)`, and `routes`, by
 interface: `source` (the kind, or `None`), `detail` (what the source was made from, as the test
 named it), `bytes_in`, `bytes_out` and `tap` (the path, or `None`); then `sd_card`, `None`
 without a slot, else `image` (`SdCard.held`, the card the run had at its end, or `None`),

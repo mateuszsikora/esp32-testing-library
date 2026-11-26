@@ -4,7 +4,8 @@ A tap records what crosses one of the board's routes during a run, both ways: wh
 transmitted, and what the far end sent it, whether that is a replay or nothing at all. It writes a
 [recording](../recording-format.md), in the format a replay reads. The run report is what a failing
 test shows besides its error: the run on the board's clock, the test's steps, the console's lines
-and the bytes on every route side by side, in the order they happened.
+and the bytes on every route side by side, in the order they happened. With `--esp32tl-show-run`
+a test that passed shows it too.
 
 ## Tapping a route
 
@@ -157,7 +158,8 @@ A recording, [version 1](../recording-format.md):
 
 A test that fails, in its body, at setup or at teardown, gets the run at the end of its
 `esp32sim link` report section, after the build, the link's report and the routes
-([the link's report](esp32sim-backend-user.md#the-links-report)):
+([the link's report](esp32sim-backend-user.md#the-links-report)); with `--esp32tl-show-run`,
+every test does, also one that passed:
 
 ```
 build: /tmp/…/build (ESP-IDF for esp32); app_sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
@@ -259,7 +261,11 @@ A rule that observes says `observed` where the others say `failed` or `delayed`.
 the test's steps too ([pytest plugin](pytest-plugin-user.md#making-the-card-fail-or-slow-down)).
 
 A test that passed gets the `build:` line, the `routes:` lines and the slot's, without the run;
-`pytest -rA` shows them.
+`pytest -rA` shows them. To look into a test that passed, run it with `--esp32tl-show-run` and
+`-rA`: its section ends with the run as a failed test's does
+([backends and test ids](pytest-plugin-user.md#backends-and-test-ids)). It keeps every step of the
+test and the last 200 entries of the console and the routes, so a long run's beginning may be left
+out, and its heading says so. The serial backend's `serial console` section takes the flag too.
 
 ### Unseen replay request history
 

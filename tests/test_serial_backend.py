@@ -219,6 +219,31 @@ def test_the_serial_report_names_the_build_the_test_loaded(pytester: pytest.Pyte
     }
 
 
+@pytest.mark.parametrize("fails", [False, True])
+@pytest.mark.parametrize("show_run", [False, True])
+def test_the_serial_report_shows_the_run_with_show_run_whatever_the_outcome(
+    pytester: pytest.Pytester, show_run: bool, fails: bool
+) -> None:
+    fake_build(pytester.path)
+    pytester.makeconftest(FAKE_SERIAL)
+    end = 'console.expect_exact("missing", timeout=.01)' if fails else ""
+    pytester.makepyfile(f"""
+        def test_console(board, console):
+            board.power_on()
+            console.expect("Hello world!")
+            {end}
+    """)
+    args = ("--esp32tl-show-run",) if show_run else ()
+    result = run_serial(pytester, "-rA", *args)
+    result.assert_outcomes(**({"failed": 1} if fails else {"passed": 1}))
+    result.stdout.fnmatch_lines(["*Captured serial console teardown*", "serial: wall clock; *"])
+    step = "*'Hello world!' on the console: happened*"
+    if show_run or fails:
+        result.stdout.fnmatch_lines(["*board.power_on()*", step])
+    else:
+        result.stdout.no_fnmatch_line(step)
+
+
 @pytest.mark.parametrize("local", [False, True])
 def test_serial_capabilities_skip_at_the_call(pytester: pytest.Pytester, local: bool) -> None:
     fake_build(pytester.path)

@@ -1,6 +1,6 @@
-"""The run on the test's clock, for the report of a test that failed: what the test did, what the
-firmware printed, the bytes that crossed each route and the levels it drove on the lines, in the
-order of the board's time.
+"""The run on the test's clock, for the report of a test that failed, or of every test with
+--esp32tl-show-run: what the test did, what the firmware printed, the bytes that crossed each
+route and the levels it drove on the lines, in the order of the board's time.
 
 The backend fills a `RunLog` as the run goes: the test's steps from the test's thread, the console
 and the routes' bytes from the link's. It keeps every step of the test and the last `ENTRIES` of

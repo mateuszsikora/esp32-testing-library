@@ -19,7 +19,7 @@ templates.
 | Replay: a recording at the far end of an interface, `gnss.replay(path)` | [user](replay-user.md) | [technical](replay-technical.md) | `esp32tl/sources/replay.py` |
 | Real source: a device on a host serial port at the far end of an emulated route, `gnss.real(port)` | [user](real-source-user.md) | [technical](real-source-technical.md) | `esp32tl/sources/real.py` |
 | Matching engine: AT, PMTK and UBX requests, recorded answers and timing | [user](matching-user.md) | [technical](matching-technical.md) | `esp32tl/matching.py` |
-| Taps and the run report: `gnss.tap(path)`, the run on the board's clock in a failing test's report | [user](run-report-user.md) | [technical](run-report-technical.md) | `esp32tl/tap.py`, `esp32tl/report.py` |
+| Taps and the run report: `gnss.tap(path)`, the run on the board's clock in a failing test's report, or any test's with `--esp32tl-show-run` | [user](run-report-user.md) | [technical](run-report-technical.md) | `esp32tl/tap.py`, `esp32tl/report.py` |
 | Models and units: the GNSS receiver a test describes, `gnss.fix(at=...)`, and quantities with their unit | [user](models-user.md) | [technical](models-technical.md) | `esp32tl/units.py`, `esp32tl/sources/model/` except `modem.py` |
 | Bluetooth peer: a Classic device with SPP on Bumble's virtual link, answered by a model on the board's clock | [user](bluetooth-peer-user.md) | [technical](bluetooth-peer-technical.md) | `esp32tl/bluetooth/` |
 | Cellular modem: AT dialogue, signal, registration, clock and operator, PWRKEY, RESET and RI, a hung modem, a dropped call | [user](modem-user.md) | [technical](modem-technical.md) | `esp32tl/sources/model/modem.py`, `esp32tl/interfaces/modem.py` |

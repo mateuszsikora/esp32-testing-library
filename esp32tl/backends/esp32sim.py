@@ -1660,7 +1660,8 @@ class Esp32Sim(Board):
     def report(self, run: bool = False) -> str:
         """The build the test loaded (`build_line`), the link's report, then the bytes on every
         route, the SD card slot's card when the profile has a slot, and, with `run`, the run on
-        the board's clock (`RunLog.lines`): for the report of a test that failed."""
+        the board's clock (`RunLog.lines`): for the report of a test that failed, or of every test
+        with --esp32tl-show-run."""
         lines = [build_line(self.app, self.app_sha256), self.link.report(), "routes:"]
         for name, uart in self._uarts.items():
             traffic = self.log.traffic.get(name)

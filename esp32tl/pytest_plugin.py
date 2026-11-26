@@ -83,6 +83,8 @@ APP_PATH = "esp32tl_app_path"
 BUILD_DIR = "esp32tl_build_dir"
 PROFILE_NAME = "esp32tl_board_profile"
 PROFILE_PATH = "esp32tl_board_profile_path"
+# Shows the run on the board's clock in the report of a test that passed too.
+SHOW_RUN_OPTION = "--esp32tl-show-run"
 # The board of the test that is running, for the session's `card_cache`.
 RUNNING_BOARD = pytest.StashKey[Board]()
 
@@ -93,6 +95,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--esp32tl-backend",
         choices=list(SERVICES),
         help="run board tests on this backend (default: esp32sim; serial is opt-in)",
+    )
+    group.addoption(
+        SHOW_RUN_OPTION,
+        action="store_true",
+        help="show the run on the board's clock in the report of every test, also one that"
+        " passed (pytest shows it with -rA)",
     )
     parser.addini(
         CARD_CACHE_LIMIT,
@@ -696,10 +704,15 @@ def board(
             failing = False
         finally:
             # The link's warnings, the run's stats and the bytes on each route, in the report of
-            # every test, and the run on the board's clock in that of a test that failed: a
-            # section for people, which pytest shows with a failure or -rA, and a user property
-            # for code, as a JSON string: JUnit XML writes a property's str().
-            run = failing or request.node.stash.get(FAILED, False)
+            # every test, and the run on the board's clock in that of a test that failed, or of
+            # every test with --esp32tl-show-run. A section for people, which pytest shows with a
+            # failure or -rA, and a user property for code, as a JSON string, because JUnit XML
+            # writes a property's str().
+            run = (
+                failing
+                or request.node.stash.get(FAILED, False)
+                or bool(request.config.getoption(SHOW_RUN_OPTION))
+            )
             request.node.add_report_section(
                 "teardown", backend.report_section, backend.report(run=run)
             )

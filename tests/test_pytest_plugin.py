@@ -2453,6 +2453,44 @@ def test_the_report_of_a_failing_test_shows_the_run_on_the_board_s_clock(
     assert routes["uart.gnss"]["bytes_in"] > 0
 
 
+@pytest.mark.parametrize(
+    ("end", "show_run"),
+    [
+        ("", False),
+        ("", True),
+        ("assert False, 'after the wait'", False),
+        ("assert False, 'after the wait'", True),
+    ],
+)
+def test_show_run_puts_the_run_in_the_report_of_a_test_that_passed(
+    link_runner: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, end: str, show_run: bool
+) -> None:
+    monkeypatch.setenv("FAKE_LINK", "tx")
+    link_runner.makepyfile(test_fake=TAPPED.format(end=end))
+    args = ("--esp32tl-show-run",) if show_run else ()
+    result = link_runner.runpytest_subprocess("-p", "no:cacheprovider", "-rA", *args)
+    result.assert_outcomes(**({"failed": 1} if end else {"passed": 1}))
+    result.stdout.fnmatch_lines(
+        [
+            "*Captured esp32sim link teardown*",
+            "routes:",
+            "  uart.gnss: the replay of gnss.jsonl; * bytes in, 15 out; tapped into */tap.jsonl",
+        ]
+    )
+    if end or show_run:
+        # The same run a failed test's report has, whatever the outcome.
+        result.stdout.fnmatch_lines(
+            [
+                "the run on the board's clock, * entries:",
+                "  0.000000000 s  test           uart.gnss.replay('gnss.jsonl')",
+                "  0.000001000 s  console        Hello world!",
+                "  2.500000000 s  test           'Hello world!' on the console: happened",
+            ]
+        )
+    else:
+        result.stdout.no_fnmatch_line("the run on the board's clock*")
+
+
 def test_the_report_names_the_image_the_runner_read_at_power_on(
     link_runner: pytest.Pytester,
 ) -> None:

@@ -66,7 +66,8 @@ M2 asked for it.
    nothing.
 6. **The `board` fixture's teardown** adds the section
    `("teardown", "esp32sim link", backend.report(run=run))`, where `run` holds when the teardown
-   fails, or when the setup or the call failed (`FAILED` in the item's stash), and the user
+   fails, when the setup or the call failed (`FAILED` in the item's stash), or with
+   `--esp32tl-show-run`, and the user
    property `("esp32sim_link", json.dumps(backend.properties()))`
    ([pytest-plugin-technical.md](pytest-plugin-technical.md#data-flow), step 8).
    `Esp32Sim.report(run)` is `build_line(...)` of the `Build` the runner flashes, the link's
