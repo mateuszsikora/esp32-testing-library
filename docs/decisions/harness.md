@@ -5785,3 +5785,31 @@ partition table`. The builder makes none, and no test has needed one.
 **Postponed:** a rule's `blocks=` taking the tuple `blocks` returns. A rule takes one `range`, so a
 file in several ranges takes a rule for each, each counting on its own; no test has needed one
 count across them yet.
+
+## A refused PPP negotiation ends the call as a mode change of its own
+
+Status: decided (#345)
+
+`modem.refuse_ppp(stage)` lets a dial connect and its PPP negotiation fail while the modem stays
+registered. The far end refuses at `"lcp"`, answering none of the device's Configure-Requests, or
+at `"ipcp"`, answering the device's first IPCP Configure-Request with an LCP Terminate-Request.
+The modem hangs up with `NO CARRIER` once the device's Terminate-Request or its Terminate-Ack ends
+the negotiation, and records it in `modem.mode_changes` as `ModeChange(at, "command",
+"ppp refused")`. A test counts the attempts the device made by those entries, or by the dials.
+
+**Rejected:** a `LinkChange` for each refused attempt. `link_changes` records the link coming up
+and going down, and a refused negotiation never opened IPCP: a down with no up before it would
+break the alternation that `next_link_up` and `next_link_down` read, and every test that pairs them.
+
+**Rejected:** a history of refusals of its own beside `mode_changes`. The end of a refused call is
+an end of data mode, which `mode_changes` already records for every other way, with its dial
+before it, so a second history would hold nothing that one entry there does not.
+
+**Rejected:** `"ppp refused"` for every end of a refused call. A device that escapes with `+++`
+gets `OK`, a call the test ends gets the test's cause, and these are what happened; the dial
+before each of them still counts the attempt.
+
+**Postponed:** a deadline of the far end's for a refused LCP. A device on lwIP stops after 10
+Configure-Requests without a Terminate-Request, and such a call stays in data mode until the device
+escapes or closes PPP. No source found says when a SIMCom modem or a network gives up on an
+unanswered LCP; with one, the modem could hang up on its own.

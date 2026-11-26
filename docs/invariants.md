@@ -2866,3 +2866,30 @@ clones, and rejection of serial distributed execution before accessing hardware.
   `tests/test_net_http.py::test_an_after_of_zero_answers_at_once`,
   `tests/test_clock.py::test_a_wait_that_ends_at_a_delayed_http_response_finds_it_written`,
   `tests/test_http_request.py::test_a_response_with_after_arrives_no_earlier_than_after_past_the_request`
+
+## A refused PPP negotiation
+
+- **310.** With `modem.refuse_ppp("lcp")` every dial from the next connects and the far end answers
+  none of the device's LCP Configure-Requests and sends none of its own; with `refuse_ppp("ipcp")`
+  LCP opens, the far end sends no IPCP Configure-Request and answers the device's first one with an
+  LCP Terminate-Request. The device's LCP Terminate-Request, which is acknowledged, or its
+  Terminate-Ack to the far end's, ends the negotiation: the modem sends `NO CARRIER` 1 ms after that
+  chunk, behind the far end's Terminate-Ack when there is one, and is back in command mode,
+  registered and answering AT, with a `ModeChange(at, "command", "ppp refused")` stamped at the
+  chunk and nothing in `link_changes`. A session already up is not touched, the refusal outlives the
+  modem's restarts, an escape from a refused call is an `"escape"`, and after `accept_ppp()` a
+  refused call stays refused until it ends and the next dial opens IPCP. On `modem_recovery`, two
+  refused dials at either stage leave the modem registered, and the dial after `accept_ppp()` comes
+  up.
+  `tests/test_net_ppp.py::test_a_far_end_refusing_lcp_answers_no_configure_request_and_ends_at_the_terminate`,
+  `tests/test_net_ppp.py::test_a_far_end_refusing_ipcp_opens_lcp_and_ends_it_at_the_first_ipcp_request`,
+  `tests/test_net_ppp.py::test_a_device_that_terminates_a_refused_ipcp_first_ends_the_negotiation_too`,
+  `tests/test_net_ppp.py::test_a_device_terminate_request_with_no_refusal_is_no_failed_negotiation`,
+  `tests/test_modem_model.py::test_a_call_refused_at_lcp_hangs_up_at_the_devices_terminate_request`,
+  `tests/test_modem_model.py::test_a_call_refused_at_ipcp_opens_lcp_and_hangs_up_at_the_terminate_ack`,
+  `tests/test_modem_model.py::test_a_dial_after_accept_ppp_comes_up`,
+  `tests/test_modem_model.py::test_accept_ppp_leaves_a_refused_call_refused_until_it_ends`,
+  `tests/test_modem_model.py::test_a_session_already_up_is_not_touched_and_the_refusal_outlives_a_restart`,
+  `tests/test_modem_model.py::test_an_escape_from_a_refused_call_is_an_escape`,
+  `tests/test_modem_model.py::test_refuse_ppp_needs_the_network_and_a_stage`,
+  `tests/test_modem_recovery.py::test_a_refused_negotiation_leaves_the_modem_registered_and_a_dial_after_accept_comes_up`

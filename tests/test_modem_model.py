@@ -1,7 +1,7 @@
 """Deterministic AT dialogue, independent of the runner and of the simulated network."""
 
 import struct
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -9,6 +9,7 @@ import pytest
 from test_net_mqtt import CONNECT, PUBLISH
 from test_net_mqtt_failures import Peer
 from test_net_mqtt_failures import Wire as PppWire
+from test_net_ppp import control, unframe
 
 from esp32tl import boards, recording
 from esp32tl.boards import LineRoute
@@ -1210,6 +1211,183 @@ def test_drop_call_refuses_a_terminate_before_lcp_is_open(tmp_path: Path) -> Non
     with pytest.raises(SourceError, match="terminate needs LCP open"):
         modem.drop_call(terminate=True)
     assert model.data_mode and network.active
+
+
+LCP, IPCP = 0xC021, 0x8021
+NO_CARRIER = b"\r\nNO CARRIER\r\n"
+
+
+def sent(outputs: Iterable[tuple[int, bytes]]) -> list[bytes]:
+    """What the modem sends, each frame unframed and each text as it is."""
+    return [unframe(data) if data.startswith(b"\x7e") else data for _, data in outputs]
+
+
+def open_lcp(model: Modem, network: Internet, t: int) -> None:
+    """The device and the far end acknowledge each other's LCP Configure-Request at `t`."""
+    model.receive(t, control(LCP, 1, 7))
+    model.receive(t, control(LCP, 2, network.ppp._requests[LCP][0]))
+    assert network.ppp.lcp_open
+
+
+def open_ipcp(model: Modem, network: Internet, t: int) -> None:
+    open_lcp(model, network, t)
+    ident, options = network.ppp._requests[IPCP]
+    model.receive(t, control(IPCP, 2, ident, options))
+    model.receive(t, control(IPCP, 1, 8, b"\x03\x06\x0a\x40\0\x02"))
+    assert network.ppp.ipcp_open
+
+
+def refusing(tmp_path: Path, stage: str) -> tuple[ModemRoute, Modem, Internet]:
+    """A route with its network, which refuses PPP at `stage`, and a dial at 1 s."""
+    modem, _, _ = route(tmp_path, [seconds(1).ns])
+    network = modem.network()
+    modem.refuse_ppp(stage)  # type: ignore[arg-type]
+    model = modem.modem_model()
+    assert reply(model, "ATD*99#", seconds(1).ns) == b"\r\nCONNECT\r\n"
+    return modem, model, network
+
+
+def test_a_call_refused_at_lcp_hangs_up_at_the_devices_terminate_request(tmp_path: Path) -> None:
+    modem, model, network = refusing(tmp_path, "lcp")
+    # the far end asks nothing and answers none of the device's Configure-Requests
+    assert list(model.poll(seconds(1).ns)) == []
+    for ident, at in ((1, 2), (2, 8), (3, 14)):
+        assert list(model.receive(seconds(at).ns, control(LCP, 1, ident))) == []
+    assert model.data_mode and not network.ppp.lcp_open
+    # the device gives up: its Terminate-Request is acknowledged, then NO CARRIER
+    gave_up = seconds(30).ns
+    outputs = list(model.receive(gave_up, control(LCP, 5, 4)))
+    assert [t for t, _ in outputs] == [gave_up + LATENCY_NS] * 2
+    assert sent(outputs) == [b"\x06\x04\x00\x04", NO_CARRIER]
+    assert not modem.data_mode and modem.registered and modem.powered
+    assert model.mode_changes == (
+        ModeChange(seconds(1), "data", "dial"),
+        ModeChange(seconds(30), "command", "ppp refused"),
+    )
+    # the link never came up, so it records nothing; the modem is back in command mode
+    assert network.link_changes == [] and not network.active
+    assert reply(model, "AT", gave_up) == b"\r\nOK\r\n"
+    assert b"+CEREG: 0,1" in reply(model, "AT+CEREG?", gave_up)
+
+
+def test_a_call_refused_at_ipcp_opens_lcp_and_hangs_up_at_the_terminate_ack(
+    tmp_path: Path,
+) -> None:
+    modem, model, network = refusing(tmp_path, "ipcp")
+    [(_, request)] = list(model.poll(seconds(1).ns))
+    assert unframe(request)[0] == 1  # the far end opens LCP
+    open_lcp(model, network, seconds(2).ns)
+    # the device's first IPCP Configure-Request is answered with an LCP Terminate-Request
+    outputs = list(model.receive(seconds(3).ns, control(IPCP, 1, 9, b"\x03\x06\0\0\0\0")))
+    [terminate] = sent(outputs)
+    assert terminate[0] == 5 and terminate[2:] == b"\x00\x04"
+    assert model.data_mode and network.ppp.lcp_open and not network.ppp.ipcp_open
+    # lwIP's Terminate-Ack ends the negotiation: NO CARRIER, and command mode, registered
+    assert sent(model.receive(seconds(4).ns, control(LCP, 6, terminate[1]))) == [NO_CARRIER]
+    assert not modem.data_mode and modem.registered
+    assert [(c.at, c.cause) for c in model.mode_changes] == [
+        (seconds(1), "dial"),
+        (seconds(4), "ppp refused"),
+    ]
+    assert network.link_changes == [] and network.ppp.ipcp_opened == 0
+    assert reply(model, "AT", seconds(4).ns) == b"\r\nOK\r\n"
+
+
+def end_refused(model: Modem, network: Internet, stage: str, t: int) -> None:
+    """The device goes through a call refused at `stage` from its dial at `t` to NO CARRIER."""
+    list(model.poll(t))
+    if stage == "lcp":
+        model.receive(t, control(LCP, 1, 1))
+        assert sent(model.receive(t, control(LCP, 5, 2)))[-1] == NO_CARRIER
+        return
+    open_lcp(model, network, t)
+    [terminate] = sent(model.receive(t, control(IPCP, 1, 9, b"\x03\x06\0\0\0\0")))
+    assert terminate[0] == 5
+    assert sent(model.receive(t, control(LCP, 6, terminate[1]))) == [NO_CARRIER]
+
+
+@pytest.mark.parametrize("stage", ["lcp", "ipcp"])
+def test_a_dial_after_accept_ppp_comes_up(tmp_path: Path, stage: str) -> None:
+    modem, model, network = refusing(tmp_path, stage)
+    end_refused(model, network, stage, seconds(2).ns)
+    assert [c.cause for c in model.mode_changes] == ["dial", "ppp refused"]
+    # refused again at the next dial: each attempt has its own entry
+    reply(model, "ATD*99#", seconds(3).ns)
+    end_refused(model, network, stage, seconds(4).ns)
+    modem.accept_ppp()
+    reply(model, "ATD*99#", seconds(5).ns)
+    list(model.poll(seconds(5).ns))
+    open_ipcp(model, network, seconds(6).ns)
+    assert model.data_mode and not network.negotiation_failed
+    assert [c.cause for c in model.mode_changes] == [
+        "dial",
+        "ppp refused",
+        "dial",
+        "ppp refused",
+        "dial",
+    ]
+    assert [(c.at, c.up, c.cause) for c in network.link_changes] == [
+        (seconds(6), True, "IPCP open")
+    ]
+
+
+def test_accept_ppp_leaves_a_refused_call_refused_until_it_ends(tmp_path: Path) -> None:
+    modem, model, network = refusing(tmp_path, "ipcp")
+    list(model.poll(seconds(1).ns))
+    open_lcp(model, network, seconds(2).ns)
+    modem.accept_ppp()
+    # the call connected under the refusal keeps it: IPCP still gets a Terminate-Request
+    assert network.ppp.refuse == "ipcp"
+    [terminate] = sent(model.receive(seconds(3).ns, control(IPCP, 1, 9, b"\x03\x06\0\0\0\0")))
+    assert terminate[0] == 5 and terminate[2:] == b"\x00\x04"
+    assert sent(model.receive(seconds(4).ns, control(LCP, 6, terminate[1]))) == [NO_CARRIER]
+    # and the next dial is accepted
+    reply(model, "ATD*99#", seconds(5).ns)
+    assert network.ppp.refuse is None
+
+
+def test_a_session_already_up_is_not_touched_and_the_refusal_outlives_a_restart(
+    tmp_path: Path,
+) -> None:
+    modem, _, _ = route(tmp_path, [seconds(1).ns])
+    network = modem.network()
+    model = modem.modem_model()
+    reply(model, "ATD*99#", seconds(1).ns)
+    list(model.poll(seconds(1).ns))
+    open_ipcp(model, network, seconds(1).ns)
+    modem.refuse_ppp("ipcp")
+    # the call that is up goes on: the refusal is for the next dial
+    assert network.ppp.refuse is None and network.ppp.ipcp_open and model.data_mode
+    echo = list(model.receive(seconds(2).ns, control(LCP, 9, 30, b"\0\0\0\0")))
+    assert sent(echo)[0][0] == 10  # Echo-Reply
+    # the refusal is the network's: the modem's restart keeps it
+    modem.power_on()
+    reply(model, "ATD*99#", seconds(3).ns)
+    assert network.ppp.refuse == "ipcp"
+
+
+def test_an_escape_from_a_refused_call_is_an_escape(tmp_path: Path) -> None:
+    modem, model, network = refusing(tmp_path, "lcp")
+    model.receive(seconds(1).ns, control(LCP, 1, 1))
+    model.receive(seconds(3).ns, b"+++")
+    assert list(model.poll(seconds(4).ns)) == [(seconds(4).ns, b"\r\nOK\r\n")]
+    assert [c.cause for c in model.mode_changes] == ["dial", "escape"]
+    assert modem.registered and network.link_changes == []
+
+
+def test_refuse_ppp_needs_the_network_and_a_stage(tmp_path: Path) -> None:
+    modem, _, _ = route(tmp_path, [0])
+    with pytest.raises(SourceError, match=r"modem\.refuse_ppp: needs modem\.network\(\)"):
+        modem.refuse_ppp("lcp")
+    assert modem.source is None  # a refused first call selects no model
+    network = modem.network()
+    with pytest.raises(ValueError, match="stage is 'LCP', not 'lcp' or 'ipcp'"):
+        modem.refuse_ppp("LCP")  # type: ignore[arg-type]
+    with pytest.raises(SourceError, match=r"needs modem\.network"):
+        Modem(lambda: 0).refuse_ppp("ipcp")
+    modem.accept_ppp()  # nothing refused: nothing to undo
+    reply(modem.modem_model(), "ATD*99#")
+    assert modem.modem_model().data_mode and network.ppp.refuse is None
 
 
 @pytest.mark.parametrize("hung", [False, True])

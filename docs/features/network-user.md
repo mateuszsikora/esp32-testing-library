@@ -1591,7 +1591,9 @@ reads the times there, not from the text of `network.events`. `LinkChange` is ex
 
 A change is recorded only when it changes something, but for a station joining again: a link that is
 down already, such as a call the device ended with an LCP Terminate-Request and the modem then hung
-up, gets no second down, and a link that never opened IPCP gets none at all. The down's `cause`
+up, gets no second down, and a link that never opened IPCP gets none at all: a call whose
+negotiation [`modem.refuse_ppp`](modem-user.md#a-refused-ppp-negotiation) refused records nothing,
+and `modem.mode_changes` has its `"ppp refused"` end. The down's `cause`
 names the path:
 
 | `cause` | What ended the link |

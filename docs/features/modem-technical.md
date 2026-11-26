@@ -60,7 +60,8 @@ mode goes through `_end_data(cause, at=None)`, which appends `("command", cause)
 `data_mode` was set, stamped `at`, or `now()` when the caller gives none (`hang`,
 `lose_registration`). Its callers are the escape, at the chunk's `t` in `receive` without a
 network and at `poll`'s `now` with one, `drop_call` (`"drop"`), `hang`, `lose_registration`
-(`"registration"`) and `_set_power` (`"restart"`, at the instant it also stamps a `ModemRestart`
+(`"registration"`), `receive` at a refused negotiation's end (`"ppp refused"`, at the chunk's `t`)
+and `_set_power` (`"restart"`, at the instant it also stamps a `ModemRestart`
 with, after the board's first instant; before it, `_set_power` stamps none). `AT+CFUN=0` and `=4`
 called it too; the parser reads them only in command mode, where `data_mode` is already off and an
 `Internet` already stopped by what ended the call, so they no longer do. A `+++` is never a `ModemCommand`: [the decision](../decisions/harness.md#an-escape-is-a-mode-change-not-a-modem-command).
@@ -77,7 +78,8 @@ No protocol or recording-format version changes: UART bytes and GPIO input use v
 `ModemPower` is frozen: `at: Duration`, `powered: bool`, `cause`: `"pwrkey"`, `"supply"` or `"test"`,
 typed as `RestartCause`, whose `"reset"` it never holds.
 `ModeChange` is frozen: `at: Duration`, `mode`: `"command"` or `"data"` (`Mode`), `cause`: `"dial"`,
-`"escape"`, `"no carrier"`, `"drop"`, `"hang"`, `"registration"` or `"restart"` (`ModeCause`).
+`"escape"`, `"no carrier"`, `"drop"`, `"hang"`, `"registration"`, `"restart"` or `"ppp refused"`
+(`ModeCause`).
 `ModemCommand` is frozen: `at: Duration`, `text: str`, `response: bytes`, `fallback: bool`. The JSON
 report converts time to `t_ns` and the reply to `response` text, replacing non-ASCII bytes in
 JSON. The `ModemCommand.response` and tap retain the original bytes. The modem identity replies
@@ -131,8 +133,9 @@ off too (`_polled`): its broker's keepalive ends the connections a lost call lef
 nothing else would run that deadline; out of data mode its `poll` has nothing to send.
 A network dial starts PPP after CONNECT; power and registration loss reset it,
 clear queued replies and lose the test's TCP connections, leaving the device's half-open. Only
-`drop_call` emits an unsolicited `NO CARRIER`:
-registration and power loss stay silent. Network data mode guards `+++` with one second of silence before and after it;
+`drop_call` and the end of a refused negotiation emit an unsolicited `NO CARRIER`
+([below](#a-refused-negotiation)): registration and power loss stay silent. Network data mode
+guards `+++` with one second of silence before and after it;
 `poll` completes the escape and `quiet_until` exposes its deadline. A broker deadline at the
 escape's instant runs first, in `arrive`: a PUBACK due then is `"emitted"`, though ending data mode
 drops its bytes before they reach the firmware, and a keepalive due then closes the connection as an
@@ -142,9 +145,10 @@ expiry. Other data sources retain the immediate escape recognizer. See
 `_end_data(cause, at=None, link=None)` then calls `Internet.stop(at, link)`, `link` being the
 cause the network's `link_changes` records when PPP had opened IPCP
 ([link changes](network-technical.md#link-changes)), `LINK_CAUSES[cause]` unless the caller gives
-one: `"drop"` is `call ended`, `"hang"` `modem hung`, `"registration"` `coverage lost` and
-`"escape"` `device left data mode`. `_set_power` gives its own for `"restart"`: `modem restarted`
-when the modem is powered again, `modem lost power` for a `supply` cause and `modem off`
+one: `"drop"` is `call ended`, `"hang"` `modem hung`, `"registration"` `coverage lost`,
+`"escape"` `device left data mode` and `"ppp refused"` `call ended`, which the network never
+records, since a refused negotiation never opened IPCP and so never brought the link up.
+`_set_power` gives its own for `"restart"`: `modem restarted` when the modem is powered again, `modem lost power` for a `supply` cause and `modem off`
 otherwise.
 
 `drop_call` runs in the test's thread, while the link is held. With `terminate`, it takes
@@ -160,6 +164,23 @@ wanted)`, as `board.next_boot` is built ([the decision](../decisions/harness.md#
 `mode_changes` is copied at each poll, as `boots` is; it holds at most two entries per dial.
 `Modem.next_power_change(powered)` is built the same way over `power_changes`, which alternates
 between off and on and so holds one entry per switch.
+
+### A refused negotiation
+
+`refuse_ppp(stage)` checks `stage` against `"lcp"` and `"ipcp"`, then, under the lock, that
+`data` is an `Internet`, and stores it in `_refuse`; `accept_ppp` sets `_refuse` to `None`. Neither
+touches the `Internet`. A dial passes `_refuse` to `Internet.start(t + LATENCY_NS, refuse)`, which
+builds the call's new `Ppp` in `stop` and sets its `refuse` before `Ppp.start`
+([the PPP layer](network-technical.md#layers)). So the stage applies from the next dial, a session
+that is up keeps the `Ppp` it has, and `_set_power` leaves `_refuse` as it is: the refusal is the
+network's. `Ppp.negotiation_failed` is set at the device's LCP Terminate-Request on a refusing
+`Ppp`, or at its Terminate-Ack whose identifier is that of the far end's Terminate-Request.
+`Internet.negotiation_failed` reads it. After it hands the chunk's payload to `Internet.receive`,
+`receive` checks it in data mode: when it is set, it calls `_end_data("ppp refused", t)`, whose
+`Internet.stop` builds the next `Ppp`, and appends `NO CARRIER` at `t + LATENCY_NS` behind the
+outputs the payload gave: the network's Terminate-Ack when the device's Terminate-Request ended the
+negotiation, nothing when its Terminate-Ack did. Bytes after that frame in the same
+chunk have gone to PPP already; the next `Ppp` never sees them.
 
 ## Failure modes
 
@@ -177,6 +198,9 @@ between off and on and so holds one entry per switch.
   modem.network(): no PPP`, `modem.drop_call: terminate needs LCP open: it is not yet` (`SourceError`), `modem.drop_call: terminate is 1, not True or False`
   (`TypeError`).
 - `modem.next_mode_change: mode is 'Data', not 'command', 'data' or None` (`ValueError`).
+- `modem.refuse_ppp: needs modem.network(): no PPP to refuse` (`SourceError`), `modem.refuse_ppp:
+  stage is 'LCP', not 'lcp' or 'ipcp'` (`ValueError`), raised by the model's method, so a refused
+  first call selects no model.
 - `modem.next_power_change: powered is 1, not True, False or None` (`ValueError`): `powered` is
   checked with `isinstance(powered, bool)`, so `1` and `0` are refused too.
 - `modem.hang: the modem is off`, `modem.hang: the modem is hung already` (`SourceError`), `modem.hang: pwrkey is 1, not True or False`
@@ -200,6 +224,11 @@ pulse timing, RI ownership, taps and unbounded command history, and a real `Boar
 It checks `mode_changes` for a dial with either result, an escape with and without a network and
 one within the guard time, `drop_call`, `hang`, `lose_registration`, the test's power calls and a
 PWRKEY and a RESET restart, and `next_mode_change`'s boundary, filter, description and refusals.
+It checks a refused negotiation at each stage, with hand-made PPP frames: what the far end sends
+and leaves unanswered, `NO CARRIER` behind its Terminate-Ack or after the device's, the
+`"ppp refused"` entry, the modem registered and answering AT, nothing in `link_changes`, a dial
+after `accept_ppp` that opens IPCP, a session already up left alone, the refusal kept through a
+restart, an escape from a refused call, and the refusals of `refuse_ppp`.
 It checks `power_changes` for a PWRKEY recovery, the supply's loss and the board's, the test's
 power calls, the start before the board's first instant, a RESET restart and `power_on` on a
 running modem (no entry), the calls and pulses that change nothing, and `next_power_change`'s
@@ -219,7 +248,9 @@ errors. `tests/test_modem_recovery.py` runs `firmware/modem_recovery` through `e
 recovers a hung modem with and without PWRKEY, also one that hangs while it dials, and redials
 after a dropped call on both paths; it checks `power_changes` for both recoveries, an off and an on
 by PWRKEY or none by RESET, and for a lost supply that the recovery's PWRKEY pulse switches back on
-once the test restores it. `tests/test_boards.py` checks timing validation. The validation firmware
+once the test restores it. It refuses the firmware's negotiation at each stage for two dials, each
+a `"ppp refused"` with the modem registered and `+CEREG: 0,1` read, then has the dial after
+`accept_ppp` come up, and checks the Terminate-Request and Terminate-Ack in the tap. `tests/test_boards.py` checks timing validation. The validation firmware
 and tests have no network dependency.
 
 ## See also

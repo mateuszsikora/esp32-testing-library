@@ -18,6 +18,7 @@ from esp32tl.interfaces.uart import Source
 from esp32tl.link.boardlink import Output, OutputAtRate
 from esp32tl.net import Internet, LinkCause
 from esp32tl.net.ntp import DEFAULT_UTC
+from esp32tl.net.ppp import PppStage
 from esp32tl.units import Duration, minutes, number, shown
 
 LATENCY_NS = 1_000_000
@@ -69,9 +70,12 @@ class ModemPower:
 
 
 Mode = Literal["command", "data"]
-ModeCause = Literal["dial", "escape", "no carrier", "drop", "hang", "registration", "restart"]
+ModeCause = Literal[
+    "dial", "escape", "no carrier", "drop", "hang", "registration", "restart", "ppp refused"
+]
 # What the network's `link_changes` records for each way of leaving data mode; a restart names
-# whether the modem came back, went off or lost its power, and passes its own.
+# whether the modem came back, went off or lost its power, and passes its own. A refused PPP
+# negotiation never opened IPCP, so its link was never up and records nothing.
 LINK_CAUSES: dict[ModeCause, LinkCause] = {
     "dial": "call ended",
     "escape": "device left data mode",
@@ -80,6 +84,7 @@ LINK_CAUSES: dict[ModeCause, LinkCause] = {
     "hang": "modem hung",
     "registration": "coverage lost",
     "restart": "modem restarted",
+    "ppp refused": "call ended",
 }
 
 
@@ -90,7 +95,8 @@ class ModeChange:
     Every dial is one: `"dial"` into data mode, stamped as its `ATD` or `AT+CGDATA=` command, or
     `"no carrier"`, a dial refused while unregistered, which stays in command mode. Data mode ends
     by an `"escape"` that takes effect, `"drop"` (`drop_call`), `"hang"`, `"registration"`
-    (`lose_registration`) or `"restart"`: any end of a run, whose `ModemRestart` says which."""
+    (`lose_registration`), `"restart"`: any end of a run, whose `ModemRestart` says which, or
+    `"ppp refused"`: the `NO CARRIER` that ends a call whose negotiation `refuse_ppp` refused."""
 
     at: Duration
     mode: Mode
@@ -147,6 +153,8 @@ class Modem:
         self._act = 7
         self.data_mode = False
         self.data = data
+        # The stage at which the network refuses the PPP negotiation of each dial from the next.
+        self._refuse: PppStage | None = None
         self._line = bytearray()
         self._overflow = False
         self._skip_lf = False
@@ -278,6 +286,23 @@ class Modem:
                 self._queued += self.data.terminate(t)
             self._end_data("drop", t)
             self._queued.append((t + LATENCY_NS, b"\r\nNO CARRIER\r\n"))
+
+    def refuse_ppp(self, stage: PppStage) -> None:
+        """From the next dial on, the far end does not complete PPP: with `"lcp"` it answers none
+        of the device's LCP Configure-Requests, with `"ipcp"` it opens LCP and ends it at the
+        device's first IPCP Configure-Request. The modem says NO CARRIER once the device has
+        terminated LCP or acknowledged the far end's Terminate-Request, and stays registered."""
+        if stage not in ("lcp", "ipcp"):
+            raise ValueError(f"modem.refuse_ppp: stage is {stage!r}, not 'lcp' or 'ipcp'")
+        with self._lock:
+            if not isinstance(self.data, Internet):
+                raise SourceError("modem.refuse_ppp: needs modem.network(): no PPP to refuse")
+            self._refuse = stage
+
+    def accept_ppp(self) -> None:
+        """From the next dial on, the far end completes PPP again."""
+        with self._lock:
+            self._refuse = None
 
     def lose_registration(self) -> None:
         """Remove coverage and end data mode silently; queries report status 0."""
@@ -455,6 +480,10 @@ class Modem:
                         self._line.clear()
                         self._overflow = True
             flush()
+            if self.data_mode and isinstance(self.data, Internet) and self.data.negotiation_failed:
+                # The far end refused the negotiation and it is over: the modem hangs up.
+                self._end_data("ppp refused", t)
+                outputs.append((t + LATENCY_NS, b"\r\nNO CARRIER\r\n"))
             return outputs
 
     def _command(self, t: int, raw: bytes) -> bytes:
@@ -517,7 +546,7 @@ class Modem:
             )
             if self.data_mode and isinstance(self.data, Internet):
                 self._last_data = t
-                self.data.start(t + LATENCY_NS)
+                self.data.start(t + LATENCY_NS, self._refuse)
         elif upper.startswith(("AT+CGDCONT=", "AT+CTZU=", "AT+COPS=")):
             pass
         elif upper not in ANSWERS:

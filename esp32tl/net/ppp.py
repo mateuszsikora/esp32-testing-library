@@ -8,8 +8,16 @@ from collections.abc import Callable
 from ipaddress import IPv4Address
 from typing import Literal
 
-# What the device did to end LCP or IPCP, as `ended` is told.
-PppCause = Literal["device terminated", "device renegotiated LCP", "device renegotiated IPCP"]
+# What ended LCP or IPCP, as `ended` is told: what the device did, or the far end's own
+# Terminate-Request of a refused negotiation, once the device acknowledged it.
+PppCause = Literal[
+    "device terminated",
+    "device renegotiated LCP",
+    "device renegotiated IPCP",
+    "far end terminated",
+]
+# The stage at which the far end refuses the negotiation (`modem.refuse_ppp`).
+PppStage = Literal["lcp", "ipcp"]
 
 DEFAULT_MRU = 1500
 MIN_MRU = 68  # our supported minimum, enough for IPv4/TCP control packets
@@ -41,7 +49,14 @@ class Ppp:
     """One PPP link. `send` takes the bytes to put on the line; `on_ip` gets each IPv4 datagram
     the device sends once IPCP is open; `log` gets a line per event worth seeing. `opened` is
     called each time IPCP opens, and `ended` each time the device ends LCP or IPCP, with what it
-    did: `device terminated`, `device renegotiated LCP` or `device renegotiated IPCP`."""
+    did: `device terminated`, `device renegotiated LCP` or `device renegotiated IPCP`, and with
+    `far end terminated` at the end of a refused IPCP.
+
+    With `refuse`, the far end does not complete the negotiation: `"lcp"` answers none of the
+    device's LCP Configure-Requests and sends none of its own; `"ipcp"` opens LCP, sends no IPCP
+    Configure-Request and answers the device's first with an LCP Terminate-Request.
+    `negotiation_failed` is then set at the device's Terminate-Request, or at its Terminate-Ack
+    to the far end's: the negotiation is over, and the modem hangs up."""
 
     def __init__(
         self,
@@ -54,7 +69,13 @@ class Ppp:
         log: Callable[[str], None] = lambda line: None,
         opened: Callable[[], None] = lambda: None,
         ended: Callable[[PppCause], None] = lambda cause: None,
+        refuse: PppStage | None = None,
     ) -> None:
+        self.refuse = refuse
+        self.negotiation_failed = False
+        # The identifier of the far end's Terminate-Request of a refused IPCP, once sent.
+        self._refused_with: int | None = None
+        self._refusal_logged = False
         self._opened = opened
         self._ended = ended
         self._requests: dict[int, tuple[int, bytes]] = {}
@@ -83,7 +104,8 @@ class Ppp:
         if self.started:
             return
         self.started = True
-        self._request(LCP, b"")
+        if self.refuse != "lcp":
+            self._request(LCP, b"")
 
     def terminate(self) -> None:
         """The far end offers to end an open link: a Terminate-Request, and nothing else changes."""
@@ -194,6 +216,11 @@ class Ppp:
                 self._options(data)
             except ValueError:
                 return
+        if code == CONF_REQ and self.refuse == "lcp":
+            if not self._refusal_logged:
+                self._refusal_logged = True
+                self._log("ppp: refusing LCP: the device's Configure-Requests go unanswered")
+            return
         if code == CONF_REQ:
             if self.lcp_open:
                 self._reset_lcp("device renegotiated LCP")
@@ -227,12 +254,19 @@ class Ppp:
         elif code == TERM_REQ:
             self._control(LCP, TERM_ACK, ident, b"")
             self._log("ppp: the device ended the link")
+            self.negotiation_failed = self.negotiation_failed or self.refuse is not None
             self._reset_lcp("device terminated")
+            return
+        elif code == TERM_ACK and self._refused_with is not None and ident == self._refused_with:
+            self._log("ppp: the device acknowledged the far end's Terminate-Request")
+            self.negotiation_failed = True
+            self._reset_lcp("far end terminated")
             return
         if not self.lcp_open and self._lcp_acked_us and self._lcp_acked_them:
             self.lcp_open = True
             self._log("ppp: LCP open")
-            self._request(IPCP, _pack([(3, ip4(self.local))]))
+            if self.refuse != "ipcp":
+                self._request(IPCP, _pack([(3, ip4(self.local))]))
 
     def _ipcp(self, packet: bytes) -> None:
         if len(packet) < 4:
@@ -246,6 +280,12 @@ class Ppp:
                 self._options(data)
             except ValueError:
                 return
+        if code == CONF_REQ and self.refuse == "ipcp":
+            if self._refused_with is None:
+                self._refused_with = self._next_id()
+                self._log("ppp: refusing IPCP: the far end ends the link")
+                self._control(LCP, TERM_REQ, self._refused_with, b"")
+            return
         if code == CONF_REQ:
             if self.ipcp_open:
                 self.ipcp_open = False
@@ -291,6 +331,7 @@ class Ppp:
         self._lcp_acked_us = self._lcp_acked_them = False
         self._ipcp_acked_us = self._ipcp_acked_them = False
         self._requests.clear()
+        self._refused_with = None
         self._ended(cause)
 
 

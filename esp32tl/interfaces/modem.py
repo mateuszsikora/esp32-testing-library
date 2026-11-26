@@ -14,6 +14,7 @@ from esp32tl.link.boardlink import Wire
 from esp32tl.net import Internet
 from esp32tl.net.handlers import reraise
 from esp32tl.net.ntp import DEFAULT_UTC
+from esp32tl.net.ppp import PppStage
 from esp32tl.report import RunLog, board_time
 from esp32tl.sources.model.modem import (
     LATENCY_NS,
@@ -130,6 +131,18 @@ class Modem(Uart):
             lambda model: model.drop_call(terminate=terminate),
             f"drop_call(terminate={terminate!r})",
         )
+
+    def refuse_ppp(self, stage: PppStage) -> None:
+        """From the next dial on, the far end does not complete PPP: with `"lcp"` it answers none
+        of the device's LCP Configure-Requests, with `"ipcp"` it opens LCP and ends it at the
+        device's first IPCP Configure-Request. The modem says NO CARRIER once the device has
+        terminated LCP or acknowledged the far end's Terminate-Request, and stays registered.
+        Needs `network()` first."""
+        self._tell(lambda model: model.refuse_ppp(stage), f"refuse_ppp({stage!r})")
+
+    def accept_ppp(self) -> None:
+        """From the next dial on, the far end completes PPP again."""
+        self._tell(ModemModel.accept_ppp, "accept_ppp()")
 
     def lose_registration(self) -> None:
         """Remove coverage and end data mode silently; queries report status 0."""
