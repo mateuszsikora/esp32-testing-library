@@ -1,6 +1,7 @@
 """Serial's real pytest-embedded fixture chain, with an in-memory port instead of hardware."""
 
 import json
+import time
 from pathlib import Path
 from textwrap import dedent
 from xml.etree import ElementTree
@@ -9,8 +10,9 @@ import pytest
 from test_pytest_plugin import SHOW_PARAMS, fake_build
 
 from esp32tl import boards, recording
+from esp32tl.backends import serial as serial_backend
 from esp32tl.backends.esp32sim import BackendError
-from esp32tl.backends.serial import check_artifact
+from esp32tl.backends.serial import check_artifact, discard_input
 from esp32tl.tap import Tap, sha256
 
 
@@ -1075,3 +1077,60 @@ def test_a_usb_serial_jtag_console_on_a_chip_not_validated_on_hardware_skips(
     )
     # nothing reached the port
     assert not (pytester.path / "port-opened").exists()
+
+
+class Port:
+    """A port that holds `chunks`, one per read, and then `endless` without end."""
+
+    def __init__(self, chunks: list[bytes], endless: bytes = b"") -> None:
+        self.chunks = chunks
+        self.endless = endless
+        self.flushed = False
+
+    @property
+    def in_waiting(self) -> int:
+        return len(self.chunks[0]) if self.chunks else len(self.endless)
+
+    def read(self, size: int) -> bytes:
+        return self.chunks.pop(0) if self.chunks else self.endless
+
+    def reset_input_buffer(self) -> None:
+        self.flushed = True
+
+
+def test_power_on_reads_away_what_the_port_holds_and_never_flushes_it(
+    pytester: pytest.Pytester,
+) -> None:
+    # a flush with the input queue full left a C6's USB-Serial/JTAG port receiving nothing more
+    fake_build(pytester.path)
+    pytester.makeconftest(FAKE_SERIAL)
+    pytester.makepyfile("""
+        def test_console(board, console):
+            proc = board.dut.serial.proc
+
+            def flush():
+                raise AssertionError("power_on flushed the port")
+
+            proc.reset_input_buffer = flush
+            proc.write(b"left from before\\r\\n")
+            board.power_on()
+            console.expect_exact("boot number 2")
+            assert b"left from before" not in board.console_output
+    """)
+    run_serial(pytester, "-q").assert_outcomes(passed=1)
+
+
+def test_discard_input_reads_until_the_port_holds_nothing() -> None:
+    port = Port([b"x" * 1020, b"y" * 1020, b"z" * 300])
+    discard_input(port)  # type: ignore[arg-type]
+    assert port.chunks == [] and not port.flushed
+
+
+@pytest.mark.timeout(5)
+def test_discard_input_stops_reading_a_firmware_that_never_stops_printing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(serial_backend, "DISCARD_SECONDS", 0.05)
+    start = time.monotonic()
+    discard_input(Port([], endless=b"log line\r\n"))  # type: ignore[arg-type]
+    assert time.monotonic() - start < 1

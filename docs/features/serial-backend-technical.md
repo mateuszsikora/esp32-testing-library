@@ -84,10 +84,16 @@ the same indirect parametrisation. See [the user contract](serial-backend-user.m
 4. pytest-embedded creates the app, `IdfSerial` and `IdfDut`. `IdfSerial._start` owns autoflash,
    skip-autoflash and its session cache. `Serial` neither opens another port nor calls `flash`.
    The plugin requires an `IdfDut` and passes it the profile, message queue and artifact digest.
-5. `power_on` stops and joins pytest-embedded's redirect thread, discards the input buffer,
-   records monotonic and UTC origins, calls `hard_reset`, then starts its reader. An exception
-   rolls back `_start` and `_reader` and restores redirection; `powered` remains false, so close
-   writes no tap. A subsequent power-on may retry. Successful power-on logs
+5. `power_on` stops and joins pytest-embedded's redirect thread, reads away what the port holds
+   (`discard_input`: reads until one read of the port's timeout, pytest-embedded's 50 ms, brings
+   nothing, or until `DISCARD_SECONDS`, 0.5 s, have passed, so for 0.5 s and one read's timeout
+   at most), records monotonic and UTC origins, calls `hard_reset`, then starts its reader. It
+   does not flush the port (`reset_input_buffer`): on macOS, a flush while the boot after
+   flashing had filled the input queue, which it does within 30 ms, left an ESP32-C6's
+   USB-Serial/JTAG port receiving nothing more until it was opened again
+   ([the decision](../decisions/harness.md#the-serial-backend-runs-the-classic-esp32-only)). An
+   exception rolls back `_start` and `_reader` and restores redirection; `powered` remains false,
+   so close writes no tap. A subsequent power-on may retry. Successful power-on logs
    `board.power_on(): hard reset` at 0; elapsed time includes reset latency.
 6. The reader calls `proc.read_all()` every `POLL_SECONDS` (10 ms), stamps each nonempty batch
    after that poll, forwards it to pytest-embedded's message queue and queues `(elapsed_ns, bytes)`.

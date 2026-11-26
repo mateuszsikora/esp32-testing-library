@@ -22,6 +22,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, NoReturn, TypeVar
 
+import serial as pyserial
 from pytest_embedded.app import App
 from pytest_embedded.log import MessageQueue
 from pytest_embedded_idf.app import FlashFile, IdfApp
@@ -53,6 +54,22 @@ T = TypeVar("T")
 POLL_SECONDS = 0.01
 # One bounded join; a stuck daemon must not hold teardown for the whole test timeout.
 READER_STOP_SECONDS = 1.0
+# How long power_on goes on starting reads of the port to drop what came before it, for a firmware
+# that never stops printing: the last read may take one timeout of the port more.
+DISCARD_SECONDS = 0.5
+
+
+def discard_input(port: pyserial.Serial) -> None:
+    """Reads and drops what `port` holds, until a read of its timeout (pytest-embedded's 50 ms)
+    brings nothing, or until `DISCARD_SECONDS` have passed, so for that and one read's timeout at
+    most. Not `reset_input_buffer()`: on macOS, that
+    flush with the input queue full, as the boot after flashing fills it within 30 ms, left the
+    port of an ESP32-C6's USB-Serial/JTAG controller receiving nothing more until it was opened
+    again."""
+    deadline = time.monotonic() + DISCARD_SECONDS
+    while time.monotonic() < deadline:
+        if not port.read(max(port.in_waiting, 1)):
+            return
 
 
 @dataclass(frozen=True)
@@ -340,7 +357,7 @@ class Serial(Board):
         serial = self.dut.serial
         serial.stop_redirect_thread()
         try:
-            serial.proc.reset_input_buffer()
+            discard_input(serial.proc)
             self._utc = datetime.now(UTC)
             self._start = time.monotonic_ns()
             serial.hard_reset()

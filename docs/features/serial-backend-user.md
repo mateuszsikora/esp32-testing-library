@@ -208,7 +208,13 @@ not guaranteed, is in [the decision](../decisions/harness.md#the-serial-backend-
 - twice, a measuring script that closed the port and opened it again left the chip answering
   nothing, esptool included, until the board was unplugged and plugged in again; the test runs did
   not meet it;
-- UART0 on such a board was not measured, and the ESP32-C3 and ESP32-C6 not at all.
+- UART0 on such a board was not measured, and the ESP32-C3 not at all.
+
+An ESP32-C6 with its console on USB-Serial/JTAG still skips. On a real one, with the backend
+fixed for it, the tests passed, but in 4 of 10 sessions a test lost the board: the chip left the
+USB bus, or stopped answering, esptool included, until the board was unplugged and plugged in
+again; pytest-embedded alone, without esp32tl, did the same
+([the decision](../decisions/harness.md#the-serial-backend-runs-the-classic-esp32-only)).
 
 The board API types `boots` and `sleeps` as read-only sequences. Reading either on serial
 skips the test because this backend cannot observe the chip's resets and deep sleeps.
