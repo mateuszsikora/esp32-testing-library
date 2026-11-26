@@ -22,7 +22,8 @@ the same indirect parametrisation. See [the user contract](serial-backend-user.m
    from the explicit selection (including `None`) fails with `CACHED_PORT_CONFLICT`, without
    attributing the change to `ESPPORT`. First `serial_chip` checks the profile: the classic ESP32,
    or a chip `SERIAL_CHIPS` maps to the profile's `console`, `esp32s3` and `esp32c3` to
-   `usb-serial-jtag`, goes on; a C6 with that console skips, and any other chip fails
+   `usb-serial-jtag`, goes on; any other chip with that console (the C6, the P4, the S31) skips,
+   and any chip but the classic one with its console on UART0 fails
    ([Failure modes](#failure-modes)). It validates the build and optional `app_recording`
    once per item.
    `pytest_fixture_setup` runs it before pytest-embedded's `app` fixture, so an explicitly requested
@@ -219,7 +220,7 @@ from pytest-embedded propagate with their original messages.
 | `serial: {build} …` from a PlatformIO build | The PlatformIO checks of [builds](builds-technical.md#failure-modes): files, images, table, chip and flash encryption |
 | `serial: {build} is built for {target}; the board's chip is {chip}: build for {chip} or choose a board profile with that chip` | A build for another chip than the profile's; `check_artifact` and `PlatformioApp` load the build for the profile's chip |
 | `serial: the board profile {name} carries an {title} with its console on UART0; the serial backend runs the classic ESP32, and the ESP32-S3 and the ESP32-C3 with their console on USB-Serial/JTAG` | A profile whose `chip` is not `esp32` and whose console is UART0; `serial_chip` in `esp32tl/pytest_plugin.py`, from `serial_artifact`, fails the test before the port is checked or the build loaded |
-| `serial: the board profile {name} has its console on the {title}'s USB-Serial/JTAG controller, which the serial backend has been validated on with the ESP32-S3 and the ESP32-C3 only` | A profile for the ESP32-C6 with `console = "usb-serial-jtag"`; `serial_chip` skips the test, before the port is opened |
+| `serial: the board profile {name} has its console on the {title}'s USB-Serial/JTAG controller, which the serial backend has been validated on with the ESP32-S3 and the ESP32-C3 only` | A profile with `console = "usb-serial-jtag"` for a chip `SERIAL_CHIPS` leaves out: the ESP32-C6, the ESP32-P4 or the ESP32-S31; `serial_chip` skips the test, before the port is opened |
 | `serial: {build} asks for flash encryption, which serial does not support` | Encryption outside the supported workflow |
 | `serial: {build} is not a finished build, missing {files}` | Missing files listed for flashing |
 | `serial: {build}/flasher_args.json names no app image` | No `app.file` entry |

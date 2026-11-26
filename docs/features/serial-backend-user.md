@@ -45,7 +45,8 @@ are the classic ESP32, and the ESP32-S3 and the ESP32-C3 with their console on U
 ([below](#a-board-whose-console-is-usb-serialjtag)). A board profile for another chip with its
 console on UART0 is refused before the port is opened:
 `serial: the board profile esp32-s3-devkitc carries an ESP32-S3 with its console on UART0; the serial backend runs the classic ESP32, and the ESP32-S3 and the ESP32-C3 with their console on USB-Serial/JTAG`.
-One for the ESP32-C6 with its console on USB-Serial/JTAG skips, before the port is opened:
+One for another chip with its console on USB-Serial/JTAG, the ESP32-C6, the ESP32-P4 or the
+ESP32-S31, skips, before the port is opened:
 `serial: the board profile my-c6-board has its console on the ESP32-C6's USB-Serial/JTAG controller, which the serial backend has been validated on with the ESP32-S3 and the ESP32-C3 only`.
 
 A PlatformIO build is flashed as esp32sim runs it: `firmware.factory.bin` at `0x0`, or else

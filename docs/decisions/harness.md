@@ -4398,8 +4398,9 @@ the flashing path, and on many devkits a console on USB-Serial/JTAG, which the s
 The ESP32-S3 with its console on USB-Serial/JTAG has since been measured and runs
 ([the serial backend runs an ESP32-S3 through its USB-Serial/JTAG port](#the-serial-backend-runs-an-esp32-s3-through-its-usb-serialjtag-port)),
 and so has the ESP32-C3
-([too](#the-serial-backend-runs-an-esp32-c3-through-its-usb-serialjtag-port-too)); a C6 with that
-console skips. The refusal stays for a console on UART0 on the S3, C3 and C6: `serial: the board
+([too](#the-serial-backend-runs-an-esp32-c3-through-its-usb-serialjtag-port-too)); any other chip
+with that console, the C6, the P4 and the S31, skips. The refusal stays for a console on UART0 on
+every chip but the classic ESP32: `serial: the board
 profile {name} carries an {title} with its console on UART0; the serial backend runs the classic
 ESP32, and the ESP32-S3 and the ESP32-C3 with their console on USB-Serial/JTAG`.
 
@@ -4833,12 +4834,12 @@ pytest-embedded and esp32tl runs did not meet it, but a test session that opens 
 may. Opening the port also reset the chip once. A board whose console is USB-Serial/JTAG and whose
 UART0 has a bridge was not measured on UART0.
 
-**Not yet:** the C6 with a USB-Serial/JTAG console skips on the serial backend (`serial: the
-board profile {name} has its console on the {title}'s USB-Serial/JTAG controller, which the serial
-backend has been validated on with the ESP32-S3 and the ESP32-C3 only`), until a board of it is
-measured as above and does not leave the bus; the C3 has been
-([below](#the-serial-backend-runs-an-esp32-c3-through-its-usb-serialjtag-port-too)). The S3, C3
-and C6 with a console on UART0 are still refused, as
+**Not yet:** the C6, the P4 and the S31 with a USB-Serial/JTAG console skip on the serial backend
+(`serial: the board profile {name} has its console on the {title}'s USB-Serial/JTAG controller,
+which the serial backend has been validated on with the ESP32-S3 and the ESP32-C3 only`), until a
+board of each is measured as above, and the C6's does not leave the bus; the C3 has been
+([below](#the-serial-backend-runs-an-esp32-c3-through-its-usb-serialjtag-port-too)). Every chip but
+the classic ESP32 with a console on UART0 is still refused, as
 [the serial backend runs the classic ESP32 only](#the-serial-backend-runs-the-classic-esp32-only)
 says.
 

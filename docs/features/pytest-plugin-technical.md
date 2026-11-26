@@ -101,8 +101,9 @@ are in [models-technical.md](models-technical.md).
    `PORT_CONFLICT`, and separate flashing ports with `FLASH_PORT_UNSUPPORTED`. These checks run
    after deselection. `serial_artifact` first calls `serial_chip(profile)`, which lets the
    classic ESP32 and the chips `SERIAL_CHIPS` maps to the profile's console (`esp32s3` and
-   `esp32c3` to `usb-serial-jtag`) go on, skips a C6 with `console = "usb-serial-jtag"` with
-   `skip_at_the_test`, and fails any other chip
+   `esp32c3` to `usb-serial-jtag`) go on, skips any other chip with `console = "usb-serial-jtag"`
+   (the C6, the P4, the S31) with `skip_at_the_test`, and fails any chip but the classic one with
+   its console on UART0
    ([serial backend](serial-backend-technical.md#failure-modes)); it then loads the build for the
    profile's chip (`check_artifact(..., chip=profile.chip)`), and gives a PlatformIO build
    `PlatformioApp.for_chip(profile.chip)`. It checks resolved fixtures, the environment and cached
