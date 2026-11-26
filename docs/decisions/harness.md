@@ -4414,11 +4414,12 @@ ESP32-C6FH4 (QFN32) rev v0.2 with its native USB alone, on macOS, port `/dev/cu.
 - With that, `test_the_usb_console_takes_a_command_and_comes_back_after_a_reset` and
   `test_a_tap_of_the_usb_console_records_both_ways` passed, but in 4 of 10 sessions of the file's
   C6 tests a test lost the board: in the two whose output was kept, the USB device left the bus
-  0.36 s after `power_on` (`[Errno 6] Device not configured`) and the next test found no port;
-  after the fourth the chip stayed on the bus but answered nothing, esptool's connection included
-  (`No serial data received`), until the board was unplugged and plugged in again. A session of four tests with pytest-embedded alone, `dut.expect`
-  and `dut.serial.hard_reset()` with no esp32tl, met it in its first run. Scripts that opened the
-  port once and reset the chip through it many times did not.
+  at 0.36 s on the run's clock, after `power_on`'s hard reset (`[Errno 6] Device not
+  configured`), and the next test found no port; after the fourth the chip stayed on the bus but
+  answered nothing, esptool's connection included (`No serial data received`), until the board
+  was unplugged and plugged in again. A session of four tests with pytest-embedded alone,
+  `dut.expect` and `dut.serial.hard_reset()` with no esp32tl, met it in its first run. Scripts
+  that opened the port once and reset the chip through it many times did not.
 
 So the C6 keeps the skip: a backend that leaves the board needing to be plugged in again every few
 sessions is not one a test can rely on. The C6 has no UART bridge on that board, so UART0 was not

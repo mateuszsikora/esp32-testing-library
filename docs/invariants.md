@@ -1000,8 +1000,12 @@ that references to its number keep their meaning.
 - **98.** Serial's power-on resets once without another flash, excludes pre-reset console bytes, and
     uses wall time that advances outside waits. Console taps contain only output with clock
     `wall` and the selected artifact's app hash; they cannot overwrite the reference recording
-    or flash artifacts.
-    `tests/test_serial_backend.py::test_console_reset_clock_tap_and_autoflash`
+    or flash artifacts. Power-on reads away what the port holds, for 0.5 s and one read's
+    timeout at most, and never flushes it.
+    `tests/test_serial_backend.py::test_console_reset_clock_tap_and_autoflash`,
+    `tests/test_serial_backend.py::test_power_on_reads_away_what_the_port_holds_and_never_flushes_it`,
+    `tests/test_serial_backend.py::test_discard_input_reads_until_the_port_holds_nothing`,
+    `tests/test_serial_backend.py::test_discard_input_stops_reading_a_firmware_that_never_stops_printing`
 - **99.** A serial reference recording must have an app hash matching the app binary, unaffected by
     bootloader changes. Missing or mismatched hashes fail, and mismatch prevents port setup even
     for an explicitly requested `dut`.

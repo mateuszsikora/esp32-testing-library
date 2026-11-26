@@ -54,14 +54,15 @@ T = TypeVar("T")
 POLL_SECONDS = 0.01
 # One bounded join; a stuck daemon must not hold teardown for the whole test timeout.
 READER_STOP_SECONDS = 1.0
-# The longest power_on reads the port to drop what came before it, for a firmware that never
-# stops printing.
+# How long power_on goes on starting reads of the port to drop what came before it, for a firmware
+# that never stops printing: the last read may take one timeout of the port more.
 DISCARD_SECONDS = 0.5
 
 
 def discard_input(port: pyserial.Serial) -> None:
     """Reads and drops what `port` holds, until a read of its timeout (pytest-embedded's 50 ms)
-    brings nothing, or for `DISCARD_SECONDS` at most. Not `reset_input_buffer()`: on macOS, that
+    brings nothing, or until `DISCARD_SECONDS` have passed, so for that and one read's timeout at
+    most. Not `reset_input_buffer()`: on macOS, that
     flush with the input queue full, as the boot after flashing fills it within 30 ms, left the
     port of an ESP32-C6's USB-Serial/JTAG controller receiving nothing more until it was opened
     again."""
