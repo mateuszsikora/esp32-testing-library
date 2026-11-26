@@ -83,6 +83,42 @@ be one the run replays from or another tap writes. On serial `board.bluetooth` s
 - The report's `bluetooth:` line ends with `; tapped into {path}`, and the `bluetooth` property has
   `tap`.
 
+To assert on what the host sent its controller, decode the events with Bumble, which esp32tl
+depends on already: `hci.HCI_Packet.from_bytes(data)` turns each into a packet of its own class.
+ESP-IDF's `bt_spp_initiator` starts one inquiry, 30 × 1.28 s long, and pages the peer it found
+after it; from `test_the_host_asks_its_controller_for_one_inquiry_then_pages_the_peer_it_found`
+in [`tests/test_bt_spp_initiator.py`](../../tests/test_bt_spp_initiator.py), where `Heard` is a
+model that answers nothing:
+
+```python
+from bumble import hci
+
+
+def test_the_host_asks_its_controller_for_one_inquiry_then_pages_the_peer_it_found(
+    board, bt, console, tmp_path
+):
+    peer = SppPeer(bt.air, name=NAME, pin=PIN, source=Heard())
+    tap = bt.tap(tmp_path / "hci.btsnoop")
+    board.power_on()
+    board.wait_until(console.line("ESP_SPP_OPEN_EVT"), within=seconds(5))
+    commands = [
+        hci.HCI_Packet.from_bytes(data)
+        for _, direction, data in tap.events
+        if direction == "out" and data[0] == hci.HCI_COMMAND_PACKET
+    ]
+    [inquiry] = [c for c in commands if isinstance(c, hci.HCI_Inquiry_Command)]
+    assert inquiry.inquiry_length == 30  # inq_len in main.c, in units of 1.28 s
+    [page] = [c for c in commands if isinstance(c, hci.HCI_Create_Connection_Command)]
+    assert str(page.bd_addr).removesuffix("/P") == peer.address
+    assert commands.index(inquiry) < commands.index(page)
+```
+
+`tap.events` is live, so the same list made later holds what the host sent up to then. The
+events with direction `"in"` are the controller's events and ACL data, which
+`HCI_Packet.from_bytes` decodes as well: the answer to a command as an
+`HCI_Command_Complete_Event`. Bumble prints a public address with `/P` after it, which
+`peer.address` has not.
+
 ## What a tap writes
 
 A recording, [version 1](../recording-format.md):
