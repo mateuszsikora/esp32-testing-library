@@ -152,7 +152,7 @@ reports is the chip's, which it takes from the board profile's `chip`:
   a fourth), page 0 with the BR/EDR features: encryption, role switch, the RSSI and extended
   inquiry results, Secure Simple Pairing, and none for LE, since the firmware runs its controller
   for Classic alone. TODO(owner): what the classic ESP32's controller reports on page 0.
-- **The ESP32-S3, the ESP32-C3 and the ESP32-C6**, whose controllers are Bluetooth LE only: what an
+- **The ESP32-S3 and the ESP32-C3**, whose controllers are Bluetooth LE only: what an
   ESP32-S3 (QFN56, revision v0.2) answered on 2026-11-19, with ESP-IDF v5.3.6's controller
   `51d9dfd` started as Bluedroid's BLE 4.2 examples start it
   ([`tools/hci_probe`](../stage0-findings.md#reproducing), its capture in
@@ -161,15 +161,47 @@ reports is the chip's, which it takes from the board profile's `chip`:
   (Controller)` and `BR/EDR Not Supported`; LE features `0xFF`, encryption to the extended scanner
   filter policies, with no 2M or coded PHY and no extended advertising (a controller-only build,
   whose controller runs with `BLE_50:1`, reports `0x080001F9FF` instead); `LE_Read_Buffer_Size` 251
-  bytes and 12 packets; `LE_Read_Supported_States` `ffffffffff030000`; a filter accept list of 12 and a resolving list of 10; a maximum data
-  length of 251 octets and 17040 µs each way; an advertising power of 9 dBm; its own
-  `Read_Local_Supported_Commands`, and 5 command packets in each `Command_Complete` and
-  `Command_Status`. A command that list does not name, as `Read_Buffer_Size`,
-  `Read_Local_Extended_Features` or `Inquiry`, and any command it does not know get
-  `Command_Complete` with `UNKNOWN_HCI_COMMAND_ERROR`, and are listed in `bt.unknown_commands()`;
-  Bluedroid without Classic sends none of them. The ESP32-C3's controller is built from the same
-  sources; TODO(owner): measured on an ESP32-C3 and an ESP32-C6, which take the S3's values
-  meanwhile. Its address stays `24:6F:28:00:11:24`, where a real chip's is its base MAC plus 2.
+  bytes and 12 packets; `LE_Read_Supported_States` `ffffffffff030000`; a filter accept list of 12
+  and a resolving list of 10; a maximum data length of 251 octets and 17040 µs each way; an
+  advertising power of 9 dBm; its own `Read_Local_Supported_Commands`, and 5 command packets in
+  each `Command_Complete` and `Command_Status`. A command that list does not name, as
+  `Read_Buffer_Size`, `Read_Local_Extended_Features` or `Inquiry`, and any command it does not
+  know get `Command_Complete` with `UNKNOWN_HCI_COMMAND_ERROR`, and are listed in
+  `bt.unknown_commands()`; Bluedroid without Classic sends none of them. Three extended advertising
+  commands it refused, `LE_Read_Maximum_Advertising_Data_Length`,
+  `LE_Read_Number_of_Supported_Advertising_Sets` and `LE_Read_Transmit_Power`, get its answers,
+  `COMMAND_DISALLOWED` each. The ESP32-C3's
+  controller is built from the same sources; TODO(owner): measured on an ESP32-C3, which takes
+  the S3's values meanwhile.
+- **The ESP32-C6**, whose controller is Bluetooth LE only too, and another: what an ESP32-C6
+  (ESP32-C6FH4, QFN32, revision v0.2) answered on 2026-11-26, with ESP-IDF v5.3.6's controller
+  `18aafc6` (`tools/hci_probe/esp32c6.txt`); v5.5.4's `bc223ab`, the release esp32sim's C6 hooks
+  take, and Bluedroid built for BLE 5.0 got the same answers. Version 6.0 (HCI and LMP version
+  `0x0E`, revision and subversion 0); a resolving list of 4; its own
+  `Read_Local_Supported_Commands`, and 1 command packet; the same page 0, states, filter accept
+  list, data lengths and advertising power as the S3. Of its LE features, `0x1B900F017FFF`, the
+  guest reports the S3's `0xFF`: the link has no 2M or coded PHY and no extended or periodic
+  advertising. Of its `LE_Read_Buffer_Size`, 517 bytes and 10 packets, it reports 491 bytes, the
+  most the link carries in one packet, and 10. Its list leaves out commands the chip answers:
+  `HCI_Reset`, `Set_Event_Mask_Page_2`, `Write_Authenticated_Payload_Timeout` and
+  `Read_Remote_Version_Information` are taken as the S3's are, but
+  `Read_Authenticated_Payload_Timeout`, which the chip answered too, is unknown here, and
+  `Write_Authenticated_Payload_Timeout` completes whatever the handle, where the chip refused an
+  unknown one. `LE_Read_Maximum_Advertising_Data_Length` and
+  `LE_Read_Number_of_Supported_Advertising_Sets` get `COMMAND_DISALLOWED`, and
+  `LE_Read_Transmit_Power` -15 and 20 dBm, as from the chip, which was asked them after the
+  legacy `LE_Read_Advertising_Physical_Channel_Tx_Power`: the specification lets a controller
+  refuse extended advertising commands after a legacy one (Vol 4, Part E, 3.1.1), and
+  TODO(owner): what the C6 answers to the first two before any legacy advertising command. A
+  command it does not know gets
+  `Command_Status` with `UNKNOWN_HCI_COMMAND_ERROR` when it is an LE command (OGF `0x08`), as
+  `LE_Read_Buffer_Size` v2 or `LE_Read_Local_P-256_Public_Key`, and `Command_Complete` otherwise,
+  as `Inquiry`. The chip sends no LE event while the host's event mask leaves out LE Meta (bit
+  61), as the specification's default does; Bluedroid sets it, and the guest sends them either
+  way. No image runs Bluetooth on the C6 in esp32sim yet (#229, G5).
+
+  On every LE-only chip, its address stays `24:6F:28:00:11:24`, where a real chip's is its base
+  MAC plus 2.
 
   It also takes Espressif's two vendor commands for the flow control of advertising reports, which
   Bluedroid sends an LE controller right after `HCI_Reset`: `0xFD09` turns it on with a number of
@@ -180,7 +212,9 @@ reports is the chip's, which it takes from the board profile's `chip`:
   credit has come back. Once the reports dropped since the last count reach the lost
   threshold, the next credit given back brings, before any report, Espressif's vendor LE Meta
   event `0xF0` with their number, four bytes little-endian, which takes a credit: the S3 sent
-  `04 3E 05 F0 68 00 00 00` for 104 reports when 2 credits came back. The report says
+  `04 3E 05 F0 68 00 00 00` for 104 reports when 2 credits came back. The C6 sends one byte more
+  after the number, of another value at each run, which Bluedroid does not read; the guest sends
+  the S3's event on every chip. The report says
   `advertising reports dropped for want of the host's credits: N` when it dropped any, and
   `dropped_reports` counts them. Bluedroid asserts on a report it has no credit for, so a
   controller that ignored the credits would stop the firmware.
@@ -188,9 +222,9 @@ reports is the chip's, which it takes from the board profile's `chip`:
   (496 bytes, 5 of them the packet's header): the peer's data cut to fit, also to the firmware's
   `Host_Buffer_Size` when that is smaller, on BR/EDR and on LE. From the firmware, packets of at
   most what the controller's buffer sizes say: on the classic ESP32 `Read_Buffer_Size` says 491;
-  on an LE-only chip `LE_Read_Buffer_Size` says 251, so Bluedroid sends its data in packets of
-  251 bytes. TODO(owner): what the classic ESP32's controller reports in
-  `Read_Buffer_Size`.
+  on the ESP32-S3 and the ESP32-C3 `LE_Read_Buffer_Size` says 251, so Bluedroid sends its data in
+  packets of 251 bytes, and on the ESP32-C6 it says 491. TODO(owner): what the classic ESP32's
+  controller reports in `Read_Buffer_Size`.
 - An answer to every command: one it does not know gets `UNKNOWN_HCI_COMMAND_ERROR` in the event the
   host waits for, `Command_Status` for a command answered so before it completes, `Command_Complete`
   for any other, and is listed in `bt.unknown_commands()`.

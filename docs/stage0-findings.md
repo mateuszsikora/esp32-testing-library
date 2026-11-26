@@ -380,30 +380,51 @@ esp32sim --chip esp32 --board none --boot rom --console uart0 --flash-mb 4 --max
 
 `tools/hci_probe` runs on a real board, not on esp32sim: it asks the chip's own Bluetooth controller,
 through VHCI, what it reports, and prints every HCI packet both ways, `TX` and `RX` in hex, on the
-USB-Serial/JTAG console. For an ESP32-S3, in the v5.3.6 container, into a build directory of its
-own whose `sdkconfig` is made anew from `sdkconfig.defaults` (ESP-IDF reads the defaults only for
-what an existing `sdkconfig` leaves unset, so an older one would keep its host configuration):
+USB-Serial/JTAG console. For CHIP, `esp32s3` or `esp32c6`, in the v5.3.6 container, into a build
+directory of its own whose `sdkconfig` is made anew from `sdkconfig.defaults` (ESP-IDF reads the
+defaults only for what an existing `sdkconfig` leaves unset, so an older one would keep its host
+configuration), from the repository's root:
 
 ```sh
-rm -rf tools/hci_probe/build-probe
-idf.py -C tools/hci_probe -B tools/hci_probe/build-probe \
-  -D SDKCONFIG=tools/hci_probe/build-probe/sdkconfig -DIDF_TARGET=esp32s3 build
+rm -rf tools/hci_probe/build-probe &&
+docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp -v "$PWD":/w -w /w \
+  espressif/idf:v5.3.6@sha256:cee52f0c4fdaf088992a7a739f5993154e95cf1d3ab61c24f5b40e6d56a3a070 \
+  idf.py -C tools/hci_probe -B tools/hci_probe/build-probe \
+  -D SDKCONFIG=/w/tools/hci_probe/build-probe/sdkconfig -DIDF_TARGET=CHIP build
 ```
 
-then, on the host, from `tools/hci_probe/build-probe`, with esptool 5 (`python -m esptool --chip
-esp32s3 --port PORT write-flash @flash_args`; esptool 4, as ESP-IDF v5.3.6 ships, spells it
-`write_flash`), and read the console for 20 s after a reset. Check that the console says
-`BLE_INIT: Feature Config, …, BLE_50:0, …` before comparing what follows.
+The container runs as the host's user, as `firmware/build.sh` runs it, so that the build directory
+is the user's and the next `rm -rf` removes it; run as root, on a Linux host, it would not, and the
+next chip's build would keep the last one's `sdkconfig`. The `&&` stops there if the removal fails.
+A directory an earlier build left owned by root, on a Linux host, takes
+`sudo rm -rf tools/hci_probe/build-probe` once; running as the host's user does not change what is
+there already. `SDKCONFIG` is an absolute path: idf.py takes a relative one from the project's
+directory, `-C`, where `tools/hci_probe/build-probe/sdkconfig` does not exist, and kconfgen fails
+with `FileNotFoundError`. Then, on the host, from `tools/hci_probe/build-probe`, with esptool 5
+(`python -m esptool --chip CHIP --port PORT write-flash @flash_args`; esptool 4, as ESP-IDF v5.3.6
+ships, spells it `write_flash`), read the console for 20 s after a reset. On the S3, check that the
+console says `BLE_INIT: Feature Config, …, BLE_50:0, …` before comparing what follows; the C6's
+controller prints no such line, and answered the same with Bluedroid configured for BLE 5.0, and on
+ESP-IDF v5.5.4.
 Its `sdkconfig.defaults` configure Bluedroid as ESP-IDF's BLE 4.2 examples do, without starting it,
-so that the controller runs as under them; without Bluedroid in the build the controller runs with
-`BLE_50:1` and answers otherwise. The discard event of the flow control of advertising reports
+so that the controller runs as under them; without Bluedroid in the build the S3's controller runs
+with `BLE_50:1` and answers otherwise. Before its scan the probe sets the event mask Bluedroid
+sets, with LE Meta: the C6's controller sends no LE event without it, and the S3's capture, made
+before the probe set it, has none. The discard event of the flow control of advertising reports
 comes only when more legacy advertising than the 2 credits and the lost threshold of 3 reaches the
 3 s scan: a device that advertises in range, at an interval of a few hundred ms or less, is
 enough; on a quiet bench the event does not come. Its count is what the scan heard and dropped,
-104 in the capture below, not a constant. The ESP32-S3's
-answers, of 2026-11-19, are in `tools/hci_probe/esp32s3.txt`, its address masked and the
-advertising reports of the devices around left out; `esp32tl/bluetooth/guest.py` reports them for
-an LE-only chip.
+104 in the S3's capture, not a constant. The ESP32-S3's answers, of 2026-11-19, are in
+`tools/hci_probe/esp32s3.txt`, and the ESP32-C6's, of 2026-11-26, in `tools/hci_probe/esp32c6.txt`,
+their addresses masked and the advertising reports of the devices around left out;
+`esp32tl/bluetooth/guest.py` reports them for each chip, but for two of the C6's answers, which
+the link cannot carry: its LE buffer of 517 bytes, reported as 491, and its LE features
+`0x1B900F017FFF`, reported as `0xFF`
+([the decision](decisions/harness.md#the-esp32-c6s-controller-reports-what-a-c6-measured-within-what-the-link-carries)).
+The probe asks the extended advertising commands `0x203A` and `0x203B` after the legacy `0x2007`,
+which lets a controller refuse them (Vol 4, Part E, 3.1.1): the C6's `COMMAND_DISALLOWED` to both is
+its answer in that order. TODO(owner): what the C6 answers to them before any legacy advertising
+command.
 
 The production images, which are not in this repository, ran with `--flash-mb 4 --psram-mb 4` and
 `--flash-at` at `0x1000` (bootloader), `0x8000` (partition table), `0x10000` (otadata) and `0x20000`
