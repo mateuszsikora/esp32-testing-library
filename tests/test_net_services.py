@@ -29,6 +29,101 @@ def test_dns_answers_every_name_but_only_in_a_questions() -> None:
     assert dns.on_datagram(query[:12] + b"\xc0\x0c\0\x01\0\x01") is None
 
 
+def _query(name: bytes, qtype: int = 1, qclass: int = 1, ident: int = 0x1234) -> bytes:
+    labels = b"".join(bytes([len(part)]) + part for part in name.split(b".") if part)
+    return (
+        struct.pack(">HHHHHH", ident, 0x0100, 1, 0, 0, 0)
+        + labels
+        + b"\0"
+        + struct.pack(">HH", qtype, qclass)
+    )
+
+
+def test_dns_answers_nxdomain_for_an_unknown_name_of_every_type() -> None:
+    lines: list[str] = []
+    dns = Dns("10.64.0.1", lambda: 0, lines.append)
+    dns.unknown("broker.example")
+    for qtype, qclass in ((1, 1), (28, 1), (16, 1), (255, 1), (1, 3)):
+        query = _query(b"broker.example", qtype, qclass)
+        # RCODE 3, recursion desired and available, the question again and no record.
+        assert dns.on_datagram(query) == b"\x12\x34\x81\x83\0\x01\0\0\0\0\0\0" + query[12:]
+    assert [q.answered for q in dns.questions] == ["nxdomain"] * 5
+    assert lines == [
+        "dns: broker.example is unknown from now on",
+        *["dns: broker.example → NXDOMAIN"] * 5,
+    ]
+
+
+def test_dns_resolves_every_other_name_while_one_is_unknown() -> None:
+    lines: list[str] = []
+    dns = Dns("10.64.0.1", lambda: 0, lines.append)
+    dns.unknown("broker.example")
+    for name in (b"api.example", b"example", b"mqtt.broker.example", b"broker.example.com"):
+        answer = dns.on_datagram(_query(name))
+        assert (
+            answer is not None and answer[2:4] == b"\x81\x80" and answer[-4:] == b"\x0a\x40\0\x01"
+        )
+    answer = dns.on_datagram(_query(b"api.example", 28))
+    assert answer is not None and answer[2:8] == b"\x81\x80\0\x01\0\0"
+    assert [q.answered for q in dns.questions] == ["address"] * 4 + ["no record"]
+    assert lines[1:] == [
+        "dns: api.example → 10.64.0.1",
+        "dns: example → 10.64.0.1",
+        "dns: mqtt.broker.example → 10.64.0.1",
+        "dns: broker.example.com → 10.64.0.1",
+        "dns: api.example → no record",
+    ]
+
+
+def test_dns_unknown_names_ignore_case_and_a_trailing_dot() -> None:
+    lines: list[str] = []
+    dns = Dns("10.64.0.1", lambda: 0, lines.append)
+    dns.unknown("Broker.Example.")
+    dns.unknown("API.example")
+    # The Kelvin sign lowercases to k in Unicode, not in ASCII.
+    dns.unknown("\u212aey.example")
+    for name in (b"broker.example", b"BROKER.example", b"api.EXAMPLE", b"key.example"):
+        dns.on_datagram(_query(name))
+    assert [(q.name, q.answered) for q in dns.questions] == [
+        ("broker.example", "nxdomain"),
+        ("BROKER.example", "nxdomain"),
+        ("api.EXAMPLE", "nxdomain"),
+        ("key.example", "address"),
+    ]
+    assert lines[:2] == [
+        "dns: broker.example is unknown from now on",
+        "dns: api.example is unknown from now on",
+    ]
+    with pytest.raises(TypeError, match="dns: name takes text"):
+        dns.unknown(b"broker.example")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="dns: name takes text"):
+        dns.known(None)  # type: ignore[arg-type]
+
+
+def test_dns_known_undoes_unknown_for_that_name_alone() -> None:
+    lines: list[str] = []
+    dns = Dns("10.64.0.1", lambda: 0, lines.append)
+    dns.unknown("broker.example")
+    dns.unknown("api.example")
+    dns.unknown("Broker.example")  # Already unknown: no line.
+    dns.known("BROKER.example.")
+    dns.known("broker.example")  # Already known: no line.
+    dns.known("never.example")
+    for name in (b"broker.example", b"api.example"):
+        dns.on_datagram(_query(name))
+    assert [(q.name, q.answered) for q in dns.questions] == [
+        ("broker.example", "address"),
+        ("api.example", "nxdomain"),
+    ]
+    assert lines == [
+        "dns: broker.example is unknown from now on",
+        "dns: api.example is unknown from now on",
+        "dns: broker.example is known again",
+        "dns: broker.example → 10.64.0.1",
+        "dns: api.example → NXDOMAIN",
+    ]
+
+
 def test_ntp_world_time_fraction_origin_and_era() -> None:
     world = [datetime(2036, 2, 7, 6, 28, 15, tzinfo=UTC)]
     now = [500_000_000]
@@ -246,8 +341,8 @@ def test_dns_keeps_every_question_it_parsed_with_its_time_and_type() -> None:
     assert dns.on_datagram(query[:2] + b"\x11\x00" + query[4:]) is None
     assert dns.on_datagram(query[:4] + b"\0\x02" + query[6:] + question) is None
     assert questions == [
-        DnsQuestion(Duration(2_000_000_000), "time.test", 1),
-        DnsQuestion(Duration(62_000_000_000), "time.test", 28),
+        DnsQuestion(Duration(2_000_000_000), "time.test", 1, "address"),
+        DnsQuestion(Duration(62_000_000_000), "time.test", 28, "no record"),
     ]
     assert asked == ["time.test", "time.test"]
 
@@ -276,8 +371,8 @@ def test_dns_next_question_is_a_described_condition_from_its_call() -> None:
     dns.on_datagram(query(b"time.test"))
     now[0] = 12_000_000_000
     dns.on_datagram(query(b"time.test"))
-    assert any_question() == DnsQuestion(Duration(5_000_000_000), "broker.test", 1)
-    assert time_test() == DnsQuestion(Duration(9_000_000_000), "time.test", 1)
+    assert any_question() == DnsQuestion(Duration(5_000_000_000), "broker.test", 1, "address")
+    assert time_test() == DnsQuestion(Duration(9_000_000_000), "time.test", 1, "address")
     with pytest.raises(TypeError, match="dns: name takes text or None"):
         dns.next_question(b"time.test")  # type: ignore[arg-type]
 
