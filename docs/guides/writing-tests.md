@@ -401,7 +401,8 @@ the three ([the public API](../features/pytest-plugin-user.md#the-public-api)).
   Behind a modem or an access point it also has the network's transcript: DNS lookups, TCP
   connections, TLS and MQTT ([failures and reports](../features/network-user.md#failures-and-reports)).
   `pytest -rA` prints the section for a test that passed too, without the run on the board's
-  clock.
+  clock. To see why a test passed, run that one test with `--esp32tl-show-run -rA`: its section
+  ends with the run as a failed test's does.
 - **`RunEnded`**: the runner exited while the test waited, with its exit code and its last output
   ([when the runner exits](../features/esp32sim-backend-user.md#when-the-runner-exits)).
 - **A skip** names the backend and what it cannot give, such as

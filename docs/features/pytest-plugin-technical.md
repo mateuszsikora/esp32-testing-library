@@ -24,9 +24,10 @@ are in [models-technical.md](models-technical.md).
    service ([plan section 1](../implementation-plan.md#1-findings-that-amend-the-specification),
    finding 1).
 2. **`pytest_addoption`** adds the `esp32tl` group with `--esp32tl-backend`, whose choices are
-   `list(SERVICES)`, and the ini options `esp32tl_card_cache_mib`, `esp32tl_app_path`,
-   `esp32tl_build_dir`, `esp32tl_board_profile` and `esp32tl_board_profile_path` (the last four
-   strings, `""` by default). **`pytest_configure`** reads the four into
+   `list(SERVICES)`, and `--esp32tl-show-run` (`SHOW_RUN_OPTION`, `store_true`), and the ini
+   options `esp32tl_card_cache_mib`, `esp32tl_app_path`, `esp32tl_build_dir`,
+   `esp32tl_board_profile` and `esp32tl_board_profile_path` (the last four strings, `""` by
+   default). **`pytest_configure`** reads the four into
    `config.stash[DEFAULTS]`, a `ProjectDefaults(app_path, build_dir, profile)`, with
    `project_defaults(config)`: the base is `config.inipath.parent`, or
    `config.invocation_params.dir` without a configuration file, as pytest's own `paths` type has
@@ -156,8 +157,8 @@ are in [models-technical.md](models-technical.md).
    failed, skipped, or xfailed, which pytest reports as skipped, so a test with an outcome of its
    own already is not reported on top of it. Then, whatever `close` did, it adds the report section
    `("teardown", "esp32sim link", backend.report(run=run))` with
-   `request.node.add_report_section`, `run` holding when the teardown itself fails or
-   `request.node.stash.get(FAILED, False)` holds, and appends
+   `request.node.add_report_section`, `run` holding when the teardown itself fails,
+   `request.node.stash.get(FAILED, False)` holds or `--esp32tl-show-run` is set, and appends
    `("esp32sim_link", json.dumps(backend.properties()))` to `request.node.user_properties`. The
    property is a JSON string because JUnit XML writes a property's `str()`, which for a `dict` is
    Python's `repr`. A test that failed on `RunEnded` and gets no teardown error has `FAILED` set,
@@ -317,6 +318,7 @@ The SD card, Wi-Fi and modem supply their writer's lock for these reads.
 | Name | Kind | What |
 |---|---|---|
 | `--esp32tl-backend NAME` | option | Choices `list(SERVICES)`; default unset, esp32sim only |
+| `--esp32tl-show-run` | option | `store_true`; the run on the board's clock in the report section of every test that uses `board`, also one that passed |
 | `app_recording(path)` | marker | One positional path, relative to the test file or absolute; on serial checks the recording app hash before port setup; ignored on esp32sim |
 | `app_path(path, build_dir="build")` | marker | One positional path, relative to the test file's directory; default that directory. The optional build path, an ESP-IDF or a PlatformIO build directory ([builds](builds-technical.md)), is relative to the app or absolute |
 | `board_profile(name)` or `board_profile(path=...)` | marker | One bundled name or a local string/`Path` relative to the test file's directory; mixing them is a collection error ([board-profiles-technical.md](board-profiles-technical.md#interfaces)) |
@@ -381,6 +383,7 @@ second entry in `SERVICES` without a change to `board` fails that assertion.
 | Setting | Default | Read by |
 |---|---|---|
 | `--esp32tl-backend` | unset: `esp32sim` | `pytest_generate_tests` |
+| `--esp32tl-show-run` | unset: the run only for a test that failed | `board`'s teardown |
 | `app_path` marker | `esp32tl_app_path` with `esp32tl_build_dir`, else the test file's directory | `pytest_generate_tests` |
 | `board_profile` marker | `esp32tl_board_profile` or `esp32tl_board_profile_path`, else `esp32-devkitc` (`DEFAULT_PROFILE`) | `pytest_generate_tests`, `board` |
 | `esp32tl_app_path`, `esp32tl_build_dir`, `esp32tl_board_profile`, `esp32tl_board_profile_path` ini options | `""`: unset | `pytest_configure` (`project_defaults`), then `pytest_generate_tests` |
@@ -519,6 +522,8 @@ pytest-embedded starts a multiprocessing manager for every session:
   `test_every_route_and_line_of_the_profile_is_on_the_link`, `test_the_test_s_waits_move_the_board_s_clock`,
   `test_a_tap_records_what_crossed_the_route_both_ways` and
   `test_the_report_of_a_failing_test_shows_the_run_on_the_board_s_clock`,
+  `test_show_run_puts_the_run_in_the_report_of_a_test_that_passed` (with and without
+  `--esp32tl-show-run`, for a test that passed and one that failed),
   `test_a_tap_that_cannot_be_written_fails_the_test_at_teardown`
   ([run-report-technical.md](run-report-technical.md#tests)),
   and the link and teardown failures listed in

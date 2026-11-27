@@ -178,7 +178,7 @@ guide](../guides/documentation.md#decisions-docsdecisionsdomainmd) says how to a
 | [A leftover source marker is not refused](harness.md#a-leftover-source-marker-is-not-refused) | `harness.md` | decided (#65) |
 | [A test taps a route by calling tap(path) before power-on, not with a marker](harness.md#a-test-taps-a-route-by-calling-tappath-before-power-on-not-with-a-marker) | `harness.md` | decided (#21) |
 | [A tap writes its recording once the run has ended, from what the far end gave](harness.md#a-tap-writes-its-recording-once-the-run-has-ended-from-what-the-far-end-gave) | `harness.md` | decided (#21) |
-| [The run on the board's clock goes into the link section of a test that failed](harness.md#the-run-on-the-boards-clock-goes-into-the-link-section-of-a-test-that-failed) | `harness.md` | decided (#21) |
+| [The run on the board's clock goes into the link section of a test that failed](harness.md#the-run-on-the-boards-clock-goes-into-the-link-section-of-a-test-that-failed) | `harness.md` | decided (#21), amended (#359) |
 | [Tapping the console is postponed](harness.md#tapping-the-console-is-postponed) | `harness.md` | superseded (#25) |
 | [Models describe the world in its own terms, in units](harness.md#models-describe-the-world-in-its-own-terms-in-units) | `harness.md` | decided (#64) |
 | [Tests observe the device from outside, and product knowledge stays in the consumer's tests](harness.md#tests-observe-the-device-from-outside-and-product-knowledge-stays-in-the-consumers-tests) | `harness.md` | decided (#64) |

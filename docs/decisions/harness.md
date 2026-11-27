@@ -914,7 +914,7 @@ would, because the committed recording would change at teardown without a sign i
 
 ## The run on the board's clock goes into the link section of a test that failed
 
-Status: decided (#21)
+Status: decided (#21), amended (#359)
 
 The `esp32sim link` section ends with `routes:`, a line per UART route with its source, its bytes
 each way and its tap, for every test; for a test whose setup, call or teardown failed it also ends
@@ -932,6 +932,16 @@ because a long replay would push out `board.power_on()` and the start of the wai
 which say what the end means. Also rejected: formatting each event as it comes, because a passing
 test, whose run nobody reads, would pay for it on every byte. Also rejected: the run in the user property,
 because JUnit XML holds it as one string, and a tap is the run's data for code.
+
+Amended at #359: `--esp32tl-show-run` puts the run in the section of every test, also one that
+passed. A test that passes for the wrong reason could not be looked into from its report: the
+reader added `print`s, reran with `-s` or dug the console out of `dut.log`, which has neither the
+test's steps nor the routes' bytes. The flag keeps the reason for rejecting the run in a passing
+test's report: `-rA` without it prints no run, and a reader turns it on for the test they are
+looking at, so a suite run as usual never prints a run it did not ask for. Nor does it bring back
+the cost of formatting each event as it comes: the log becomes text only for the report, so a
+passing test that shows its run pays at teardown, once. The user property stays without the run.
+**Rejected:** a marker on the test, because the reader would edit the test to look into it.
 
 ## Tapping the console is postponed
 
