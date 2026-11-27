@@ -218,14 +218,19 @@ Right after `board.reset()` the board has not run at all. A test that waits `boa
 time until `board.boots` has the boot reads within a millisecond of the reset, before the
 bootloader. When `board.wait_until(board.next_boot(), ...)` returns, the board is at the link's
 first turn after the reset, which can be up to 100 ms later, so that read sees either. Read the
-result after something the new boot does, such as a line the app prints:
+result after something the new boot does, such as a line the app prints. A console expect matches
+only output after what the test last matched, so match a line the old app prints before it restarts,
+then the new app's:
 
 ```python
-booted = board.next_boot()
-board.wait_until(booted, within=seconds(30))
-board.console.expect_exact("ota_state: booted running=ota_0", timeout=30)
+board.console.expect_exact("ota_state: updated running=factory", timeout=30)  # the old app restarts
+board.console.expect_exact("ota_state: booted running=ota_0", timeout=30)  # printed by the new boot
 assert board.flash().ota().entries[0].state == "pending_verify"
 ```
+
+On the ESP32-S31 a read while the board is on sees the flash as of the chip's last reset, as the
+list above says, so it shows the bootloader's write only after the next reset, or from
+`board.power_off()` on.
 
 The partition table comes from the build, and a firmware that rewrites its own table is not followed.
 `board.flash()` is supported on esp32sim only. On serial it skips with
