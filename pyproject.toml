@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "esp32tl"
-version = "0.4.0"
+version = "0.5.0"
 description = "Test unmodified ESP32 firmware through its wires, on the esp32sim emulator or a real board."
 readme = "README.md"
 license = "MIT"
