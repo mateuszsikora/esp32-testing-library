@@ -8,6 +8,7 @@ import pytest
 from esp32tl.backends.esp32sim import Esp32Sim
 from esp32tl.flash import OtaData, OtaEntry
 from esp32tl.interfaces.console import Console
+from esp32tl.units import ms
 
 pytestmark = pytest.mark.app_path("../firmware/ota_state")
 
@@ -75,9 +76,31 @@ def test_a_power_cycle_before_the_app_confirms_itself_boots_the_slot_before_it(
         "ota_1", (OtaEntry(1, "valid", True), OtaEntry(2, "pending_verify", True))
     )
     board.power_off()
+    count = len(board.boots)
     board.power_on()
+    # within a millisecond of the reset the bootloader has not run: the entry is still pending
+    while len(board.boots) == count:
+        board.wait(ms(1))
+    assert board.now - board.boot.at <= ms(1)
+    assert board.flash().ota().entries[1] == OtaEntry(2, "pending_verify", True)
     # the bootloader aborts an entry still pending at its start, before it selects
     assert reported(console) == ("booted", "ota_0", "ota_0", "valid")
     assert board.flash().ota() == OtaData(
         "ota_0", (OtaEntry(1, "valid", True), OtaEntry(2, "aborted", False))
     )
+
+
+def test_a_read_at_the_reset_sees_the_ota_data_the_boot_before_left(
+    board: Esp32Sim, console: Console
+) -> None:
+    board.power_on()
+    assert reported(console) == ("booted", "factory", "factory", "none")
+    assert reported(console) == ("updated", "factory", "ota_0", "none")
+    # 1 ms at a time, so the read comes within a millisecond of the reset
+    while len(board.boots) < 2:
+        board.wait(ms(1))
+    assert board.now - board.boot.at <= ms(1)
+    # the chip has reset, its bootloader has not run yet
+    assert board.flash().ota().entries[0] == OtaEntry(1, "new", True)
+    assert reported(console) == ("booted", "ota_0", "ota_0", "pending_verify")
+    assert board.flash().ota().entries[0] == OtaEntry(1, "pending_verify", True)

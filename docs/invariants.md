@@ -2146,6 +2146,12 @@ that references to its number keep their meaning.
      `tests/test_flash.py::test_ota_counts_the_slots_from_ota_0_to_the_first_gap_as_esp_idf_does`,
      `tests/test_ota_state.py::test_the_ota_state_read_matches_what_the_firmware_reports`,
      `tests/test_ota_state.py::test_a_power_cycle_before_the_app_confirms_itself_boots_the_slot_before_it`
+- **318.** With `firmware/ota_state` on the classic ESP32, rollback on, a flash read within a
+     millisecond of a boot's reset sees the OTA data the boot before left: an entry `new` still
+     `new`, and one `pending_verify` still `pending_verify`; once the app has printed that it
+     booted, the entry `new` reads `pending_verify` and the one `pending_verify` reads `aborted`.
+     `tests/test_ota_state.py::test_a_read_at_the_reset_sees_the_ota_data_the_boot_before_left`,
+     `tests/test_ota_state.py::test_a_power_cycle_before_the_app_confirms_itself_boots_the_slot_before_it`
 
 ## The real source
 

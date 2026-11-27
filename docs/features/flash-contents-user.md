@@ -205,7 +205,32 @@ select now, as `esp_ota_get_boot_partition()` finds it:
 (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`), the bootloader marks an entry still `pending_verify` as
 `aborted` when it starts, before it selects. So a reset before the new app has confirmed itself boots
 the slot before it, though `ota()` named the new one just before that reset; read it again after the
-boot to see the rollback. Likewise an entry `new` reads as `pending_verify` after the next boot.
+boot to see the rollback. Likewise an entry `new` reads as `pending_verify` once the next boot's
+bootloader has run.
+
+With rollback on, the bootloader writes the OTA data during the boot, not at the reset: an entry
+`new` becomes `pending_verify`, and one still `pending_verify` becomes `aborted`, once the ROM has
+handed over to the bootloader and it has read the OTA data, a few milliseconds of the board's time
+after the reset (some 5 ms with `firmware/ota_state` on the classic ESP32). A boot starts at the
+reset ([`board.boots`](pytest-plugin-user.md#resets-and-power-cycles)), so a read right after the
+reset sees the OTA data as the boot before left it: `new`, or `pending_verify` about to be aborted.
+Right after `board.reset()` the board has not run at all. A test that waits `board.wait(ms(1))` at a
+time until `board.boots` has the boot reads within a millisecond of the reset, before the
+bootloader. When `board.wait_until(board.next_boot(), ...)` returns, the board is at the link's
+first turn after the reset, which can be up to 100 ms later, so that read sees either. Read the
+result after something the new boot does, such as a line the app prints. A console expect matches
+only output after what the test last matched, so match a line the old app prints before it restarts,
+then the new app's:
+
+```python
+board.console.expect_exact("ota_state: updated running=factory", timeout=30)  # the old app restarts
+board.console.expect_exact("ota_state: booted running=ota_0", timeout=30)  # printed by the new boot
+assert board.flash().ota().entries[0].state == "pending_verify"
+```
+
+On the ESP32-S31 a read while the board is on sees the flash as of the chip's last reset, as the
+list above says, so it shows the bootloader's write only after the next reset, or from
+`board.power_off()` on.
 
 The partition table comes from the build, and a firmware that rewrites its own table is not followed.
 `board.flash()` is supported on esp32sim only. On serial it skips with

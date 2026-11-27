@@ -690,7 +690,9 @@ def test_the_count_survives_a_power_cut(board: Board):
   their own. `board.boot` is the last.
   A boot is there once the board has run into it: right after `board.reset()`, or the
   `power_on()` that follows a `power_off()`, `board.boot` is still the one before, until the test
-  lets the board run, for as little as `board.wait(ms(1))`.
+  lets the board run, for as little as `board.wait(ms(1))`. A boot's `at` is the reset, before the ROM
+  and the bootloader run, so what they write to flash, such as the OTA data, comes later
+  ([when the bootloader writes the OTA data](flash-contents-user.md#read-the-flash-of-a-run)).
 - `boot.idf_reason` is what ESP-IDF's `esp_reset_reason()` reports for the boot, by name:
   `ESP_RST_POWERON`, `ESP_RST_SW`, `ESP_RST_PANIC`, `ESP_RST_TASK_WDT`, `ESP_RST_DEEPSLEEP` and
   the rest of `esp_reset_reason_t`. It is what an ESP-IDF application, an Arduino-ESP32 one
