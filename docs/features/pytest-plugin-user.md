@@ -1957,9 +1957,9 @@ and
 `--esp32tl-show-run` puts [the run on the board's clock](run-report-user.md#the-run-on-the-boards-clock)
 in the report section of every test that uses `board`, also one that passed, where without it
 only a test that failed has it. pytest shows a passing test's section with `-rA`, so select the
-test you are looking into:
-`pytest tests/test_gnss.py::test_assist --esp32tl-show-run -rA`. The flag changes nothing else:
-the user property, the taps and the outcome stay as they are.
+test you are looking into by its node id, `pytest FILE::TEST --esp32tl-show-run -rA`, as
+`pytest tests/test_gnss.py::test_assist --esp32tl-show-run -rA` in a project with such a test.
+The flag changes nothing else: the user property, the taps and the outcome stay as they are.
 
 `@pytest.mark.app_recording(path)` optionally checks a reference recording's `app_sha256` against
 the artifact before serial opens its port, including with skip-autoflash. It takes one path,

@@ -558,10 +558,10 @@ that references to its number keep their meaning.
     `tests/test_run_report.py::test_entries_are_shown_in_the_order_of_the_board_s_time`,
     `tests/test_sdspi.py::test_the_example_writes_its_files_into_the_image`
 - **317.** Without `--esp32tl-show-run` the report section of a test that passed has no run on the
-    board's clock; with it, that of every test that uses `board` has the run, whatever its outcome,
+    board's clock; with it, that of every test that uses `board` and passed or failed has the run,
     on esp32sim and on serial. A test that failed has it either way.
     `tests/test_pytest_plugin.py::test_show_run_puts_the_run_in_the_report_of_a_test_that_passed`,
-    `tests/test_serial_backend.py::test_the_serial_report_shows_the_run_with_show_run_whatever_the_outcome`
+    `tests/test_serial_backend.py::test_the_serial_report_shows_the_run_with_show_run_passed_or_failed`
 - **65.** Two runs of one recording are identical: the console line by line with the board's times, the
     tap but for its header's `created`, and the runner's stats, for `nmea_reader` fed each
     generated recording and fed the receiver model. `make determinism` (the `determinism` CI job)

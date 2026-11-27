@@ -318,7 +318,7 @@ The SD card, Wi-Fi and modem supply their writer's lock for these reads.
 | Name | Kind | What |
 |---|---|---|
 | `--esp32tl-backend NAME` | option | Choices `list(SERVICES)`; default unset, esp32sim only |
-| `--esp32tl-show-run` | option | `store_true`; the run on the board's clock in the report section of every test that uses `board`, whatever its outcome |
+| `--esp32tl-show-run` | option | `store_true`; the run on the board's clock in the report section of every test that uses `board`, also one that passed |
 | `app_recording(path)` | marker | One positional path, relative to the test file or absolute; on serial checks the recording app hash before port setup; ignored on esp32sim |
 | `app_path(path, build_dir="build")` | marker | One positional path, relative to the test file's directory; default that directory. The optional build path, an ESP-IDF or a PlatformIO build directory ([builds](builds-technical.md)), is relative to the app or absolute |
 | `board_profile(name)` or `board_profile(path=...)` | marker | One bundled name or a local string/`Path` relative to the test file's directory; mixing them is a collection error ([board-profiles-technical.md](board-profiles-technical.md#interfaces)) |

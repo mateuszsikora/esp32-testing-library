@@ -221,7 +221,7 @@ def test_the_serial_report_names_the_build_the_test_loaded(pytester: pytest.Pyte
 
 @pytest.mark.parametrize("fails", [False, True])
 @pytest.mark.parametrize("show_run", [False, True])
-def test_the_serial_report_shows_the_run_with_show_run_whatever_the_outcome(
+def test_the_serial_report_shows_the_run_with_show_run_passed_or_failed(
     pytester: pytest.Pytester, show_run: bool, fails: bool
 ) -> None:
     fake_build(pytester.path)
